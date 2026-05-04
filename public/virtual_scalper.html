@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!--
+    public/virtual_scalper.html
+    ──────────────────────────────────────────────────────────────────────────
+    Virtual Scalper P&L view.
+
+    Shows what the Virtual Scalper subprocess (booknow.sentiment.scripts.
+    virtual_scalp_executor) bought and sold, and how much profit/loss
+    each trade produced — net of simulated 0.1%/side Binance fees.
+
+    Data sources:
+      * GET /api/virtual-scalper      one-shot snapshot on page load
+      * Socket.io 'update' event      live updates piggy-backed on the
+                                      regular scanner broadcast
+  -->
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Virtual Scalper — BookNow</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/css/dashboard.css"/>
+  <style>
+    /* virtual_scalper.html — small additions on top of dashboard.css */
+
+    .vs-page                { max-width: 1400px; margin: 0 auto; padding: 24px; color: var(--text); font-family: 'Inter', system-ui, sans-serif; }
+    .vs-header              { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 24px; }
+    .vs-header h1           { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; }
+    .vs-header .subtitle    { color: var(--dim); font-size: 13px; margin-top: 4px; }
+    .vs-back                { color: var(--blue); text-decoration: none; font-size: 13px; }
+    .vs-back:hover          { text-decoration: underline; }
+
+    /* Summary cards row */
+    .vs-stats               { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 24px; }
+    .vs-stat                { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+    .vs-stat .label         { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; margin-bottom: 6px; }
+    .vs-stat .value         { font-family: var(--mono); font-size: 22px; font-weight: 700; }
+    .vs-stat .value.green   { color: var(--green); }
+    .vs-stat .value.red     { color: var(--red); }
+    .vs-stat .value.blue    { color: var(--blue); }
+    .vs-stat .sub           { font-size: 10px; color: var(--dim); margin-top: 4px; }
+
+    /* Section headers */
+    .vs-section             { margin-bottom: 28px; }
+    .vs-section-title       { font-size: 15px; font-weight: 700; margin-bottom: 10px; display: flex; align-items: baseline; gap: 10px; }
+    .vs-section-title .badge{ background: var(--gdim); color: var(--green); font-size: 10px; padding: 2px 8px; border-radius: 999px; font-family: var(--mono); }
+    .vs-section-title .badge.gray { background: rgba(100,116,139,0.15); color: var(--dim); }
+
+    /* Tables */
+    .vs-table               { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .vs-table th            { text-align: left; padding: 10px 12px; font-size: 10px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); }
+    .vs-table th.right      { text-align: right; }
+    .vs-table td            { padding: 10px 12px; border-bottom: 1px solid rgba(30,48,80,0.4); font-family: var(--mono); }
+    .vs-table td.right      { text-align: right; }
+    .vs-table td.symbol     { font-weight: 700; color: var(--text); font-family: 'Inter', sans-serif; letter-spacing: 0.02em; }
+    .vs-table tr:hover td   { background: rgba(255,255,255,0.02); }
+    .vs-table .pnl-pos      { color: var(--green); font-weight: 700; }
+    .vs-table .pnl-neg      { color: var(--red); font-weight: 700; }
+    .vs-table .reason       { font-size: 9px; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; }
+    .vs-table .reason.tp    { background: var(--gdim); color: var(--green); }
+    .vs-table .reason.hsl   { background: var(--rdim); color: var(--red); }
+    .vs-table .reason.ssl   { background: var(--rdim); color: var(--red); }
+    .vs-table .reason.exit  { background: var(--ydim); color: var(--yellow); }
+    .vs-table .empty        { text-align: center; color: var(--dim); padding: 40px 12px; font-family: 'Inter', sans-serif; font-size: 12px; }
+
+    .vs-card                { background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .vs-meta                { color: var(--dim); font-size: 11px; padding: 10px 14px; background: rgba(255,255,255,0.02); border-bottom: 1px solid var(--border); }
+
+    /* Reason breakdown chips */
+    .vs-reasons             { display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 14px; }
+    .vs-reason-chip         { background: rgba(255,255,255,0.03); border: 1px solid var(--border); padding: 6px 12px; border-radius: 999px; font-size: 11px; font-family: var(--mono); }
+    .vs-reason-chip strong  { color: var(--text); margin-right: 6px; }
+
+    /* Live indicator */
+    .vs-live                { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; color: var(--green); font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+    .vs-live .dot           { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: vs-pulse 1.5s ease-in-out infinite; }
+    .vs-live.off            { color: var(--dim); }
+    .vs-live.off .dot       { background: var(--dim); animation: none; }
+    @keyframes vs-pulse     { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  </style>
+</head>
+<body style="background: var(--bg); margin: 0;">
+  <div class="vs-page">
+
+    <!-- Header -->
+    <div class="vs-header">
+      <div>
+        <h1>Virtual Scalper</h1>
+        <div class="subtitle">Paper-trade results from <code>booknow.sentiment.scripts.virtual_scalp_executor</code> — net of simulated 0.1%/side fees</div>
+      </div>
+      <div style="text-align: right;">
+        <a class="vs-back" href="/">← Back to Scanner</a>
+        <div style="margin-top: 8px;"><span id="vs-live" class="vs-live off"><span class="dot"></span>Connecting…</span></div>
+      </div>
+    </div>
+
+    <!-- Summary stats -->
+    <div class="vs-stats" id="vs-stats">
+      <div class="vs-stat"><div class="label">Open</div><div class="value blue" id="vs-open">—</div><div class="sub">positions held</div></div>
+      <div class="vs-stat"><div class="label">Closed</div><div class="value" id="vs-closed">—</div><div class="sub" id="vs-closed-sub">trades</div></div>
+      <div class="vs-stat"><div class="label">Win Rate</div><div class="value" id="vs-winrate">—</div><div class="sub" id="vs-winrate-sub">— wins / — losses</div></div>
+      <div class="vs-stat"><div class="label">Net PnL</div><div class="value" id="vs-totalpnl">—</div><div class="sub" id="vs-fees-sub">— fees paid</div></div>
+      <div class="vs-stat"><div class="label">Avg / Trade</div><div class="value" id="vs-avgpnl">—</div><div class="sub" id="vs-avghold-sub">— avg hold</div></div>
+      <div class="vs-stat"><div class="label">Best Trade</div><div class="value green" id="vs-best">—</div><div class="sub" id="vs-best-sub">—</div></div>
+      <div class="vs-stat"><div class="label">Worst Trade</div><div class="value red" id="vs-worst">—</div><div class="sub" id="vs-worst-sub">—</div></div>
+    </div>
+
+    <!-- Open positions -->
+    <div class="vs-section">
+      <div class="vs-section-title">
+        Open Positions
+        <span class="badge" id="vs-open-badge">0</span>
+      </div>
+      <div class="vs-card">
+        <div class="vs-meta">Updated live every 1.5 s. PnL is unrealised — calculated against the latest WS-tick price.</div>
+        <table class="vs-table">
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th class="right">Entry</th>
+              <th class="right">Current</th>
+              <th class="right">PnL %</th>
+              <th class="right">PnL $</th>
+              <th class="right">Hold</th>
+              <th class="right">Drawdown</th>
+              <th class="right">Entry Time</th>
+            </tr>
+          </thead>
+          <tbody id="vs-open-tbody">
+            <tr><td colspan="8" class="empty">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Closed trade history -->
+    <div class="vs-section">
+      <div class="vs-section-title">
+        Trade History
+        <span class="badge gray" id="vs-history-badge">0</span>
+      </div>
+      <div class="vs-card">
+        <div class="vs-reasons" id="vs-reasons">
+          <!-- exit-reason chips render here -->
+        </div>
+        <table class="vs-table">
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th class="right">Entry</th>
+              <th class="right">Exit</th>
+              <th class="right">Hold</th>
+              <th class="right">PnL %</th>
+              <th class="right">PnL $</th>
+              <th class="right">Fees</th>
+              <th>Reason</th>
+              <th class="right">When</th>
+            </tr>
+          </thead>
+          <tbody id="vs-history-tbody">
+            <tr><td colspan="9" class="empty">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script>
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    const safeParse = s => { try { return JSON.parse(s); } catch { return null; } };
+    const fmtUsd  = n => (n == null || isNaN(n)) ? '—' : `${n >= 0 ? '+' : ''}$${n.toFixed(3)}`;
+    const fmtUsd2 = n => (n == null || isNaN(n)) ? '—' : `$${n.toFixed(2)}`;
+    const fmtUsd4 = n => (n == null || isNaN(n)) ? '—' : `$${n.toFixed(4)}`;
+    const fmtPct  = n => (n == null || isNaN(n)) ? '—' : `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
+    const fmtPrice = n => (n == null || isNaN(n)) ? '—' : (n < 0.01 ? n.toFixed(8) : n < 1 ? n.toFixed(6) : n.toFixed(4));
+    const fmtDur = s => {
+        if (s == null || isNaN(s)) return '—';
+        if (s < 60) return `${Math.round(s)}s`;
+        if (s < 3600) return `${Math.floor(s/60)}m ${Math.round(s%60)}s`;
+        return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+    };
+    const fmtTimeFromTs = s => {
+        if (!s) return '—';
+        const d = new Date(s * 1000);
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    };
+    const reasonClass = r => ({
+        'TAKE_PROFIT':     'tp',
+        'HARD_STOP_LOSS':  'hsl',
+        'SOFT_STOP_LOSS':  'ssl',
+        'STRATEGY_EXIT':   'exit',
+    }[r] || 'gray');
+
+    // ── Render ───────────────────────────────────────────────────────────────
+
+    function renderSummary(s) {
+        const el = id => document.getElementById(id);
+
+        el('vs-open').textContent = s.openCount ?? 0;
+        el('vs-closed').textContent = s.closedCount ?? 0;
+        el('vs-closed-sub').textContent = `${s.wins} wins / ${s.losses} losses`;
+
+        const wr = (s.winRate || 0) * 100;
+        el('vs-winrate').textContent = `${wr.toFixed(1)}%`;
+        el('vs-winrate').classList.toggle('green', wr >= 50);
+        el('vs-winrate').classList.toggle('red', wr < 50 && s.closedCount > 0);
+        el('vs-winrate-sub').textContent = `${s.wins} wins / ${s.losses} losses`;
+
+        const pnl = s.totalPnl || 0;
+        el('vs-totalpnl').textContent = fmtUsd(pnl);
+        el('vs-totalpnl').classList.toggle('green', pnl >= 0);
+        el('vs-totalpnl').classList.toggle('red', pnl < 0);
+        el('vs-fees-sub').textContent = `${fmtUsd2(s.totalFees)} fees paid`;
+
+        const avg = s.avgPnl || 0;
+        el('vs-avgpnl').textContent = fmtUsd(avg);
+        el('vs-avgpnl').classList.toggle('green', avg >= 0);
+        el('vs-avgpnl').classList.toggle('red', avg < 0);
+        el('vs-avghold-sub').textContent = `${fmtDur(s.avgHoldSeconds)} avg hold`;
+
+        if (s.best) {
+            el('vs-best').textContent = fmtUsd(s.best.pnl_usdt);
+            el('vs-best-sub').textContent = `${s.best.symbol} • ${s.best.reason}`;
+        } else {
+            el('vs-best').textContent = '—';
+            el('vs-best-sub').textContent = '—';
+        }
+        if (s.worst) {
+            el('vs-worst').textContent = fmtUsd(s.worst.pnl_usdt);
+            el('vs-worst-sub').textContent = `${s.worst.symbol} • ${s.worst.reason}`;
+        } else {
+            el('vs-worst').textContent = '—';
+            el('vs-worst-sub').textContent = '—';
+        }
+
+        // Reasons chips
+        const reasonsBox = el('vs-reasons');
+        const reasons = s.reasons || {};
+        if (Object.keys(reasons).length === 0) {
+            reasonsBox.innerHTML = '<span class="vs-reason-chip" style="color: var(--dim);">No closed trades yet</span>';
+        } else {
+            reasonsBox.innerHTML = Object.entries(reasons)
+                .sort((a, b) => b[1] - a[1])
+                .map(([r, c]) => `<span class="vs-reason-chip"><strong>${c}</strong>${r.replace(/_/g, ' ')}</span>`)
+                .join('');
+        }
+    }
+
+    function renderOpen(positions, prices) {
+        const tbody = document.getElementById('vs-open-tbody');
+        document.getElementById('vs-open-badge').textContent = positions.length;
+        if (!positions.length) {
+            tbody.innerHTML = '<tr><td colspan="8" class="empty">No open virtual positions. Waiting for a SCALP_BUY_SIGNAL.</td></tr>';
+            return;
+        }
+        const now = Date.now() / 1000;
+        tbody.innerHTML = positions.map(p => {
+            const cur = prices[p.symbol];
+            let pnlPct = null, pnlUsd = null;
+            if (cur && p.entry_price) {
+                pnlPct = ((cur - p.entry_price) / p.entry_price) * 100;
+                pnlUsd = 100 * pnlPct / 100;   // $100 nominal investment, same as the executor
+            }
+            const cls  = pnlPct == null ? '' : (pnlPct >= 0 ? 'pnl-pos' : 'pnl-neg');
+            const hold = p.entry_timestamp ? now - p.entry_timestamp : null;
+            const dd   = (p.max_drawdown || 0) * 100;
+            return `
+                <tr>
+                    <td class="symbol">${p.symbol}</td>
+                    <td class="right">${fmtPrice(p.entry_price)}</td>
+                    <td class="right">${cur ? fmtPrice(cur) : '—'}</td>
+                    <td class="right ${cls}">${fmtPct(pnlPct)}</td>
+                    <td class="right ${cls}">${fmtUsd(pnlUsd)}</td>
+                    <td class="right">${fmtDur(hold)}</td>
+                    <td class="right pnl-neg">${fmtPct(dd)}</td>
+                    <td class="right" style="color: var(--dim);">${p.entry_time || '—'}</td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    function renderHistory(history) {
+        const tbody = document.getElementById('vs-history-tbody');
+        document.getElementById('vs-history-badge').textContent = history.length;
+        if (!history.length) {
+            tbody.innerHTML = '<tr><td colspan="9" class="empty">No trade history yet.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = history.slice(0, 100).map(h => {
+            const cls = (h.pnl_usdt || 0) >= 0 ? 'pnl-pos' : 'pnl-neg';
+            return `
+                <tr>
+                    <td class="symbol">${h.symbol}</td>
+                    <td class="right">${fmtPrice(h.entry_price)}</td>
+                    <td class="right">${fmtPrice(h.exit_price)}</td>
+                    <td class="right">${fmtDur(h.hold_duration)}</td>
+                    <td class="right ${cls}">${fmtPct(h.pnl_pct)}</td>
+                    <td class="right ${cls}">${fmtUsd(h.pnl_usdt)}</td>
+                    <td class="right" style="color: var(--dim);">${fmtUsd4(h.fees_paid)}</td>
+                    <td><span class="reason ${reasonClass(h.reason)}">${(h.reason || 'UNKNOWN').replace(/_/g, ' ')}</span></td>
+                    <td class="right" style="color: var(--dim);">${h.exit_time || '—'}</td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    // ── Data flow ────────────────────────────────────────────────────────────
+
+    let livePrices = {};
+
+    async function fetchSnapshot() {
+        try {
+            const r = await fetch('/api/virtual-scalper');
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const data = await r.json();
+            livePrices = data.prices || {};
+            renderSummary(data.summary);
+            renderOpen(data.open || [], livePrices);
+            renderHistory(data.history || []);
+        } catch (err) {
+            console.error('[snapshot]', err);
+            document.getElementById('vs-open-tbody').innerHTML =
+                `<tr><td colspan="8" class="empty">Snapshot failed: ${err.message}</td></tr>`;
+        }
+    }
+
+    // Live updates piggy-back on the regular Socket.io 'update' broadcast.
+    const socket = io();
+    const live = document.getElementById('vs-live');
+
+    socket.on('connect',    () => { live.classList.remove('off'); live.innerHTML = '<span class="dot"></span>Live'; });
+    socket.on('disconnect', () => { live.classList.add('off');    live.innerHTML = '<span class="dot"></span>Disconnected'; });
+
+    socket.on('update', data => {
+        // Server already includes virtualPositions, virtualHistory, priceHash —
+        // and getAllHash() / getList() in server.js JSON-parse server-side, so
+        // the values arrive here as objects/arrays already (NOT JSON strings).
+        if (data.priceHash) {
+            // priceHash is a {symbol → CurrentPrice} map. Pull just the prices.
+            for (const [sym, cp] of Object.entries(data.priceHash)) {
+                if (!cp) continue;
+                const obj = (typeof cp === 'string') ? safeParse(cp) : cp;
+                if (obj && obj.price != null) livePrices[sym] = parseFloat(obj.price);
+            }
+        }
+        // Defensive: server.js getAllHash returns parsed objects, but a
+        // future change might pass raw strings — handle both cleanly.
+        const open = Object.values(data.virtualPositions || {})
+            .map(v => (typeof v === 'string') ? safeParse(v) : v)
+            .filter(Boolean);
+        const history = (data.virtualHistory || [])
+            .map(v => (typeof v === 'string') ? safeParse(v) : v)
+            .filter(Boolean);
+
+        const wins   = history.filter(h => (h.pnl_usdt || 0) > 0).length;
+        const losses = history.filter(h => (h.pnl_usdt || 0) < 0).length;
+        const totalPnl  = history.reduce((s, h) => s + (h.pnl_usdt || 0), 0);
+        const totalFees = history.reduce((s, h) => s + (h.fees_paid || 0), 0);
+        const best  = history.reduce((b, h) => (h.pnl_usdt > (b?.pnl_usdt ?? -Infinity)) ? h : b, null);
+        const worst = history.reduce((w, h) => (h.pnl_usdt < (w?.pnl_usdt ??  Infinity)) ? h : w, null);
+        const avgHold = history.length
+            ? history.reduce((s, h) => s + (h.hold_duration || 0), 0) / history.length
+            : 0;
+        const reasons = {};
+        for (const h of history) reasons[h.reason || 'UNKNOWN'] = (reasons[h.reason || 'UNKNOWN'] || 0) + 1;
+
+        renderSummary({
+            openCount: open.length, closedCount: history.length,
+            wins, losses, winRate: history.length ? wins / history.length : 0,
+            totalPnl, totalFees, avgPnl: history.length ? totalPnl / history.length : 0,
+            avgHoldSeconds: avgHold, best, worst, reasons,
+        });
+        renderOpen(open, livePrices);
+        renderHistory(history);
+    });
+
+    fetchSnapshot();
+  </script>
+</body>
+</html>

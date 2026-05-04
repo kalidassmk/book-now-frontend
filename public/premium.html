@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BookNow Pro — Elite Trading Dashboard</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        bg: '#0b0e11',
+                        card: '#1e2329',
+                        brand: '#f0b90b',
+                        'brand-hover': '#f8d33a',
+                        border: 'rgba(255, 255, 255, 0.08)',
+                        success: '#0ecb81',
+                        danger: '#f6465d',
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0b0e11; color: #eaecef; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .glass { background: rgba(30, 35, 41, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
+        .gradient-brand { background: linear-gradient(135deg, #f0b90b 0%, #f8d33a 100%); }
+        .animate-pulse-slow { animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+    </style>
+</head>
+<body class="overflow-x-hidden">
+
+    <!-- ── Sidebar ── -->
+    <aside class="fixed left-0 top-0 h-screen w-64 glass border-r z-50 transition-all duration-300 transform -translate-x-full lg:translate-x-0" id="sidebar">
+        <div class="p-6 flex flex-col h-full">
+            <div class="flex items-center gap-3 mb-10">
+                <div class="w-10 h-10 gradient-brand rounded-xl flex items-center justify-center text-bg font-black text-xl shadow-lg shadow-brand/20">B</div>
+                <h1 class="text-xl font-bold tracking-tight">BookNow <span class="text-brand">Pro</span></h1>
+            </div>
+
+            <nav class="flex-1 space-y-1">
+                <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl bg-brand/10 text-brand font-medium group transition-all" data-page="dashboard">
+                    <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
+                    Dashboard
+                </a>
+                <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-all" data-page="orders">
+                    <i data-lucide="list-ordered" class="w-5 h-5"></i>
+                    Open Orders
+                </a>
+                <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-all" data-page="history">
+                    <i data-lucide="history" class="w-5 h-5"></i>
+                    Trade History
+                </a>
+                <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-all" data-page="scanner">
+                    <i data-lucide="zap" class="w-5 h-5"></i>
+                    Fast Scanner
+                </a>
+            </nav>
+
+            <div class="mt-auto pt-6 border-t border-white/5">
+                <div class="flex items-center gap-3 p-3 rounded-xl bg-white/5">
+                    <div class="w-2 h-2 rounded-full bg-success animate-pulse"></div>
+                    <div class="flex-1">
+                        <p class="text-xs font-semibold text-white">Live Sync</p>
+                        <p class="text-[10px] text-gray-500 mono" id="sync-ts">Syncing...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ── Main Content ── -->
+    <main class="lg:ml-64 p-4 lg:p-8 min-h-screen">
+        
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-10">
+            <div>
+                <h2 class="text-2xl font-bold text-white mb-1" id="page-title">Portfolio Overview</h2>
+                <p class="text-gray-500 text-sm">Real-time performance and asset tracking</p>
+            </div>
+            
+            <div class="flex items-center gap-4">
+                <div class="glass px-4 py-2 rounded-2xl flex items-center gap-3">
+                    <span class="text-gray-500 text-xs font-medium uppercase tracking-wider">BTC Trend</span>
+                    <span class="text-success font-bold mono" id="btc-price">$0.00</span>
+                    <div id="btc-indicator" class="w-2 h-2 rounded-full bg-success"></div>
+                </div>
+                <button class="w-10 h-10 rounded-2xl glass flex items-center justify-center hover:bg-white/10 transition-all">
+                    <i data-lucide="bell" class="w-5 h-5 text-gray-400"></i>
+                </button>
+                <div class="w-10 h-10 rounded-2xl gradient-brand flex items-center justify-center text-bg font-bold shadow-lg shadow-brand/20">JD</div>
+            </div>
+        </header>
+
+        <!-- DASHBOARD PAGE -->
+        <div id="page-dashboard" class="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            
+            <!-- Account Summary Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- Total Balance -->
+                <div class="glass p-6 rounded-[2rem] relative overflow-hidden group">
+                    <div class="absolute -right-4 -top-4 w-32 h-32 bg-brand/5 rounded-full blur-3xl group-hover:bg-brand/10 transition-all duration-500"></div>
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="w-12 h-12 rounded-2xl bg-brand/10 flex items-center justify-center text-brand">
+                            <i data-lucide="wallet" class="w-6 h-6"></i>
+                        </div>
+                        <span class="text-success text-xs font-bold bg-success/10 px-2 py-1 rounded-lg">+0.00%</span>
+                    </div>
+                    <p class="text-gray-500 text-sm font-medium">Estimated Total Balance</p>
+                    <div class="flex items-baseline gap-2 mt-1">
+                        <h3 class="text-3xl font-black text-white mono" id="total-balance">$0.00</h3>
+                        <span class="text-gray-500 text-sm font-semibold">USDT</span>
+                    </div>
+                </div>
+
+                <!-- Open PnL -->
+                <div class="glass p-6 rounded-[2rem] relative overflow-hidden group">
+                    <div class="absolute -right-4 -top-4 w-32 h-32 bg-success/5 rounded-full blur-3xl group-hover:bg-success/10 transition-all duration-500"></div>
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="w-12 h-12 rounded-2xl bg-success/10 flex items-center justify-center text-success">
+                            <i data-lucide="trending-up" class="w-6 h-6"></i>
+                        </div>
+                        <span class="text-gray-500 text-[10px] mono uppercase tracking-widest">Active Pos</span>
+                    </div>
+                    <p class="text-gray-500 text-sm font-medium">Open Profit & Loss</p>
+                    <div class="flex items-baseline gap-2 mt-1">
+                        <h3 class="text-3xl font-black text-success mono" id="open-pnl">+$0.00</h3>
+                        <span class="text-gray-500 text-sm font-semibold">USDT</span>
+                    </div>
+                </div>
+
+                <!-- Free Liquidity -->
+                <div class="glass p-6 rounded-[2rem] relative overflow-hidden group">
+                    <div class="absolute -right-4 -top-4 w-32 h-32 bg-blue-500/5 rounded-full blur-3xl group-hover:bg-blue-500/10 transition-all duration-500"></div>
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="w-12 h-12 rounded-2xl bg-blue-500/10 flex items-center justify-center text-blue-400">
+                            <i data-lucide="dollar-sign" class="w-6 h-6"></i>
+                        </div>
+                        <span class="text-gray-500 text-[10px] mono uppercase tracking-widest">Free USDT</span>
+                    </div>
+                    <p class="text-gray-500 text-sm font-medium">Available Cash</p>
+                    <div class="flex items-baseline gap-2 mt-1">
+                        <h3 class="text-3xl font-black text-white mono" id="free-usdt">$0.00</h3>
+                        <span class="text-gray-500 text-sm font-semibold">USDT</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Asset Table -->
+            <div class="glass rounded-[2rem] overflow-hidden">
+                <div class="p-6 border-b border-white/5 flex items-center justify-between">
+                    <h3 class="text-lg font-bold">Spot Assets</h3>
+                    <div class="flex items-center gap-3">
+                        <div class="relative">
+                            <i data-lucide="search" class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-500"></i>
+                            <input type="text" placeholder="Search assets..." class="bg-bg border border-white/5 rounded-xl pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-brand transition-all w-64">
+                        </div>
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-white/5 text-[10px] uppercase tracking-widest font-bold text-gray-500">
+                            <tr>
+                                <th class="px-6 py-4">Asset</th>
+                                <th class="px-6 py-4">Available</th>
+                                <th class="px-6 py-4">In Order</th>
+                                <th class="px-6 py-4">Value (USDT)</th>
+                                <th class="px-6 py-4">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="assets-tbody" class="text-sm divide-y divide-white/5">
+                            <!-- Loading State -->
+                            <tr class="animate-pulse">
+                                <td colspan="5" class="px-6 py-10 text-center text-gray-500">
+                                    <div class="flex flex-col items-center gap-4">
+                                        <div class="w-8 h-8 border-4 border-brand/20 border-t-brand rounded-full animate-spin"></div>
+                                        Fetching wallet balances...
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ORDERS PAGE (Hidden by default) -->
+        <div id="page-orders" class="hidden space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div class="glass rounded-[2rem] overflow-hidden">
+                <div class="p-6 border-b border-white/5 flex items-center justify-between">
+                    <h3 class="text-lg font-bold">Active Open Orders</h3>
+                    <span class="px-3 py-1 bg-white/5 rounded-lg text-xs mono text-gray-400" id="order-count">0 Orders</span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-white/5 text-[10px] uppercase tracking-widest font-bold text-gray-500">
+                            <tr>
+                                <th class="px-6 py-4">Symbol</th>
+                                <th class="px-6 py-4">Side</th>
+                                <th class="px-6 py-4">Price</th>
+                                <th class="px-6 py-4">Quantity</th>
+                                <th class="px-6 py-4">Status</th>
+                                <th class="px-6 py-4">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="orders-tbody" class="text-sm divide-y divide-white/5">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- HISTORY PAGE (Hidden by default) -->
+        <div id="page-history" class="hidden space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div class="glass rounded-[2rem] overflow-hidden">
+                <div class="p-6 border-b border-white/5 flex items-center justify-between">
+                    <h3 class="text-lg font-bold">Recent Trade History</h3>
+                    <div class="flex items-center gap-2">
+                        <button class="px-4 py-2 bg-brand text-bg font-bold rounded-xl text-sm hover:brand-hover transition-all">Export CSV</button>
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-white/5 text-[10px] uppercase tracking-widest font-bold text-gray-500">
+                            <tr>
+                                <th class="px-6 py-4">Symbol</th>
+                                <th class="px-6 py-4">Side</th>
+                                <th class="px-6 py-4">Price</th>
+                                <th class="px-6 py-4">Quantity</th>
+                                <th class="px-6 py-4">Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-tbody" class="text-sm divide-y divide-white/5">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- ── Toast Notification ── -->
+    <div id="toast-container" class="fixed bottom-6 right-6 z-[100] flex flex-col gap-3"></div>
+
+    <!-- ── Core Dashboard Logic ── -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        /**
+         * State Management (Zustand-like Vanilla implementation)
+         */
+        const state = {
+            assets: [],
+            orders: [],
+            history: [],
+            stats: {},
+            btcPrice: 0,
+            activePage: 'dashboard',
+            
+            listeners: [],
+            subscribe(callback) {
+                this.listeners.push(callback);
+            },
+            notify() {
+                this.listeners.forEach(cb => cb(this));
+            },
+            setState(updates) {
+                Object.assign(this, updates);
+                this.notify();
+            }
+        };
+
+        /**
+         * UI Modules
+         */
+        const UI = {
+            init() {
+                lucide.createIcons();
+                this.setupNavigation();
+                this.bindEvents();
+            },
+
+            setupNavigation() {
+                document.querySelectorAll('[data-page]').forEach(link => {
+                    link.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        const page = link.getAttribute('data-page');
+                        this.navigate(page);
+                    });
+                });
+            },
+
+            navigate(pageId) {
+                state.setState({ activePage: pageId });
+                
+                // Toggle active link
+                document.querySelectorAll('[data-page]').forEach(l => {
+                    const isMatch = l.getAttribute('data-page') === pageId;
+                    l.classList.toggle('bg-brand/10', isMatch);
+                    l.classList.toggle('text-brand', isMatch);
+                    l.classList.toggle('text-gray-400', !isMatch);
+                    l.classList.toggle('hover:bg-white/5', !isMatch);
+                });
+
+                // Toggle sections
+                ['dashboard', 'orders', 'history', 'scanner'].forEach(p => {
+                    const el = document.getElementById(`page-${p}`);
+                    if (el) el.classList.toggle('hidden', p !== pageId);
+                });
+
+                // Update title
+                const titles = {
+                    dashboard: 'Portfolio Overview',
+                    orders: 'Active Orders',
+                    history: 'Trade History',
+                    scanner: 'Fast Mover Scanner'
+                };
+                document.getElementById('page-title').textContent = titles[pageId] || 'Dashboard';
+            },
+
+            render(state) {
+                this.renderAssets(state.assets);
+                this.renderOrders(state.orders);
+                this.renderHistory(state.history);
+                this.renderStats(state.stats, state.assets, state.botPositions, state.activePositions);
+                this.updateBTC(state.btcPrice);
+            },
+
+            renderAssets(assets) {
+                const tbody = document.getElementById('assets-tbody');
+                if (!tbody) return;
+                
+                if (assets.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="px-6 py-10 text-center text-gray-500">No assets found</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = assets.map(a => `
+                    <tr class="hover:bg-white/[0.02] transition-colors">
+                        <td class="px-6 py-4">
+                            <div class="flex items-center gap-3">
+                                <div class="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center font-bold text-[10px] text-brand">${a.asset}</div>
+                                <span class="font-semibold text-white uppercase">${a.asset}</span>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 mono text-gray-300">${parseFloat(a.free).toFixed(6)}</td>
+                        <td class="px-6 py-4 mono text-gray-500">${parseFloat(a.locked).toFixed(6)}</td>
+                        <td class="px-6 py-4">
+                            <span class="mono font-bold text-white">$${a.valueUsdt || '0.00'}</span>
+                        </td>
+                        <td class="px-6 py-4">
+                            <button class="text-xs font-bold text-brand hover:text-brand-hover">Trade</button>
+                        </td>
+                    </tr>
+                `).join('');
+            },
+
+            renderOrders(orders) {
+                const tbody = document.getElementById('orders-tbody');
+                if (!tbody) return;
+                
+                document.getElementById('order-count').textContent = `${orders.length} Orders`;
+
+                if (orders.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" class="px-6 py-10 text-center text-gray-500">No open orders</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = orders.map(o => `
+                    <tr class="hover:bg-white/[0.02] transition-colors">
+                        <td class="px-6 py-4 font-bold text-white uppercase">${o.symbol}</td>
+                        <td class="px-6 py-4 uppercase">
+                            <span class="px-2 py-1 rounded-lg text-[10px] font-black ${o.side === 'BUY' ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}">${o.side}</span>
+                        </td>
+                        <td class="px-6 py-4 mono text-white">${parseFloat(o.price).toFixed(6)}</td>
+                        <td class="px-6 py-4 mono text-gray-300">${parseFloat(o.quantity).toFixed(4)}</td>
+                        <td class="px-6 py-4">
+                            <span class="flex items-center gap-1.5 text-brand text-xs font-medium">
+                                <span class="w-1.5 h-1.5 rounded-full bg-brand animate-pulse"></span>
+                                ${o.status}
+                            </span>
+                        </td>
+                        <td class="px-6 py-4">
+                            <button onclick="SocketClient.cancelOrder('${o.symbol}', '${o.orderId}')" class="p-2 hover:bg-danger/10 text-gray-500 hover:text-danger rounded-lg transition-all" title="Cancel Order">
+                                <i data-lucide="x-circle" class="w-4 h-4"></i>
+                            </button>
+                        </td>
+                    </tr>
+                `).join('');
+                lucide.createIcons();
+            },
+
+            renderHistory(history) {
+                const tbody = document.getElementById('history-tbody');
+                if (!tbody) return;
+
+                if (history.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="px-6 py-10 text-center text-gray-500">No history available</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = history.map(h => `
+                    <tr class="hover:bg-white/[0.02] transition-colors">
+                        <td class="px-6 py-4 font-bold text-white uppercase">${h.symbol}</td>
+                        <td class="px-6 py-4">
+                            <span class="text-[10px] font-black ${h.isBuyer ? 'text-success' : 'text-danger'}">${h.isBuyer ? 'BUY' : 'SELL'}</span>
+                        </td>
+                        <td class="px-6 py-4 mono text-white">${parseFloat(h.price).toFixed(6)}</td>
+                        <td class="px-6 py-4 mono text-gray-300">${parseFloat(h.qty).toFixed(4)}</td>
+                        <td class="px-6 py-4 text-gray-500 text-xs">${new Date(h.time).toLocaleString()}</td>
+                    </tr>
+                `).join('');
+            },
+
+            renderStats(stats, assets, botPositions, activePositions) {
+                // Calculate estimated total balance
+                const total = assets.reduce((sum, a) => sum + (parseFloat(a.valueUsdt) || 0), 0);
+                document.getElementById('total-balance').textContent = `$${total.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                
+                const freeUsdt = assets.find(a => a.asset === 'USDT')?.free || 0;
+                document.getElementById('free-usdt').textContent = `$${parseFloat(freeUsdt).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+
+                // Calculate Open PnL
+                const combinedPositions = [...(botPositions || []), ...(activePositions || [])];
+                const pnl = combinedPositions.reduce((sum, p) => sum + (parseFloat(p.profitUsdt) || 0), 0);
+                const pnlEl = document.getElementById('open-pnl');
+                pnlEl.textContent = `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`;
+                pnlEl.className = `text-3xl font-black mono ${pnl >= 0 ? 'text-success' : 'text-danger'}`;
+            },
+
+            updateBTC(price) {
+                const el = document.getElementById('btc-price');
+                const prevPrice = parseFloat(el.textContent.replace('$', '').replace(',', ''));
+                el.textContent = `$${parseFloat(price).toLocaleString()}`;
+                
+                const indicator = document.getElementById('btc-indicator');
+                if (price > prevPrice) {
+                    indicator.className = 'w-2 h-2 rounded-full bg-success';
+                    el.className = 'text-success font-bold mono';
+                } else if (price < prevPrice) {
+                    indicator.className = 'w-2 h-2 rounded-full bg-danger';
+                    el.className = 'text-danger font-bold mono';
+                }
+            },
+
+            showToast(msg, type = 'success') {
+                const container = document.getElementById('toast-container');
+                const toast = document.createElement('div');
+                toast.className = `glass p-4 rounded-2xl flex items-center gap-3 shadow-2xl animate-in slide-in-from-right-10 duration-300 ${type === 'danger' ? 'border-danger/30' : 'border-success/30'}`;
+                toast.innerHTML = `
+                    <div class="w-8 h-8 rounded-lg ${type === 'danger' ? 'bg-danger/10 text-danger' : 'bg-success/10 text-success'} flex items-center justify-center">
+                        <i data-lucide="${type === 'danger' ? 'alert-circle' : 'check-circle'}" class="w-5 h-5"></i>
+                    </div>
+                    <div>
+                        <p class="text-sm font-bold text-white">${msg}</p>
+                    </div>
+                `;
+                container.appendChild(toast);
+                lucide.createIcons();
+                setTimeout(() => {
+                    toast.classList.add('animate-out', 'fade-out', 'slide-out-to-right-10');
+                    setTimeout(() => toast.remove(), 300);
+                }, 4000);
+            },
+
+            bindEvents() {
+                // Future event binding
+            }
+        };
+
+        /**
+         * Socket Integration
+         */
+        const SocketClient = {
+            socket: null,
+            
+            init() {
+                this.socket = io();
+                this.socket.on('connect', () => {
+                    UI.showToast('Connected to Real-time Hub');
+                });
+                
+                this.socket.on('update', (data) => {
+                    state.setState({
+                        assets: data.balances || [],
+                        orders: data.openOrders || [],
+                        history: data.tradeHistory || [],
+                        botPositions: data.botPositions || [],
+                        activePositions: data.activePositions || [],
+                        stats: data.stats || {},
+                    });
+                    document.getElementById('sync-ts').textContent = `Last sync: ${new Date().toLocaleTimeString()}`;
+                });
+
+                this.socket.on('btc-update', (data) => {
+                    state.setState({ btcPrice: data.price });
+                });
+
+                this.socket.on('order-cancelled', (data) => {
+                    UI.showToast(`Order cancelled for ${data.symbol}`);
+                });
+                
+                // Start BTC Polling (via Spring Boot Proxy)
+                this.pollBTC();
+                setInterval(() => this.pollBTC(), 5000);
+            },
+
+            async pollBTC() {
+                try {
+                    const res = await fetch('/api/btc-price');
+                    const data = await res.json();
+                    if (data && data.price) state.setState({ btcPrice: parseFloat(data.price) });
+                } catch(e) {}
+            },
+
+            async cancelOrder(symbol, orderId) {
+                try {
+                    const res = await fetch('/api/open-orders/cancel', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ symbol, orderId })
+                    });
+                    const data = await res.json();
+                    if (!data.ok) UI.showToast(data.error || 'Cancel failed', 'danger');
+                } catch(e) {
+                    UI.showToast('Network error while cancelling', 'danger');
+                }
+            }
+        };
+
+        // Initialize Everything
+        UI.init();
+        SocketClient.init();
+        state.subscribe((s) => UI.render(s));
+
+    </script>
+</body>
+</html>

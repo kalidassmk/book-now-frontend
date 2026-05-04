@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BookNow Pro — Enterprise Trading Terminal</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        bg: '#0b0e11',
+                        card: '#1e2329',
+                        brand: '#f0b90b',
+                        'brand-hover': '#f8d33a',
+                        border: 'rgba(255, 255, 255, 0.08)',
+                        success: '#0ecb81',
+                        danger: '#f6465d',
+                        warning: '#f0b90b'
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0b0e11; color: #eaecef; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .glass { background: rgba(30, 35, 41, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
+        .gradient-brand { background: linear-gradient(135deg, #f0b90b 0%, #f8d33a 100%); }
+        .animate-in { animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* Table Progress Bar */
+        .progress-bar { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.05); overflow: hidden; }
+        .progress-fill { height: 100%; background: #f0b90b; transition: width 0.3s ease; }
+        
+        /* Modal Overlay */
+        .modal-overlay { background: rgba(0, 0, 0, 0.8); backdrop-filter: blur(4px); }
+        
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+    </style>
+</head>
+<body class="overflow-x-hidden">
+
+    <!-- ── Sidebar ── -->
+    <aside class="fixed left-0 top-0 h-screen w-64 glass border-r z-50 transition-all duration-300 transform -translate-x-full lg:translate-x-0">
+        <div class="p-6 flex flex-col h-full">
+            <div class="flex items-center gap-3 mb-10">
+                <div class="w-10 h-10 gradient-brand rounded-xl flex items-center justify-center text-bg font-black text-xl shadow-lg shadow-brand/20">B</div>
+                <h1 class="text-xl font-bold tracking-tight">BookNow <span class="text-brand">PRO</span></h1>
+            </div>
+
+            <nav class="flex-1 space-y-1">
+                <a href="#" onclick="UI.navigate('dashboard')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl bg-brand/10 text-brand font-medium group transition-all" data-page="dashboard">
+                    <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
+                    Portfolio
+                </a>
+                <a href="#" onclick="UI.navigate('orders')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-all" data-page="orders">
+                    <i data-lucide="list-ordered" class="w-5 h-5"></i>
+                    Open Orders
+                </a>
+                <a href="#" onclick="UI.navigate('history')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-all" data-page="history">
+                    <i data-lucide="history" class="w-5 h-5"></i>
+                    Order History
+                </a>
+                <a href="#" onclick="UI.navigate('trades')" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-all" data-page="trades">
+                    <i data-lucide="arrow-left-right" class="w-5 h-5"></i>
+                    Trade History
+                </a>
+                <a href="/profit_analysis.html" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-all">
+                    <i data-lucide="trending-up" class="w-5 h-5"></i>
+                    Success Radar
+                </a>
+                <a href="/intelligence_hub.html" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-all">
+                    <i data-lucide="brain-circuit" class="w-5 h-5"></i>
+                    Intel Hub
+                </a>
+            </nav>
+
+            <div class="mt-auto pt-6 border-t border-white/5 space-y-4">
+                <div class="flex items-center gap-3 p-3 rounded-xl bg-white/5">
+                    <div id="ws-status-dot" class="w-2 h-2 rounded-full bg-danger animate-pulse"></div>
+                    <div class="flex-1">
+                        <p class="text-xs font-semibold text-white">Stream Status</p>
+                        <p class="text-[10px] text-gray-500 mono" id="ws-status-text">Disconnected</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ── Main Content ── -->
+    <main class="lg:ml-64 p-4 lg:p-8 min-h-screen">
+        
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-10">
+            <div>
+                <h2 class="text-2xl font-bold text-white mb-1" id="page-title">Executive Portfolio</h2>
+                <p class="text-gray-500 text-sm">Enterprise-grade asset management</p>
+            </div>
+            
+            <div class="flex items-center gap-4">
+                <div class="glass px-4 py-2 rounded-2xl flex items-center gap-3">
+                    <span class="text-gray-500 text-xs font-medium uppercase tracking-wider">BTC/USDT</span>
+                    <span class="text-success font-bold mono" id="btc-price">$0.00</span>
+                </div>
+                <div class="w-10 h-10 rounded-2xl gradient-brand flex items-center justify-center text-bg font-bold shadow-lg shadow-brand/20">A</div>
+            </div>
+        </header>
+
+        <!-- DASHBOARD PAGE -->
+        <div id="section-dashboard" class="page-section space-y-8 animate-in">
+            <!-- Account Summary Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div class="glass p-6 rounded-[2rem] border-l-4 border-brand">
+                    <p class="text-gray-500 text-xs font-bold uppercase tracking-widest mb-1">Total Valuation</p>
+                    <div class="flex items-baseline gap-2">
+                        <h3 class="text-3xl font-black text-white mono" id="stat-total-balance">$0.00</h3>
+                        <span class="text-gray-500 text-sm">USDT</span>
+                    </div>
+                </div>
+                <div class="glass p-6 rounded-[2rem] border-l-4 border-success">
+                    <p class="text-gray-500 text-xs font-bold uppercase tracking-widest mb-1">Realized Profit (Today)</p>
+                    <div class="flex items-baseline gap-2">
+                        <h3 class="text-3xl font-black text-success mono" id="stat-realized-pnl">+$0.00</h3>
+                        <span class="text-gray-500 text-sm">USDT</span>
+                    </div>
+                </div>
+                <div class="glass p-6 rounded-[2rem] border-l-4 border-blue-500">
+                    <p class="text-gray-500 text-xs font-bold uppercase tracking-widest mb-1">Buying Power</p>
+                    <div class="flex items-baseline gap-2">
+                        <h3 class="text-3xl font-black text-white mono" id="stat-free-usdt">$0.00</h3>
+                        <span class="text-gray-500 text-sm">USDT</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Asset Table -->
+            <div class="glass rounded-[2rem] overflow-hidden">
+                <div class="p-6 border-b border-white/5 flex items-center justify-between">
+                    <h3 class="text-lg font-bold flex items-center gap-2">
+                        <i data-lucide="wallet" class="w-5 h-5 text-brand"></i>
+                        Spot Wallet
+                    </h3>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-white/5 text-[10px] uppercase tracking-widest font-bold text-gray-500">
+                            <tr>
+                                <th class="px-6 py-4">Asset</th>
+                                <th class="px-6 py-4">Total</th>
+                                <th class="px-6 py-4">Available</th>
+                                <th class="px-6 py-4">Value (USDT)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="assets-tbody" class="text-sm divide-y divide-white/5">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ORDERS PAGE -->
+        <div id="section-orders" class="page-section hidden space-y-8 animate-in">
+            <div class="glass rounded-[2rem] overflow-hidden">
+                <div class="p-6 border-b border-white/5 flex items-center justify-between">
+                    <h3 class="text-lg font-bold flex items-center gap-2">
+                        <i data-lucide="activity" class="w-5 h-5 text-warning"></i>
+                        Active Open Orders
+                    </h3>
+                    <div class="flex items-center gap-3">
+                        <input type="text" id="order-filter" placeholder="Filter symbol..." class="bg-bg border border-white/5 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-brand w-48">
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-white/5 text-[10px] uppercase tracking-widest font-bold text-gray-500">
+                            <tr>
+                                <th class="px-6 py-4">Symbol</th>
+                                <th class="px-6 py-4 cursor-pointer hover:text-white transition-colors" onclick="Store.sortOrders('side')">Side</th>
+                                <th class="px-6 py-4">Price</th>
+                                <th class="px-6 py-4">Quantity</th>
+                                <th class="px-6 py-4">Filled %</th>
+                                <th class="px-6 py-4">Status</th>
+                                <th class="px-6 py-4 text-right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="orders-tbody" class="text-sm divide-y divide-white/5">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- HISTORY PAGE -->
+        <div id="section-history" class="page-section hidden space-y-8 animate-in">
+            <div class="glass rounded-[2rem] overflow-hidden">
+                <div class="p-6 border-b border-white/5 flex items-center justify-between">
+                    <h3 class="text-lg font-bold flex items-center gap-2">
+                        <i data-lucide="archive" class="w-5 h-5 text-gray-400"></i>
+                        Order Execution History
+                    </h3>
+                    <div class="flex items-center gap-2">
+                         <input type="text" id="history-filter" placeholder="Symbol..." class="bg-bg border border-white/5 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-brand w-32">
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-white/5 text-[10px] uppercase tracking-widest font-bold text-gray-500">
+                            <tr>
+                                <th class="px-6 py-4">Symbol</th>
+                                <th class="px-6 py-4">Type</th>
+                                <th class="px-6 py-4">Avg Price</th>
+                                <th class="px-6 py-4">Executed</th>
+                                <th class="px-6 py-4">Status</th>
+                                <th class="px-6 py-4">Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-tbody" class="text-sm divide-y divide-white/5">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- TRADES PAGE -->
+        <div id="section-trades" class="page-section hidden space-y-8 animate-in">
+            <div class="glass rounded-[2rem] overflow-hidden">
+                <div class="p-6 border-b border-white/5 flex items-center justify-between">
+                    <h3 class="text-lg font-bold flex items-center gap-2">
+                        <i data-lucide="check-square" class="w-5 h-5 text-success"></i>
+                        Recent Trades
+                    </h3>
+                    <div class="flex flex-wrap items-center gap-4">
+                         <div class="flex flex-col gap-1">
+                            <label class="text-[10px] text-gray-500 uppercase font-bold px-1">Date Range</label>
+                            <div class="flex items-center gap-2">
+                                <input type="date" id="trades-start" class="bg-bg border border-white/5 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-brand text-gray-300">
+                                <span class="text-gray-600">→</span>
+                                <input type="date" id="trades-end" class="bg-bg border border-white/5 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-brand text-gray-300">
+                            </div>
+                         </div>
+                         <div class="flex flex-col gap-1">
+                            <label class="text-[10px] text-gray-500 uppercase font-bold px-1">Pair</label>
+                            <input type="text" id="trades-filter" placeholder="e.g. BTCUSDT" class="bg-bg border border-white/5 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-brand w-32" value="ALL">
+                         </div>
+                         <div class="flex flex-col gap-1">
+                            <label class="text-[10px] text-gray-500 uppercase font-bold px-1">Side</label>
+                            <select id="trades-side" class="bg-bg border border-white/5 rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-brand text-gray-400">
+                                <option value="ALL">All</option>
+                                <option value="BUY">Buy</option>
+                                <option value="SELL">Sell</option>
+                            </select>
+                         </div>
+                         <div class="flex items-end gap-2 mt-4">
+                             <button onclick="DataClient.fetchTradeHistory()" class="px-6 py-2 bg-brand text-black font-bold rounded-xl hover:shadow-[0_0_20px_rgba(240,185,11,0.3)] transition-all">
+                                Search
+                             </button>
+                             <button onclick="DataClient.resetTradeFilters()" class="px-6 py-2 bg-white/5 text-gray-400 rounded-xl hover:bg-white/10 transition-all">
+                                Reset
+                             </button>
+                         </div>
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-white/5 text-[10px] uppercase tracking-widest font-bold text-gray-500">
+                            <tr>
+                                <th class="px-6 py-4">Date</th>
+                                <th class="px-6 py-4">Pair</th>
+                                <th class="px-6 py-4">Side</th>
+                                <th class="px-6 py-4">Price</th>
+                                <th class="px-6 py-4">Executed</th>
+                                <th class="px-6 py-4">Fee</th>
+                                <th class="px-6 py-4">Total</th>
+                                <th class="px-6 py-4 text-right">Total (USDT)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="trades-tbody" class="text-sm divide-y divide-white/5">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- ── Modify Order Modal ── -->
+    <div id="modify-modal" class="fixed inset-0 z-[100] hidden flex items-center justify-center p-4">
+        <div class="modal-overlay absolute inset-0"></div>
+        <div class="glass w-full max-w-md rounded-[2.5rem] p-8 relative animate-in">
+            <button onclick="UI.closeModal()" class="absolute top-6 right-6 text-gray-500 hover:text-white transition-all">
+                <i data-lucide="x" class="w-6 h-6"></i>
+            </button>
+            
+            <h3 class="text-2xl font-bold mb-1">Modify Order</h3>
+            <p class="text-gray-500 text-sm mb-8" id="modify-symbol">Updating BTCUSDT Limit Buy</p>
+            
+            <div class="space-y-6">
+                <div class="space-y-2">
+                    <label class="text-xs font-bold text-gray-500 uppercase tracking-widest">Price</label>
+                    <input type="number" id="modify-price" class="w-full bg-bg border border-white/5 rounded-2xl p-4 text-xl font-bold mono focus:ring-2 focus:ring-brand focus:outline-none">
+                </div>
+                <div class="space-y-2">
+                    <label class="text-xs font-bold text-gray-500 uppercase tracking-widest">Quantity</label>
+                    <input type="number" id="modify-qty" class="w-full bg-bg border border-white/5 rounded-2xl p-4 text-xl font-bold mono focus:ring-2 focus:ring-brand focus:outline-none">
+                </div>
+                
+                <div class="pt-4 flex gap-4">
+                    <button onclick="UI.closeModal()" class="flex-1 py-4 rounded-2xl bg-white/5 font-bold hover:bg-white/10 transition-all">Cancel</button>
+                    <button id="modify-submit" class="flex-1 py-4 rounded-2xl gradient-brand text-bg font-black shadow-lg shadow-brand/20 hover:scale-[1.02] active:scale-[0.98] transition-all">Update Order</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Toast Notification ── -->
+    <div id="toast-container" class="fixed bottom-6 right-6 z-[200] flex flex-col gap-3"></div>
+
+    <!-- ── Core Engine ── -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        /**
+         * GLOBAL STATE (Store)
+         */
+        const Store = {
+            balances: [],
+            openOrders: [],
+            orderHistory: [],
+            trades: [],
+            btcPrice: 0,
+            activePage: 'dashboard',
+            sortKey: 'time',
+            sortDir: -1,
+            
+            listeners: [],
+            subscribe(cb) { this.listeners.push(cb); },
+            notify() { this.listeners.forEach(cb => cb(this)); },
+
+            setState(updates) {
+                Object.assign(this, updates);
+                this.notify();
+            },
+
+            // Optimistic Order Removal
+            removeOrderOptimistic(orderId) {
+                const updated = this.openOrders.filter(o => o.orderId.toString() !== orderId.toString());
+                this.setState({ openOrders: updated });
+            },
+
+            sortOrders(key) {
+                if (this.sortKey === key) this.sortDir *= -1;
+                else { this.sortKey = key; this.sortDir = 1; }
+                
+                this.openOrders.sort((a, b) => {
+                    const valA = a[key];
+                    const valB = b[key];
+                    return valA > valB ? this.sortDir : -this.sortDir;
+                });
+                this.notify();
+            }
+        };
+
+        /**
+         * UI COMPONENTS & RENDERERS
+         */
+        const UI = {
+            init() {
+                lucide.createIcons();
+                this.setupNavigation();
+                this.setupFilters();
+            },
+
+            navigate(page) {
+                Store.setState({ activePage: page });
+                
+                // Update Nav UI
+                document.querySelectorAll('.nav-link').forEach(link => {
+                    const isMatch = link.getAttribute('data-page') === page;
+                    link.classList.toggle('bg-brand/10', isMatch);
+                    link.classList.toggle('text-brand', isMatch);
+                    link.classList.toggle('text-gray-400', !isMatch);
+                });
+
+                // Toggle Sections
+                document.querySelectorAll('.page-section').forEach(sec => {
+                    sec.classList.toggle('hidden', sec.id !== `section-${page}`);
+                });
+
+                // Set Title
+                const titles = { dashboard: 'Executive Portfolio', orders: 'Active Orders', history: 'Order History', trades: 'Trade Activity' };
+                document.getElementById('page-title').textContent = titles[page];
+                
+                // Fetch data for the page if needed
+                if (page === 'history') DataClient.fetchOrderHistory();
+                if (page === 'trades') DataClient.fetchTradeHistory();
+            },
+
+            render(state) {
+                this.renderBalances(state.balances);
+                this.renderOpenOrders(state.openOrders);
+                this.renderOrderHistory(state.orderHistory);
+                this.renderTradeHistory(state.trades);
+                
+                // Update Stats
+                const totalVal = state.balances.reduce((acc, b) => acc + (parseFloat(b.valueUsdt) || 0), 0);
+                const freeUsdt = state.balances.find(b => b.asset === 'USDT')?.free || 0;
+                
+                document.getElementById('stat-total-balance').textContent = `$${totalVal.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+                document.getElementById('stat-free-usdt').textContent = `$${parseFloat(freeUsdt).toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+                document.getElementById('btc-price').textContent = `$${state.btcPrice.toLocaleString()}`;
+            },
+
+            renderBalances(balances) {
+                const tbody = document.getElementById('assets-tbody');
+                tbody.innerHTML = balances.map(b => `
+                    <tr class="hover:bg-white/[0.02] transition-colors">
+                        <td class="px-6 py-4 flex items-center gap-3">
+                            <div class="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center font-bold text-[10px] text-brand">${b.asset}</div>
+                            <span class="font-semibold text-white uppercase">${b.asset}</span>
+                        </td>
+                        <td class="px-6 py-4 mono text-gray-300">${(parseFloat(b.free) + parseFloat(b.locked)).toFixed(6)}</td>
+                        <td class="px-6 py-4 mono text-gray-500">${parseFloat(b.free).toFixed(6)}</td>
+                        <td class="px-6 py-4 font-bold text-white mono">$${b.valueUsdt}</td>
+                    </tr>
+                `).join('');
+            },
+
+            renderOpenOrders(orders) {
+                const tbody = document.getElementById('orders-tbody');
+                const filter = document.getElementById('order-filter').value.toUpperCase();
+                
+                const filtered = orders.filter(o => o.symbol.includes(filter));
+
+                tbody.innerHTML = filtered.map(o => {
+                    const filledPct = (o.executedQty / o.quantity * 100).toFixed(1);
+                    return `
+                        <tr class="hover:bg-white/[0.02] transition-colors">
+                            <td class="px-6 py-4 font-bold text-white uppercase">${o.symbol}</td>
+                            <td class="px-6 py-4"><span class="px-2 py-0.5 rounded text-[10px] font-black ${o.side === 'BUY' ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger'}">${o.side}</span></td>
+                            <td class="px-6 py-4 mono text-white">${parseFloat(o.price).toFixed(6)}</td>
+                            <td class="px-6 py-4 mono text-gray-300">${parseFloat(o.quantity).toFixed(4)}</td>
+                            <td class="px-6 py-4">
+                                <div class="flex flex-col gap-1 w-24">
+                                    <div class="progress-bar"><div class="progress-fill" style="width: ${filledPct}%"></div></div>
+                                    <span class="text-[10px] text-gray-500 mono">${filledPct}% Filled</span>
+                                </div>
+                            </td>
+                            <td class="px-6 py-4">
+                                <span class="flex items-center gap-1.5 text-brand text-xs font-medium">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-brand animate-pulse"></span>
+                                    ${o.status}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4 text-right">
+                                <div class="flex items-center justify-end gap-2">
+                                    <button onclick='UI.openModifyModal(${JSON.stringify(o)})' class="p-2 hover:bg-white/5 rounded-lg text-gray-500 hover:text-white transition-all"><i data-lucide="edit-3" class="w-4 h-4"></i></button>
+                                    <button onclick="DataClient.cancelOrder('${o.symbol}', '${o.orderId}')" class="p-2 hover:bg-danger/10 rounded-lg text-gray-500 hover:text-danger transition-all"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+                lucide.createIcons();
+            },
+
+            renderOrderHistory(history) {
+                const tbody = document.getElementById('history-tbody');
+                tbody.innerHTML = history.map(h => `
+                    <tr class="hover:bg-white/[0.02] transition-colors opacity-80">
+                        <td class="px-6 py-4 font-bold text-white uppercase">${h.symbol}</td>
+                        <td class="px-6 py-4 text-[10px] font-bold text-gray-500">${h.type}</td>
+                        <td class="px-6 py-4 mono text-white">${parseFloat(h.price).toFixed(6)}</td>
+                        <td class="px-6 py-4 mono text-gray-300">${parseFloat(h.executedQty).toFixed(4)} / ${parseFloat(h.origQty).toFixed(4)}</td>
+                        <td class="px-6 py-4"><span class="text-xs uppercase font-medium ${h.status === 'FILLED' ? 'text-success' : 'text-gray-500'}">${h.status}</span></td>
+                        <td class="px-6 py-4 text-xs text-gray-500">${new Date(h.time).toLocaleString()}</td>
+                    </tr>
+                `).join('');
+            },
+
+            renderTradeHistory(trades) {
+                const tbody = document.getElementById('trades-tbody');
+                if (!trades || trades.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="8" class="px-6 py-12 text-center text-gray-500 italic">No trades found for the selected criteria.</td></tr>`;
+                    return;
+                }
+
+                tbody.innerHTML = trades.map(t => {
+                    const total = parseFloat(t.price) * parseFloat(t.qty);
+                    const isBuyer = t.isBuyer;
+                    const dateStr = new Date(t.time).toLocaleString();
+                    return `
+                        <tr class="hover:bg-white/[0.02] transition-colors border-b border-white/5">
+                            <td class="px-6 py-4 text-xs text-gray-400">${dateStr}</td>
+                            <td class="px-6 py-4 font-bold text-white uppercase">${t.symbol}</td>
+                            <td class="px-6 py-4 text-[10px] font-black ${isBuyer ? 'text-success' : 'text-danger'}">${isBuyer ? 'BUY' : 'SELL'}</td>
+                            <td class="px-6 py-4 text-xs mono">${parseFloat(t.price).toFixed(6)}</td>
+                            <td class="px-6 py-4 text-xs mono">${parseFloat(t.qty).toFixed(4)}</td>
+                            <td class="px-6 py-4 text-[10px] text-gray-500">${parseFloat(t.commission).toFixed(6)} ${t.commissionAsset}</td>
+                            <td class="px-6 py-4 text-xs mono text-gray-300">${total.toFixed(4)}</td>
+                            <td class="px-6 py-4 text-xs mono text-right font-bold text-success">≈ ${total.toFixed(2)} USDT</td>
+                        </tr>
+                    `;
+                }).join('');
+            },
+
+            openModifyModal(order) {
+                document.getElementById('modify-modal').classList.remove('hidden');
+                document.getElementById('modify-symbol').textContent = `Updating ${order.symbol} ${order.side} Order`;
+                document.getElementById('modify-price').value = order.price;
+                document.getElementById('modify-qty').value = order.quantity;
+                
+                document.getElementById('modify-submit').onclick = () => {
+                    DataClient.modifyOrder({
+                        symbol: order.symbol,
+                        orderId: order.orderId,
+                        side: order.side,
+                        price: document.getElementById('modify-price').value,
+                        quantity: document.getElementById('modify-qty').value
+                    });
+                };
+            },
+
+            closeModal() {
+                document.getElementById('modify-modal').classList.add('hidden');
+            },
+
+            showToast(msg, type = 'success') {
+                const container = document.getElementById('toast-container');
+                const toast = document.createElement('div');
+                toast.className = `glass p-4 rounded-2xl flex items-center gap-3 shadow-2xl animate-in ${type === 'danger' ? 'border-danger/30' : 'border-success/30'}`;
+                toast.innerHTML = `<div class="w-8 h-8 rounded-lg ${type === 'danger' ? 'bg-danger/10 text-danger' : 'bg-success/10 text-success'} flex items-center justify-center"><i data-lucide="${type === 'danger' ? 'alert-circle' : 'check-circle'}" class="w-5 h-5"></i></div><p class="text-sm font-bold text-white">${msg}</p>`;
+                container.appendChild(toast);
+                lucide.createIcons();
+                setTimeout(() => toast.remove(), 4000);
+            },
+
+            setupNavigation() {
+                // Done in HTML onclick
+            },
+
+            setupFilters() {
+                document.getElementById('order-filter').addEventListener('input', () => this.render(Store));
+            }
+        };
+
+        /**
+         * DATA CLIENT (API & Socket)
+         */
+        const DataClient = {
+            socket: null,
+            
+            init() {
+                this.socket = io();
+                this.socket.on('connect', () => {
+                    document.getElementById('ws-status-dot').className = 'w-2 h-2 rounded-full bg-success animate-pulse';
+                    document.getElementById('ws-status-text').textContent = 'Stream Active';
+                    UI.showToast('Terminal Online');
+                });
+                
+                this.socket.on('update', (data) => {
+                    Store.setState({ balances: data.balances || [], openOrders: data.openOrders || [] });
+                });
+
+                this.socket.on('order-execution', (data) => {
+                    UI.showToast(`Order ${data.status}: ${data.symbol}`, data.status === 'REJECTED' ? 'danger' : 'success');
+                    // Store logic for real-time order status bar updates would go here
+                });
+
+                setInterval(() => this.pollBTC(), 5000);
+            },
+
+            async pollBTC() {
+                try {
+                    const res = await fetch('/api/btc-price');
+                    const data = await res.json();
+                    if (data.price) Store.setState({ btcPrice: parseFloat(data.price) });
+                } catch(e) {}
+            },
+
+            async fetchOrderHistory() {
+                const symbol = document.getElementById('history-filter').value || 'BTCUSDT';
+                try {
+                    const res = await fetch(`/api/trade/order-history?symbol=${symbol}`);
+                    const data = await res.json();
+                    Store.setState({ orderHistory: data });
+                } catch(e) { UI.showToast('Failed to fetch history', 'danger'); }
+            },
+
+            async fetchTradeHistory() {
+                const symbolInput = document.getElementById('trades-filter').value.toUpperCase().trim();
+                const startDate = document.getElementById('trades-start').value;
+                const endDate = document.getElementById('trades-end').value;
+                const sideFilter = document.getElementById('trades-side').value;
+                
+                const debugEl = document.getElementById('trades-debug');
+                
+                let startMs = startDate ? new Date(startDate).getTime() : Date.now() - (7 * 24 * 60 * 60 * 1000);
+                let endMs = endDate ? new Date(endDate).getTime() : Date.now();
+
+                if (symbolInput === 'ALL' || symbolInput === '') {
+                    await this.scanAllAssetsForTrades(startMs, endMs, sideFilter);
+                    return;
+                }
+
+                debugEl.textContent = `Fetching ${symbolInput}...`;
+                try {
+                    // [ANALYSIS] Chunking: Binance limits requests to 24-hour windows.
+                    const trades = await this.fetchTradesInChunks(symbolInput, startMs, endMs);
+                    
+                    let filtered = trades;
+                    if (sideFilter !== 'ALL') {
+                        filtered = trades.filter(t => (sideFilter === 'BUY' ? t.isBuyer : !t.isBuyer));
+                    }
+                    Store.setState({ trades: filtered });
+                    debugEl.textContent = `Found ${filtered.length} trades for ${symbolInput}`;
+                } catch(e) {
+                    debugEl.textContent = `Error: ${e.message}`;
+                    UI.showToast(e.message, 'danger');
+                }
+            },
+
+            async fetchTradesInChunks(symbol, startMs, endMs) {
+                const ONE_DAY = 24 * 60 * 60 * 1000;
+                let allTrades = [];
+                let currentStart = startMs;
+                
+                while (currentStart < endMs) {
+                    let currentEnd = Math.min(currentStart + ONE_DAY, endMs);
+                    
+                    console.log("%c===============================================================", "color: #f0b90b; font-weight: bold");
+                    console.log(`%c[FETCH] ======= STARTING 24H CHUNK: ${symbol} =======`, "color: #f0b90b; font-weight: bold");
+                    console.log(`[FETCH] Range: ${new Date(currentStart).toLocaleString()} to ${new Date(currentEnd).toLocaleString()}`);
+                    
+                    const url = `/api/trade/trade-history?symbol=${symbol}&startTime=${currentStart}&endTime=${currentEnd}`;
+                    const res = await fetch(url);
+                    const data = await res.json();
+                    
+                    if (Array.isArray(data)) {
+                        console.log(`%c[FETCH] ======= SUCCESS: RECEIVED ${data.length} TRADES =======`, "color: #0ecb81; font-weight: bold");
+                        allTrades = [...allTrades, ...data];
+                    } else {
+                        console.warn(`[FETCH] ======= ERROR: ${data.error || 'Unknown Error'} =======`);
+                    }
+                    console.log("%c===============================================================", "color: #f0b90b; font-weight: bold");
+
+                    currentStart = currentEnd + 1;
+                    await new Promise(r => setTimeout(r, 100));
+                }
+                return allTrades.sort((a, b) => b.time - a.time);
+            },
+
+            async scanAllAssetsForTrades(startMs, endMs, sideFilter) {
+                const debugEl = document.getElementById('trades-debug');
+                UI.showToast('Scanning all assets (in 24h chunks)...', 'success');
+                
+                const assets = Store.balances
+                    .filter(b => b.asset !== 'USDT')
+                    .map(b => b.asset + 'USDT');
+                
+                if (!assets.includes('BTCUSDT')) assets.push('BTCUSDT');
+
+                let allTrades = [];
+                for (const sym of assets) {
+                    try {
+                        debugEl.textContent = `Scanning ${sym}...`;
+                        const data = await this.fetchTradesInChunks(sym, startMs, endMs);
+                        allTrades = [...allTrades, ...data];
+                    } catch(e) {}
+                }
+
+                if (sideFilter !== 'ALL') {
+                    allTrades = allTrades.filter(t => (sideFilter === 'BUY' ? t.isBuyer : !t.isBuyer));
+                }
+
+                allTrades.sort((a, b) => b.time - a.time);
+                Store.setState({ trades: allTrades });
+                debugEl.textContent = `Deep Scan Complete: Found ${allTrades.length} trades.`;
+            },
+
+            async fetchOrderList() {
+                const debugEl = document.getElementById('trades-debug');
+                debugEl.textContent = "Fetching OCO Lists...";
+                try {
+                    const res = await fetch('/api/trade/order-list');
+                    const data = await res.json();
+                    console.log("[OCO History]", data);
+                    UI.showToast(`Found ${data.length} OCO lists. See console for details.`, 'success');
+                } catch(e) { UI.showToast(e.message, 'danger'); }
+            },
+
+            async scanAllAssetsForTrades() {
+                UI.showToast('Starting Deep Scan across wallet assets...', 'success');
+                const range = document.getElementById('trades-range').value;
+                let startTime = null;
+                const now = Date.now();
+                if (range === '24h') startTime = now - (24 * 60 * 60 * 1000);
+                if (range === '7d') startTime = now - (7 * 24 * 60 * 60 * 1000);
+                if (range === '30d') startTime = now - (30 * 24 * 60 * 60 * 1000);
+                if (range === '90d') startTime = now - (90 * 24 * 60 * 60 * 1000);
+
+                // Get symbols from balances (excluding stablecoins for faster scan or including them)
+                const symbolsToScan = Store.balances
+                    .filter(b => b.asset !== 'USDT')
+                    .map(b => b.asset + 'USDT');
+                
+                // Also add BTCUSDT by default
+                if (!symbolsToScan.includes('BTCUSDT')) symbolsToScan.push('BTCUSDT');
+
+                let allTrades = [];
+                for (const sym of symbolsToScan) {
+                    try {
+                        let url = `/api/trade/trade-history?symbol=${sym}`;
+                        if (startTime) url += `&startTime=${startTime}`;
+                        const res = await fetch(url);
+                        const data = await res.json();
+                        if (Array.isArray(data)) allTrades = [...allTrades, ...data];
+                    } catch(e) {}
+                }
+
+                // Sort by time descending
+                allTrades.sort((a, b) => b.time - a.time);
+                Store.setState({ trades: allTrades });
+                UI.showToast(`Deep Scan Complete: Found ${allTrades.length} trades.`);
+            },
+
+            async cancelOrder(symbol, orderId) {
+                // Optimistic UI
+                Store.removeOrderOptimistic(orderId);
+                UI.showToast('Cancel request sent...');
+                
+                try {
+                    const res = await fetch(`/api/trade/cancel?symbol=${symbol}&orderId=${orderId}`, { method: 'DELETE' });
+                    const data = await res.json();
+                    if (!data.ok) throw new Error(data.error);
+                    UI.showToast(`Cancelled ${symbol} #${orderId}`);
+                } catch(e) {
+                    UI.showToast(`Failed to cancel: ${e.message}`, 'danger');
+                    // Re-sync after failure
+                }
+            },
+
+            async modifyOrder(params) {
+                UI.showToast('Modifying order...');
+                UI.closeModal();
+                try {
+                    const res = await fetch('/api/trade/modify', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(params)
+                    });
+                    const data = await res.json();
+                    if (data.error) throw new Error(data.error);
+                    UI.showToast(`Modified ${params.symbol} successfully`);
+                } catch(e) {
+                    UI.showToast(`Modification failed: ${e.message}`, 'danger');
+                }
+            }
+        };
+
+        // Boot
+        UI.init();
+        DataClient.init();
+        Store.subscribe(s => UI.render(s));
+    </script>
+</body>
+</html>

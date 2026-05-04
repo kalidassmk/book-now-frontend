@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BookNow | Fast Trade Scanner</title>
+  
+  <!-- Modern Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  
+  <!-- Bootstrap 5 CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  
+  <!-- Material Design Icons -->
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+
+  <style>
+    :root {
+      --primary: #007bff;
+      --primary-light: #e7f1ff;
+      --secondary: #6c757d;
+      --bg: #f4f7fe;
+      --card-bg: #ffffff;
+      --text-main: #1e293b;
+      --text-muted: #64748b;
+      --border: #e2e8f0;
+      --green: #10b981;
+      --red: #ef4444;
+      --shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.04), 0 4px 6px -2px rgba(0, 0, 0, 0.02);
+      --radius: 16px;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text-main);
+      font-family: 'Inter', sans-serif;
+      margin: 0;
+      padding: 0;
+      overflow-x: hidden;
+    }
+
+    /* ── Header / Navigation ── */
+    .top-nav {
+      background: white;
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 1.5rem;
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 800;
+      font-size: 1.25rem;
+      color: var(--primary);
+      text-decoration: none;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 0.5rem;
+      margin-left: 2rem;
+    }
+
+    .nav-item {
+      padding: 0.5rem 1rem;
+      border-radius: 10px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-weight: 600;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+
+    .nav-item:hover {
+      background: var(--primary-light);
+      color: var(--primary);
+    }
+
+    .nav-item.active {
+      background: var(--primary);
+      color: white;
+      box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3);
+    }
+
+    .nav-item .material-icons-round {
+      font-size: 20px;
+    }
+
+    /* ── Layout ── */
+    .main-container {
+      padding: 2rem;
+      max-width: 1440px;
+      margin: 0 auto;
+    }
+
+    .glass-card {
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 1.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .section-title {
+      font-size: 1.1rem;
+      font-weight: 800;
+      color: var(--text-main);
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    /* ── Scanner Table ── */
+    .table-container {
+      overflow-x: auto;
+    }
+
+    .m-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0 10px;
+    }
+
+    .m-table th {
+      padding: 12px;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      font-weight: 700;
+    }
+
+    .m-table td {
+      padding: 16px 15px;
+      background: white;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+
+    .m-table td:first-child { border-left: 1px solid var(--border); border-radius: 14px 0 0 14px; }
+    .m-table td:last-child { border-right: 1px solid var(--border); border-radius: 0 14px 14px 0; }
+
+    .symbol-box {
+      font-weight: 800;
+      color: var(--primary);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .symbol-icon {
+      width: 32px;
+      height: 32px;
+      background: var(--primary-light);
+      color: var(--primary);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    .price-mono {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+
+    .badge-signal {
+      padding: 5px 10px;
+      border-radius: 8px;
+      font-size: 0.65rem;
+      font-weight: 800;
+      background: var(--primary-light);
+      color: var(--primary);
+      text-transform: uppercase;
+    }
+
+    /* ── Trading Terminal ── */
+    .terminal-card {
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+      overflow: hidden;
+    }
+
+    .term-head {
+      background: #fcfdfe;
+      padding: 1.25rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .term-body {
+      padding: 1.5rem;
+    }
+
+    .term-input-group {
+      margin-bottom: 1.25rem;
+    }
+
+    .term-input-group label {
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      display: block;
+      text-transform: uppercase;
+    }
+
+    .term-input {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px 15px;
+      width: 100%;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+
+    .term-input:focus {
+      outline: none;
+      border-color: var(--primary);
+      background: white;
+      box-shadow: 0 0 0 4px var(--primary-light);
+    }
+
+    .btn-buy {
+      background: var(--green);
+      color: white;
+      border: none;
+      padding: 14px;
+      border-radius: 12px;
+      font-weight: 800;
+      width: 100%;
+      transition: all 0.2s;
+    }
+
+    .btn-buy:hover {
+      background: #059669;
+      transform: translateY(-2px);
+    }
+
+    .btn-sell {
+      background: var(--red);
+      color: white;
+      border: none;
+      padding: 14px;
+      border-radius: 12px;
+      font-weight: 800;
+      width: 100%;
+      transition: all 0.2s;
+    }
+
+    /* ── Status Bar ── */
+    .status-bar {
+      position: fixed;
+      bottom: 0;
+      width: 100%;
+      background: white;
+      border-top: 1px solid var(--border);
+      padding: 6px 20px;
+      display: flex;
+      gap: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      z-index: 1000;
+    }
+
+    /* ── Page Switching ── */
+    .page {
+      display: none;
+    }
+    .page.active {
+      display: block;
+      animation: fadeIn 0.3s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+  </style>
+</head>
+<body>
+
+  <!-- Navigation Bar -->
+  <nav class="top-nav d-flex align-items-center justify-content-between">
+    <div class="d-flex align-items-center">
+      <a href="#" class="brand">
+        <div class="symbol-icon" style="background: var(--primary); color: white;">
+          <span class="material-icons-round">bolt</span>
+        </div>
+        BookNow
+      </a>
+      <div class="nav-links">
+        <div class="nav-item active" onclick="app.showPage('scanner')">
+          <span class="material-icons-round">explore</span> Market
+        </div>
+        <div class="nav-item" onclick="app.showPage('orders')">
+          <span class="material-icons-round">receipt_long</span> Orders
+        </div>
+        <div class="nav-item" onclick="app.showPage('history')">
+          <span class="material-icons-round">history</span> History
+        </div>
+        <div class="nav-item" onclick="app.showPage('wallet')">
+          <span class="material-icons-round">wallet</span> Wallet
+        </div>
+      </div>
+    </div>
+
+    <div class="d-flex align-items-center gap-4">
+       <div class="d-none d-md-block text-end">
+          <div class="fw-bold" style="font-size: 12px;">Total Balance</div>
+          <div class="text-primary fw-extrabold" id="nav-total-pnl">$0.00</div>
+       </div>
+       <button class="btn btn-light rounded-pill p-2">
+         <span class="material-icons-round align-middle">notifications</span>
+       </button>
+    </div>
+  </nav>
+
+  <div class="main-container">
+    <div class="row g-4">
+      
+      <!-- MAIN AREA -->
+      <div class="col-lg-8">
+        
+        <!-- PAGE: SCANNER -->
+        <div id="page-scanner" class="page active">
+          <div class="section-title">
+            <span class="material-icons-round text-primary">radar</span>
+            Fast Movers
+          </div>
+          <div class="table-container">
+            <table class="m-table">
+              <thead>
+                <tr>
+                  <th>Asset</th>
+                  <th>Signal</th>
+                  <th>Price</th>
+                  <th>24h Change</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="scanner-tbody">
+                <!-- Rows injected by JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- PAGE: ORDERS -->
+        <div id="page-orders" class="page">
+          <div class="section-title">
+            <span class="material-icons-round text-primary">pending_actions</span>
+            Active Orders
+          </div>
+          <div class="glass-card">
+            <div class="table-responsive">
+              <table class="table table-borderless align-middle mb-0">
+                <thead class="text-muted small fw-bold text-uppercase">
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Side</th>
+                    <th>Price</th>
+                    <th>Quantity</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="orders-tbody" class="small fw-semibold">
+                   <!-- Rows -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- PAGE: HISTORY -->
+        <div id="page-history" class="page">
+          <div class="section-title">
+            <span class="material-icons-round text-primary">history_toggle_off</span>
+            Trade History
+          </div>
+          <div class="glass-card">
+            <div class="table-responsive">
+              <table class="table table-borderless align-middle mb-0">
+                <thead class="text-muted small fw-bold text-uppercase">
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Side</th>
+                    <th>Price</th>
+                    <th>Quantity</th>
+                    <th>Time</th>
+                  </tr>
+                </thead>
+                <tbody id="history-tbody" class="small fw-semibold">
+                   <!-- Rows -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- PAGE: WALLET -->
+        <div id="page-wallet" class="page">
+          <div class="section-title">
+            <span class="material-icons-round text-primary">savings</span>
+            Asset Portfolio
+          </div>
+          <div class="row g-3" id="wallet-grid">
+            <!-- Asset cards -->
+          </div>
+        </div>
+
+      </div>
+
+      <!-- SIDE AREA: TERMINAL -->
+      <div class="col-lg-4">
+        <div class="terminal-card sticky-top" style="top: 100px;">
+          <div class="term-head">
+            <div>
+              <div class="text-muted small fw-bold text-uppercase mb-1">Trading</div>
+              <div class="h5 mb-0 fw-extrabold text-primary" id="term-active-symbol">SELECT ASSET</div>
+            </div>
+            <div class="badge bg-light text-primary rounded-pill px-3 py-2 fw-bold">Live Mode</div>
+          </div>
+
+          <div class="term-body">
+            <div class="term-input-group">
+              <label>Limit Price</label>
+              <input type="number" id="term-price" class="term-input" placeholder="0.00">
+            </div>
+
+            <div class="term-input-group">
+              <label>Amount (USDT)</label>
+              <div class="position-relative">
+                <input type="number" id="term-amount" class="term-input" value="10">
+                <div class="position-absolute end-0 top-50 translate-middle-y me-3 text-muted small fw-bold">USDT</div>
+              </div>
+            </div>
+
+            <div class="d-flex gap-3 mb-4">
+              <button class="btn-buy" onclick="app.manualTrade('BUY')">BUY</button>
+              <button class="btn btn-light w-100 py-3 rounded-3 fw-bold border" onclick="app.manualTrade('SELL')">SELL</button>
+            </div>
+
+            <div class="d-flex justify-content-between p-3 bg-light rounded-3">
+               <div>
+                 <div class="text-muted small fw-bold">Available</div>
+                 <div class="fw-extrabold" id="term-usdt-balance">0.00 USDT</div>
+               </div>
+               <div class="text-end">
+                 <div class="text-muted small fw-bold">Estimation</div>
+                 <div class="fw-extrabold text-primary" id="term-est">0.00 ---</div>
+               </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <span>SYSTEM: <span class="text-success">OPERATIONAL</span></span>
+    <span>SOCKET: <span id="status-socket" class="text-warning">CONNECTING...</span></span>
+    <span>BINANCE: <span class="text-success">STABLE</span></span>
+    <span class="ms-auto" id="status-clock">00:00:00</span>
+  </div>
+
+  <!-- Scripts -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/utils.js"></script>
+  <script>
+    /**
+     * CORE APPLICATION LOGIC
+     */
+    const app = {
+      socket: io(),
+      activePage: 'scanner',
+      activeSymbol: null,
+      
+      init() {
+        this.setupListeners();
+        this.startClock();
+      },
+
+      setupListeners() {
+        this.socket.on('connect', () => {
+          document.getElementById('status-socket').textContent = 'CONNECTED';
+          document.getElementById('status-socket').className = 'text-success';
+        });
+
+        this.socket.on('update', (data) => {
+          this.renderScanner(data.coins);
+          this.renderOrders(data.botPositions); // Mapping botPositions to Orders for now
+          this.renderHistory(data.botSells);
+          this.renderWallet(data.stats);
+          
+          if (data.stats) {
+            document.getElementById('term-usdt-balance').textContent = utils.fmt(data.stats.usdtBalance || 0) + ' USDT';
+            document.getElementById('nav-total-pnl').textContent = '$' + utils.fmt(data.stats.totalPnL || 0);
+          }
+        });
+      },
+
+      showPage(id) {
+        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+        document.getElementById(`page-${id}`).classList.add('active');
+        
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+        event.currentTarget.classList.add('active');
+        
+        this.activePage = id;
+      },
+
+      selectAsset(symbol, price) {
+        this.activeSymbol = symbol;
+        document.getElementById('term-active-symbol').textContent = symbol;
+        document.getElementById('term-price').value = price;
+        document.getElementById('term-est').textContent = `~ ${utils.fmt(10/price)} ${symbol.replace('USDT', '')}`;
+      },
+
+      renderScanner(coins) {
+        const tbody = document.getElementById('scanner-tbody');
+        if (!coins || coins.length === 0) return;
+
+        tbody.innerHTML = coins.map(c => `
+          <tr>
+            <td>
+              <div class="symbol-box">
+                <div class="symbol-icon">${c.symbol.charAt(0)}</div>
+                ${c.symbol}
+              </div>
+            </td>
+            <td><span class="badge-signal">${c.signal}</span></td>
+            <td class="price-mono">${utils.fmt(c.currentPrice)}</td>
+            <td class="${c.pnlPct >= 0 ? 'text-success' : 'text-danger'} fw-extrabold">
+              ${c.pnlPct >= 0 ? '+' : ''}${c.pnlPct}%
+            </td>
+            <td>
+              <button class="btn btn-primary btn-sm rounded-pill px-3 shadow-sm" onclick="app.selectAsset('${c.symbol}', ${c.currentPrice})">
+                Trade
+              </button>
+            </td>
+          </tr>
+        `).join('');
+      },
+
+      renderOrders(orders) {
+        const tbody = document.getElementById('orders-tbody');
+        if (!orders) return;
+        tbody.innerHTML = orders.map(o => `
+          <tr>
+            <td class="fw-bold text-primary">${o.symbol}</td>
+            <td class="text-success fw-extrabold">BUY</td>
+            <td class="price-mono">${utils.fmt(o.buyPrice)}</td>
+            <td class="price-mono">${utils.fmt(o.origQty || 0)}</td>
+            <td><span class="badge bg-light text-primary rounded-pill">${o.status}</span></td>
+            <td>
+               <button class="btn btn-outline-danger btn-sm rounded-pill" onclick="app.cancelOrder('${o.symbol}', '${o.orderId}')">Cancel</button>
+            </td>
+          </tr>
+        `).join('') || '<tr><td colspan="6" class="text-center py-4 text-muted">No active orders</td></tr>';
+      },
+
+      renderHistory(history) {
+        const tbody = document.getElementById('history-tbody');
+        if (!history) return;
+        tbody.innerHTML = history.map(h => `
+          <tr>
+            <td class="fw-bold">${h.symbol}</td>
+            <td class="text-danger fw-extrabold">SELL</td>
+            <td class="price-mono">${utils.fmt(h.sellPrice)}</td>
+            <td class="price-mono">${utils.fmt(h.qty || 0)}</td>
+            <td class="text-muted small">${new Date(h.ts || Date.now()).toLocaleTimeString()}</td>
+          </tr>
+        `).join('') || '<tr><td colspan="5" class="text-center py-4 text-muted">No history yet</td></tr>';
+      },
+
+      renderWallet(stats) {
+         // Simplified wallet rendering for demo
+         const grid = document.getElementById('wallet-grid');
+         if (!grid) return;
+         grid.innerHTML = `
+            <div class="col-md-6">
+              <div class="glass-card text-center">
+                 <div class="text-muted small fw-bold mb-1">USDT BALANCE</div>
+                 <div class="h4 fw-extrabold text-primary mb-0">${utils.fmt(stats?.usdtBalance || 0)}</div>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="glass-card text-center">
+                 <div class="text-muted small fw-bold mb-1">TOTAL P&L</div>
+                 <div class="h4 fw-extrabold text-success mb-0">+$${utils.fmt(stats?.totalPnL || 0)}</div>
+              </div>
+            </div>
+         `;
+      },
+
+      manualTrade(side) {
+        const symbol = this.activeSymbol;
+        if (!symbol) return alert('Select an asset first!');
+        const price = document.getElementById('term-price').value;
+        const amount = document.getElementById('term-amount').value;
+        
+        console.log(`Executing ${side} for ${symbol} @ ${price}`);
+        // Integration with your existing API
+        fetch(`/api/${side.toLowerCase()}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol, price, qty: amount/price })
+        }).then(res => res.json()).then(data => {
+          if (data.ok) alert(`${side} order placed!`);
+        });
+      },
+
+      startClock() {
+        setInterval(() => {
+          document.getElementById('status-clock').textContent = new Date().toLocaleTimeString();
+        }, 1000);
+      }
+    };
+
+    app.init();
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Intelligence Hub — Logic & Virtual Performance</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        bg: '#0b0e11',
+                        card: '#1e2329',
+                        brand: '#f0b90b',
+                        border: 'rgba(255, 255, 255, 0.08)',
+                        success: '#0ecb81',
+                        danger: '#f6465d'
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0b0e11; color: #eaecef; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .glass { background: rgba(30, 35, 41, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
+        .gradient-brand { background: linear-gradient(135deg, #f0b90b 0%, #f8d33a 100%); }
+        .log-entry { animation: slideIn 0.3s ease-out; }
+        @keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
+    </style>
+</head>
+<body class="overflow-x-hidden">
+
+    <!-- ── Sidebar ── -->
+    <aside class="fixed left-0 top-0 h-screen w-64 glass border-r z-50">
+        <div class="p-6 flex flex-col h-full">
+            <div class="flex items-center gap-3 mb-10">
+                <div class="w-10 h-10 gradient-brand rounded-xl flex items-center justify-center text-bg font-black text-xl shadow-lg">H</div>
+                <h1 class="text-xl font-bold tracking-tight">Intel <span class="text-brand">HUB</span></h1>
+            </div>
+
+            <nav class="flex-1 space-y-1">
+                <a href="/pro" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 transition-all">
+                    <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
+                    Back to Pro
+                </a>
+                <a href="/profit_analysis.html" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 transition-all">
+                    <i data-lucide="radar" class="w-5 h-5"></i>
+                    Success Radar
+                </a>
+                <a href="#" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl bg-brand/10 text-brand font-medium">
+                    <i data-lucide="brain-circuit" class="w-5 h-5"></i>
+                    Intelligence Hub
+                </a>
+            </nav>
+
+            <div class="mt-auto pt-6 border-t border-white/5">
+                <div class="flex items-center gap-3 p-3 rounded-xl bg-white/5">
+                    <div id="ws-dot" class="w-2 h-2 rounded-full bg-danger animate-pulse"></div>
+                    <div>
+                        <p class="text-xs font-semibold text-white">Hub Stream</p>
+                        <p class="text-[10px] text-gray-500" id="ws-text">Disconnected</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ── Main Content ── -->
+    <main class="ml-64 p-8 min-h-screen">
+        <header class="mb-10 flex justify-between items-end">
+            <div>
+                <h2 class="text-3xl font-black text-white mb-1">Intelligence Hub</h2>
+                <p class="text-gray-500">Live monitoring of virtual trade performance and strategy logs.</p>
+            </div>
+            <div class="glass px-4 py-2 rounded-2xl">
+                <span class="text-[10px] font-bold text-gray-500 uppercase">Live Pulse</span>
+                <p class="text-sm font-bold text-brand mono" id="last-pulse">--:--:--</p>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 xl:grid-cols-3 gap-8">
+            
+            <!-- Left: Formula & Strategy Guide -->
+            <div class="xl:col-span-1 space-y-6">
+                <div class="flex items-center gap-2 mb-2">
+                    <i data-lucide="book-open" class="w-5 h-5 text-brand"></i>
+                    <h3 class="text-xl font-bold text-white">Strategy Intelligence</h3>
+                </div>
+
+                <div class="glass p-6 rounded-3xl border border-white/5">
+                    <p class="text-brand font-bold mb-2 uppercase text-[10px] tracking-widest">Patience Rule (3m)</p>
+                    <p class="text-gray-400 text-xs leading-relaxed">
+                        Holds positions for <span class="text-white font-bold">180s</span> even in drawdown. This prevents "Panic Selling" during normal volatility. Hard stop at <span class="text-danger font-bold">-$1.00</span>.
+                    </p>
+                </div>
+
+                <div class="glass p-6 rounded-3xl border border-white/5">
+                    <p class="text-success font-bold mb-2 uppercase text-[10px] tracking-widest">Accumulation Sequence</p>
+                    <p class="text-gray-400 text-xs leading-relaxed">
+                        Identifies <span class="text-white font-bold">3x Volume Growth</span>. If volume rises 3 times while price stays stable, a breakout is predicted.
+                    </p>
+                </div>
+
+                <div class="glass p-6 rounded-3xl border border-white/5">
+                    <p class="text-danger font-bold mb-2 uppercase text-[10px] tracking-widest">Exhaustion Warning</p>
+                    <p class="text-gray-400 text-xs leading-relaxed">
+                        Triggered when volume drops for 3 consecutive points. This is a signal to exit immediately.
+                    </p>
+                </div>
+
+                <!-- Fee Intelligence Section -->
+                <div class="glass p-6 rounded-3xl border-t-4 border-brand/50">
+                    <div class="flex items-center gap-2 mb-4">
+                        <i data-lucide="calculator" class="w-4 h-4 text-brand"></i>
+                        <h4 class="text-sm font-bold text-white uppercase">Advanced Scalp Blueprint</h4>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <label class="text-[10px] text-gray-500 uppercase font-bold mb-2 block">Net Profit Goal</label>
+                        <div class="flex gap-2">
+                            <button onclick="setProfitGoal(0.05)" id="goal-0.05" class="goal-btn flex-1 py-1 rounded-lg border border-white/5 text-[10px] text-gray-400 hover:bg-white/5 transition-all">+$0.05</button>
+                            <button onclick="setProfitGoal(0.10)" id="goal-0.10" class="goal-btn flex-1 py-1 rounded-lg border border-white/5 text-[10px] text-gray-400 hover:bg-white/5 transition-all">+$0.10</button>
+                            <button onclick="setProfitGoal(0.20)" id="goal-0.20" class="goal-btn flex-1 py-1 rounded-lg border border-brand/20 bg-brand/10 text-[10px] text-brand font-bold transition-all">+$0.20</button>
+                            <button onclick="setProfitGoal(0.50)" id="goal-0.50" class="goal-btn flex-1 py-1 rounded-lg border border-white/5 text-[10px] text-gray-400 hover:bg-white/5 transition-all">+$0.50</button>
+                        </div>
+                    </div>
+
+                    <div id="blueprint-container" class="space-y-4">
+                        <p class="text-[10px] text-gray-600 italic">Select a coin from the radar to generate a blueprint...</p>
+                    </div>
+
+                    <div class="mt-6 pt-4 border-t border-white/5">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-[10px] text-gray-500">Buy Amount</span>
+                            <span class="text-[10px] font-bold text-white">$100.00 USDT</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-[10px] text-gray-500">Binance Fee</span>
+                            <span class="text-[10px] font-bold text-danger">0.1% (Standard)</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right: Virtual Performance & Logs -->
+            <div class="xl:col-span-2 space-y-8">
+                
+                <!-- Section 1: Portfolio Performance -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- Active Positions -->
+                    <div class="glass p-6 rounded-[2rem] border-t-4 border-brand">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                                <i data-lucide="activity" class="w-5 h-5 text-brand"></i>
+                                Active Paper Trades
+                            </h3>
+                            <span id="active-count" class="text-[10px] font-black text-brand bg-brand/10 px-2 py-0.5 rounded-full">0 ACTIVE</span>
+                        </div>
+                        <div id="active-container" class="space-y-3 min-h-[120px]">
+                            <p class="text-xs text-gray-600 italic text-center py-10">Waiting for buy signals...</p>
+                        </div>
+                    </div>
+
+                    <!-- PnL Stats -->
+                    <div class="glass p-6 rounded-[2rem] border-t-4 border-success">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                                <i data-lucide="bar-chart-3" class="w-5 h-5 text-success"></i>
+                                Portfolio Health
+                            </h3>
+                        </div>
+                        <div class="grid grid-cols-2 gap-4 mb-4">
+                            <div class="bg-white/5 p-4 rounded-2xl">
+                                <p class="text-[9px] text-gray-500 uppercase font-bold">Total PnL</p>
+                                <h4 id="total-pnl" class="text-2xl font-black mono text-white">$0.00</h4>
+                            </div>
+                            <div class="bg-white/5 p-4 rounded-2xl">
+                                <p class="text-[9px] text-gray-500 uppercase font-bold">Success Rate</p>
+                                <h4 id="success-rate" class="text-2xl font-black mono text-success">0%</h4>
+                            </div>
+                        </div>
+                        <div id="history-list" class="space-y-2 max-h-[120px] overflow-y-auto pr-2">
+                            <!-- Recent History items -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 2: Scalp Radar -->
+                <div>
+                    <div class="flex items-center gap-2 mb-4">
+                        <i data-lucide="zap" class="w-5 h-5 text-brand"></i>
+                        <h3 class="text-xl font-bold text-white uppercase tracking-tighter">Scalp Alert Radar</h3>
+                    </div>
+                    <div id="radar-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4 min-h-[100px]">
+                        <p class="text-xs text-gray-600 col-span-2 text-center py-10">Searching for high-confidence breakouts...</p>
+                    </div>
+                </div>
+
+                <!-- Section 3: Event Logs -->
+                <div>
+                    <div class="flex justify-between items-center mb-6">
+                        <h3 class="text-xl font-bold text-white flex items-center gap-2">
+                            <i data-lucide="list" class="w-5 h-5 text-brand"></i>
+                            Market Sequence Logs
+                        </h3>
+                        <button onclick="clearLog()" class="text-xs text-gray-500 hover:text-white transition-all">Clear Logs</button>
+                    </div>
+                    <div id="log-container" class="space-y-3 max-h-[400px] overflow-y-auto pr-4">
+                        <!-- Log entries -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const activeContainer = document.getElementById('active-container');
+        const historyList = document.getElementById('history-list');
+        const radarGrid = document.getElementById('radar-grid');
+        const logContainer = document.getElementById('log-container');
+        
+        const loggedEvents = new Set();
+        const activeSignals = {};
+
+        let selectedBlueprintSymbol = null;
+        let currentNetGoal = 0.20;
+
+        function setProfitGoal(goal) {
+            currentNetGoal = goal;
+            document.querySelectorAll('.goal-btn').forEach(btn => {
+                const isSelected = Math.abs(parseFloat(btn.id.split('-')[1]) - goal) < 0.001;
+                btn.className = isSelected 
+                    ? `goal-btn flex-1 py-1 rounded-lg border border-brand/20 bg-brand/10 text-[10px] text-brand font-bold transition-all`
+                    : `goal-btn flex-1 py-1 rounded-lg border border-white/5 text-[10px] text-gray-400 hover:bg-white/5 transition-all`;
+            });
+            if (selectedBlueprintSymbol) updateBlueprint();
+        }
+
+        function updateBlueprint() {
+            if (!selectedBlueprintSymbol || !lastUpdateData) return;
+            const container = document.getElementById('blueprint-container');
+            
+            // Try to find the symbol in current analysis
+            const latestData = lastUpdateData.analysisTimeline || {};
+            const snapshot = latestData[selectedBlueprintSymbol];
+            if (!snapshot) return;
+
+            const buyPrice = snapshot.price;
+            const investment = 100.0;
+            const feeRate = 0.001;
+
+            // PRECISE FORMULA:
+            // Net = SellVal * (1 - Fee) - BuyVal * (1 + Fee)
+            // SellVal = (Net + BuyVal * (1 + Fee)) / (1 - Fee)
+            const requiredSellValue = (currentNetGoal + (investment * (1 + feeRate))) / (1 - feeRate);
+            const sellPrice = (requiredSellValue / (investment * (1 - feeRate) / buyPrice));
+            const requiredMove = ((sellPrice - buyPrice) / buyPrice) * 100;
+
+            container.innerHTML = `
+                <div class="bg-brand/5 p-4 rounded-2xl border border-brand/20 fade-in">
+                    <div class="flex justify-between items-center mb-3">
+                        <h5 class="text-xl font-black text-white mono">${selectedBlueprintSymbol}</h5>
+                        <span class="text-[10px] bg-brand text-bg px-2 py-0.5 rounded font-black">BLUEPRINT</span>
+                    </div>
+                    <div class="space-y-2">
+                        <div class="flex justify-between text-xs">
+                            <span class="text-gray-500">Entry Price</span>
+                            <span class="text-white mono font-bold">${buyPrice.toFixed(6)}</span>
+                        </div>
+                        <div class="flex justify-between text-xs">
+                            <span class="text-gray-500">Target Sell</span>
+                            <span class="text-success mono font-bold text-lg">${sellPrice.toFixed(6)}</span>
+                        </div>
+                        <div class="flex justify-between text-xs pt-2 border-t border-white/5">
+                            <span class="text-gray-500">Required Move</span>
+                            <span class="text-brand font-black">+${requiredMove.toFixed(2)}%</span>
+                        </div>
+                        <div class="flex justify-between text-[10px]">
+                            <span class="text-gray-600">Total Fees (Est)</span>
+                            <span class="text-danger">$${(requiredSellValue * feeRate + investment * feeRate).toFixed(4)}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        let lastUpdateData = null;
+        function updateUI(data) {
+            lastUpdateData = data;
+            try {
+                document.getElementById('last-pulse').textContent = new Date().toLocaleTimeString();
+                
+                // If no blueprint selected, pick the first active signal
+                if (!selectedBlueprintSymbol) {
+                    const symbols = Object.keys(data.analysisTimeline || {});
+                    if (symbols.length > 0) {
+                        selectedBlueprintSymbol = symbols[0];
+                    }
+                }
+                updateBlueprint();
+                const symbols = Object.keys(pos);
+                document.getElementById('active-count').textContent = `${symbols.length} ACTIVE`;
+                
+                if (symbols.length === 0) {
+                    activeContainer.innerHTML = '<p class="text-xs text-gray-600 italic text-center py-10">Waiting for buy signals...</p>';
+                } else {
+                    activeContainer.innerHTML = symbols.map(s => {
+                        const p = JSON.parse(pos[s]);
+                        return `
+                            <div class="bg-white/5 p-4 rounded-2xl border border-white/5 flex justify-between items-center fade-in">
+                                <div>
+                                    <h5 class="font-black text-white mono">${s}</h5>
+                                    <p class="text-[9px] text-gray-500">Entry: ${p.entry_price.toFixed(6)}</p>
+                                </div>
+                                <div class="text-right">
+                                    <p class="text-xs font-bold text-success mono tracking-widest animate-pulse">MONITORING</p>
+                                    <p class="text-[9px] text-gray-500">${p.entry_time}</p>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                }
+
+                // 2. Update Performance & History
+                const history = data.virtualHistory || [];
+                if (history.length > 0) {
+                    const totalPnl = history.reduce((sum, h) => sum + (h.pnl_usdt || 0), 0);
+                    const wins = history.filter(h => h.pnl_usdt > 0).length;
+                    
+                    document.getElementById('total-pnl').textContent = `$${totalPnl.toFixed(2)}`;
+                    document.getElementById('total-pnl').className = `text-2xl font-black mono ${totalPnl >= 0 ? 'text-success' : 'text-danger'}`;
+                    document.getElementById('success-rate').textContent = `${Math.round((wins / history.length) * 100)}%`;
+
+                    historyList.innerHTML = history.slice(0, 15).map(h => `
+                        <div class="flex justify-between items-center text-[10px] border-b border-white/5 pb-1">
+                            <div class="flex flex-col">
+                                <span class="text-gray-400 mono font-bold">${h.symbol}</span>
+                                <span class="text-[8px] text-gray-600 uppercase font-black">${h.reason}</span>
+                            </div>
+                            <div class="flex flex-col text-right">
+                                <span class="${h.pnl_usdt > 0 ? 'text-success' : 'text-danger'} font-black mono text-xs">${h.pnl_usdt > 0 ? '+' : ''}$${h.pnl_usdt.toFixed(3)}</span>
+                                <span class="text-[8px] text-gray-500">Fee: $${(h.fees_paid || 0).toFixed(4)}</span>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+
+                // 3. Update Fee Guide
+                if (data.feeStats) {
+                    const guide = document.getElementById('fee-guide-container');
+                    guide.innerHTML = Object.keys(data.feeStats).map(key => {
+                        const s = data.feeStats[key];
+                        return `
+                            <div class="bg-white/5 p-3 rounded-xl border border-white/5">
+                                <div class="flex justify-between items-center mb-1">
+                                    <span class="text-[10px] font-black text-white">$${s.investment} Trade</span>
+                                    <span class="text-[10px] font-bold text-brand">Goal: +$${s.target_net.toFixed(2)}</span>
+                                </div>
+                                <div class="flex justify-between items-center">
+                                    <span class="text-[9px] text-gray-500 italic">Required Move: ${s.required_price_move_pct}%</span>
+                                    <span class="text-[9px] text-danger font-bold">Est Fee: $${s.total_fees.toFixed(3)}</span>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                }
+
+                // 3. Process Live Analysis for Radar and Logs
+                const timeline = data.analysisTimeline || {};
+                Object.keys(timeline).forEach(symbol => {
+                    const points = timeline[symbol];
+                    if (!points || points.length === 0) return;
+                    
+                    const last = points[points.length - 1];
+                    
+                    // Log Event Detection
+                    if (last.sequence_report && last.sequence_report.type !== 'neutral') {
+                        addLogEntry(symbol, last);
+                    }
+                    
+                    // Radar Signal Detection
+                    if (last.micro_signal && last.micro_signal !== 'NEUTRAL') {
+                        updateRadarCard(symbol, last);
+                    }
+                });
+
+                lucide.createIcons();
+            } catch (err) {
+                console.error("UI Update Error:", err);
+            }
+        }
+
+        function updateRadarCard(symbol, data) {
+            const id = `radar-${symbol}`;
+            let el = document.getElementById(id);
+            if (!el) {
+                if (radarGrid.querySelector('p')) radarGrid.innerHTML = '';
+                el = document.createElement('div');
+                el.id = id;
+                radarGrid.prepend(el);
+            }
+
+            const isBuy = data.micro_signal.includes('BUY') || data.micro_signal.includes('ACCUM');
+            const color = isBuy ? 'success' : 'danger';
+            
+            el.className = `glass p-4 rounded-2xl border border-${color}/30 bg-${color}/5 fade-in transition-all mb-2`;
+            el.innerHTML = `
+                <div class="flex justify-between items-start">
+                    <div>
+                        <p class="text-[9px] font-bold text-${color} uppercase tracking-widest">${data.micro_signal.replace('_', ' ')}</p>
+                        <h4 class="text-lg font-black text-white mono">${symbol}</h4>
+                    </div>
+                    <div class="text-right">
+                        <span class="text-[10px] font-bold text-white">${data.prediction_confidence}% Confidence</span>
+                        <div class="w-20 bg-white/10 h-1 rounded-full mt-1 overflow-hidden">
+                            <div class="bg-brand h-full" style="width: ${data.prediction_confidence}%"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-3 flex justify-between items-center text-[10px]">
+                    <span class="text-gray-400">Impact: ${data.sequence_report.price_impact.toFixed(4)}%</span>
+                    <span class="bg-white/5 px-2 py-0.5 rounded text-gray-500 uppercase font-bold">Micro Target</span>
+                </div>
+            `;
+
+            // Auto-clean radar signals after 2 minutes of silence
+            clearTimeout(activeSignals[symbol]);
+            activeSignals[symbol] = setTimeout(() => {
+                el.remove();
+                if (radarGrid.children.length === 0) {
+                    radarGrid.innerHTML = '<p class="text-xs text-gray-600 col-span-2 text-center py-10">Searching for high-confidence breakouts...</p>';
+                }
+            }, 120000);
+        }
+
+        function addLogEntry(symbol, data) {
+            const eid = `${symbol}-${data.sequence_report.type}-${Math.floor(Date.now()/15000)}`; // 15s debounce
+            if (loggedEvents.has(eid)) return;
+            loggedEvents.add(eid);
+            setTimeout(() => loggedEvents.delete(eid), 60000);
+
+            if (logContainer.querySelector('p.font-bold')) logContainer.innerHTML = '';
+
+            const isUp = data.sequence_report.type === 'bullish_seq';
+            const entry = document.createElement('div');
+            entry.className = `glass p-4 rounded-2xl border-l-4 ${isUp ? 'border-success' : 'border-danger'} flex justify-between items-center log-entry mb-2`;
+            entry.innerHTML = `
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center">
+                        <i data-lucide="${isUp ? 'trending-up' : 'trending-down'}" class="w-4 h-4 ${isUp ? 'text-success' : 'text-danger'}"></i>
+                    </div>
+                    <div>
+                        <h4 class="font-bold text-white mono text-sm">${symbol}</h4>
+                        <p class="text-[9px] text-gray-500 uppercase font-bold">${isUp ? 'Accumulation' : 'Exhaustion'}</p>
+                    </div>
+                </div>
+                <div class="text-right">
+                    <p class="text-xs font-black mono ${isUp ? 'text-success' : 'text-danger'}">${data.sequence_report.price_impact.toFixed(4)}%</p>
+                    <p class="text-[8px] text-gray-400">${new Date().toLocaleTimeString()}</p>
+                </div>
+            `;
+            logContainer.prepend(entry);
+            if (logContainer.children.length > 50) logContainer.lastElementChild.remove();
+        }
+
+        function clearLog() {
+            logContainer.innerHTML = '<p class="text-xs text-gray-600 text-center py-10 font-bold">Logs Cleared.</p>';
+        }
+
+        const socket = io();
+        socket.on('connect', () => {
+            document.getElementById('ws-dot').className = 'w-2 h-2 rounded-full bg-success animate-pulse';
+            document.getElementById('ws-text').textContent = 'Stream Active';
+        });
+
+        socket.on('update', (data) => {
+            updateUI(data);
+        });
+
+        lucide.createIcons();
+    </script>
+</body>
+</html>

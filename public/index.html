@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!--
+    public/index.html
+    ──────────────────────────────────────────────────────────────────────────
+    BookNow Fast Trade Scanner — Main page shell.
+
+    Service control buttons (topbar):
+      ⏹ Stop      → POST /api/service/stop
+      🗑 Clear     → POST /api/redis/flush
+      ▶ Start     → POST /api/service/start
+
+    This file is ONLY structure and resource loading.
+    No inline styles. No inline scripts.
+    All logic lives in public/js/*.js
+    All styles live in public/css/dashboard.css
+  -->
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>BookNow — Fast Trade Scanner</title>
+
+  <!-- Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+
+  <!-- App styles -->
+  <link rel="stylesheet" href="/css/dashboard.css"/>
+  <link rel="stylesheet" href="/css/scanner-sort.css"/>
+  <link rel="stylesheet" href="/css/premium.css"/>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════════════════════════════════════════
+     TOPBAR — Live status, stat pills, connection indicator
+     ════════════════════════════════════════════════════════════════════════════ -->
+<div class="topbar">
+
+  <!-- Logo -->
+  <div class="logo">
+    <div class="logo-icon">⚡</div>
+    <h1>Fast Trade Scanner</h1>
+  </div>
+
+  <!-- Stat: fast mover count -->
+  <div class="stat-pill">
+    <span class="sp-label">Fast Movers</span>
+    <span class="sp-val yellow blinking" id="s-count">0</span>
+    <span style="font-size:10px;color:var(--muted)" id="s-total-fast"></span>
+  </div>
+
+  <!-- Stat: open positions -->
+  <div class="stat-pill">
+    <span class="sp-label">Positions</span>
+    <span class="sp-val blue" id="s-pos">0</span>
+  </div>
+
+  <!-- Stat: realized P&L -->
+  <div class="stat-pill">
+    <span class="sp-label">P&amp;L</span>
+    <span class="sp-val" id="s-pnl">$0.00</span>
+  </div>
+
+  <!-- Stat: wallet -->
+  <div class="stat-pill">
+    <span class="sp-label">Wallet</span>
+    <span class="sp-val purple" id="s-wallet-count">0</span>
+  </div>
+
+  <!-- Stat: auto-trade status -->
+  <div class="stat-pill">
+    <span class="sp-label">Auto</span>
+    <span class="sp-val" id="s-auto">OFF</span>
+  </div>
+
+  <!-- ── Service control bar ── -->
+  <div class="svc-bar">
+    <!-- Navigation -->
+    <nav class="app-nav">
+      <button class="nav-item active" onclick="ui.goto('home')">🏠 Scanner</button>
+      <button class="nav-item" onclick="ui.goto('intelligence')">🧠 Intelligence</button>
+      <a class="nav-item" href="/virtual_scalper.html" style="text-decoration: none;">💸 Virtual P&amp;L</a>
+    </nav>
+
+    <div class="sep-v"></div>
+
+    <!-- STOP Spring Boot -->
+    <button id="btn-svc-stop" class="svc-btn svc-stop" onclick="stopSpringService()"
+            title="Stop the Spring Boot trading service">
+      <span class="svc-icon">⏹</span>
+      <span class="svc-label">Stop</span>
+    </button>
+
+    <!-- CLEAR Redis -->
+    <button id="btn-flush-redis" class="svc-btn svc-flush" onclick="clearRedisCache()"
+            title="Delete all Redis keys (FLUSHALL) and restart the connection">
+      <span id="flush-icon" class="svc-icon">🗑️</span>
+      <span id="flush-label" class="svc-label">Clear Cache</span>
+    </button>
+
+    <!-- START Spring Boot -->
+    <button id="btn-svc-start" class="svc-btn svc-start" onclick="startSpringService()"
+            title="Start the Spring Boot trading service">
+      <span class="svc-icon">▶</span>
+      <span class="svc-label">Start</span>
+    </button>
+
+    <!-- Service running indicator -->
+    <div class="svc-status" id="svc-status" title="Spring Boot service status">
+      <span class="svc-dot" id="svc-dot"></span>
+      <span id="svc-status-label">Unknown</span>
+    </div>
+
+    <!-- Currency Toggle -->
+    <button class="svc-btn svc-flush" onclick="toggleCurrency()" style="margin-left:12px;padding:2px 10px;border-radius:4px" title="Toggle between USDT and INR display">
+      <span id="currency-label">USDT Mode</span>
+    </button>
+  </div>
+
+  <!-- Live connection indicator (right-aligned) -->
+  <div class="live-badge">
+    <div class="live-dot" id="live-dot"></div>
+    <span id="live-label">Connecting</span>
+    <span id="live-ts-header" style="margin-left:6px;font-family:var(--mono);font-size:10px;color:var(--muted)"></span>
+  </div>
+
+</div>
+
+<script>
+  window.ui = {
+    goto(page) {
+      console.log(`[UI] Navigating to: ${page}`);
+      const home = document.getElementById('view-home');
+      const portfolio = document.getElementById('view-portfolio');
+
+      if (page === 'home') {
+          if (home) home.style.cssText = 'display: flex; flex: 1; flex-direction: column; overflow: hidden;';
+          if (portfolio) portfolio.style.display = 'none';
+          if (document.getElementById('view-intelligence')) document.getElementById('view-intelligence').style.display = 'none';
+          window.location.hash = '';
+      } else if (page === 'intelligence') {
+          if (home) home.style.display = 'none';
+          if (portfolio) portfolio.style.display = 'none';
+          if (document.getElementById('view-intelligence')) document.getElementById('view-intelligence').style.display = 'block';
+          window.location.hash = '#/intelligence';
+      } else {
+          if (home) home.style.display = 'none';
+          if (portfolio) portfolio.style.cssText = 'display: flex; height: calc(100vh - 60px); flex-direction: column; overflow: visible; background: #0b0e11;';
+          if (document.getElementById('view-intelligence')) document.getElementById('view-intelligence').style.display = 'none';
+          window.location.hash = '#/portfolio';
+      }
+
+      // Update nav buttons
+      document.querySelectorAll('.nav-item').forEach(btn => {
+        const isHome = btn.textContent.includes('Scanner');
+        const isPort = btn.textContent.includes('Portfolio');
+        btn.classList.toggle('active', (page === 'home' && isHome) || (page === 'portfolio' && isPort));
+      });
+
+      // Force immediate re-render of data
+      if (window.wallet) window.wallet.render();
+      if (window.account) window.account.renderOpenOrders();
+    },
+
+    init() {
+      // Handle initial load based on hash
+      const hash = window.location.hash;
+      if (hash === '#/portfolio') {
+        this.goto('portfolio');
+      } else if (hash === '#/intelligence') {
+        this.goto('intelligence');
+      } else {
+        this.goto('home');
+      }
+
+      // Listen for hash changes
+      window.addEventListener('hashchange', () => {
+        const newHash = window.location.hash;
+        if (newHash === '#/portfolio') {
+          this.goto('portfolio');
+        } else if (newHash === '#/intelligence') {
+          this.goto('intelligence');
+        } else {
+          this.goto('home');
+        }
+      });
+    }
+  };
+
+  // Initialize routing on load
+  window.addEventListener('load', () => {
+    window.ui.init();
+  });
+</script>
+
+<div id="view-home">
+  <!-- ════════════════════════════════════════════════════════════════════════════
+       BOT POSITIONS STRIP — Horizontal list of active bot trades
+       ════════════════════════════════════════════════════════════════════════════ -->
+  <div class="bot-strip-header">
+    <span class="bot-strip-title">🤖 Bot Positions</span>
+    <span class="bot-strip-count" id="bot-pos-count">0 active</span>
+    <span class="bot-strip-hint">← scroll →</span>
+  </div>
+  <div class="bot-strip" id="bot-positions">
+    <!-- Bot position cards injected here -->
+  </div>
+
+  <div class="grid">
+
+      <!-- ── LEFT: Fast-mover scanner ── -->
+      <div class="left">
+
+        <!-- Auto-trade configuration bar -->
+        <div class="auto-bar">
+      <label class="toggle">
+        <input type="checkbox" id="ck-auto" onchange="saveConfig()"/>
+        <span class="slider"></span>
+      </label>
+
+      <div class="sep"></div>
+
+      <label>Buy USDT</label>
+      <input type="number" id="cfg-buy-amount" value="12" min="10" max="1000" step="1" onchange="saveConfig()"/>
+
+      <label>Profit %</label>
+      <input type="number" id="cfg-profit" value="0" min="0" max="20" step="0.1" onchange="saveConfig()"/>
+
+      <label>Profit $</label>
+      <input type="number" id="cfg-profit-amount" value="0.20" min="0" max="100" step="0.01" onchange="saveConfig()"/>
+
+      <label>Stop %</label>
+      <input type="number" id="cfg-stop" value="0.8" min="0.1" max="10" step="0.1" onchange="saveConfig()"/>
+
+      <label>Max Pos</label>
+      <input type="number" id="cfg-maxpos" value="5" min="1" max="20" step="1" onchange="saveConfig()"/>
+
+      <label>Top N</label>
+      <input type="number" id="cfg-limit" value="10" min="1" max="50" step="1" onchange="saveConfig()" title="Max coins to display"/>
+
+      <div class="sep"></div>
+
+      <label>Mode</label>
+      <label class="toggle" title="OFF = Simulation, ON = Live trading">
+        <input type="checkbox" id="ck-live" onchange="saveConfig()"/>
+        <span class="slider"></span>
+      </label>
+      <span id="mode-badge" class="mode-badge mode-sim">SIM</span>
+
+    </div>
+
+    <!-- Scanner table — populated by js/scanner.js -->
+    <div class="scanner-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Signal</th>
+            <th>Analysis</th>
+            <th>Bot Strategy</th>
+            <th>24h Vol</th>
+            <th>Price</th>
+            <th>Buy @</th>
+            <th id="th-limit-price" style="display:none">Limit Price</th>
+            <th>P&amp;L %</th>
+            <th>Held</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="scanner-body">
+        </tbody>
+      </table>
+    </div>
+
+  </div><!-- /.left -->
+
+
+  <!-- RESIZABLE DIVIDER -->
+  <div id="resizer" class="resizer"></div>
+
+  <!-- ── RIGHT: Bot positions, manual positions, trade log, orders ── -->
+  <div class="right" id="right-panel">
+
+    <!-- Manual order form — Binance Style (MOVED TO TOP) -->
+    <div class="panel">
+      <div class="ptitle">
+        🚀 Trading Terminal
+        <button id="toggle-right" class="btn-tiny" style="float:right;background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer">◀</button>
+      </div>
+
+      <div class="terminal-tabs">
+        <button class="t-tab active" onclick="orders.setMode('LIMIT')">Limit</button>
+        <button class="t-tab" onclick="orders.setMode('MARKET')">Market</button>
+      </div>
+
+      <div class="terminal-layout">
+        <!-- BUY COLUMN -->
+        <div class="term-col">
+          <div class="term-header">Buy <span class="term-sym-label">---</span></div>
+          <div class="term-field" id="term-row-price">
+            <span class="term-lbl">Price</span>
+            <input type="number" id="m-price" placeholder="0.00" step="any"/>
+            <span class="term-unit">USDT</span>
+          </div>
+          <div class="term-field">
+            <span class="term-lbl">Amount</span>
+            <input type="number" id="m-qty" placeholder="0.00" step="any"/>
+            <span class="term-unit" id="m-qty-unit">---</span>
+          </div>
+          <div class="term-field">
+            <span class="term-lbl">Total</span>
+            <input type="number" id="m-total" placeholder="10" value="10" step="any" oninput="orders.recalc('BUY')"/>
+            <span class="term-unit">USDT</span>
+          </div>
+          <div id="m-est" class="term-estimate">≈ 0.00 ---</div>
+          <button class="term-btn buy" onclick="orders.manualBuy()">Buy <span class="term-sym-label">---</span></button>
+        </div>
+
+        <!-- SELL COLUMN -->
+        <div class="term-col">
+          <div class="term-header">Sell <span class="term-sym-label">---</span></div>
+          <div class="term-field" id="term-row-sell-price">
+            <span class="term-lbl">Price</span>
+            <input type="number" id="m-target" placeholder="0.00" step="any" oninput="orders.recalc('SELL')"/>
+            <span class="term-unit">USDT</span>
+          </div>
+          <div class="term-field">
+            <span class="term-lbl">Amount</span>
+            <input type="number" id="s-qty" placeholder="0.00" step="any" oninput="orders.recalc('SELL', 'qty')"/>
+            <span class="term-unit" id="s-qty-unit">---</span>
+          </div>
+          <div class="term-field">
+            <span class="term-lbl">Total</span>
+            <input type="number" id="s-total" placeholder="0.00" step="any" oninput="orders.recalc('SELL')"/>
+            <span class="term-unit">USDT</span>
+          </div>
+          <div id="s-est" class="term-estimate">≈ 0.00 ---</div>
+          <button class="term-btn sell" onclick="orders.manualSell()">Sell <span class="term-sym-label">---</span></button>
+        </div>
+      </div>
+
+      <!-- Utility bar -->
+      <div style="margin-top:15px; display:flex; gap:10px; justify-content:center">
+        <button onclick="orders.use2mLow()" class="btn-tiny">Use 2m Low</button>
+        <button onclick="orders.useMarketPrice()" class="btn-tiny">Use Market Price</button>
+      </div>
+    </div>
+
+    <!-- 🗂️ Activity Manager (Tabbed Sidebar) -->
+    <div class="panel manager-panel">
+      <div class="side-tabs">
+        <button class="s-tab active" onclick="switchSideTab('live')">⚡ Positions</button>
+        <button class="s-tab" onclick="switchSideTab('orders')">📋 Open Orders</button>
+        <button class="s-tab" onclick="switchSideTab('history')">📜 Trade History</button>
+        <button class="s-tab" onclick="switchSideTab('wallet')">💰 Wallet</button>
+      </div>
+
+      <!-- LIVE TAB: Active Positions + Limit Orders -->
+      <div id="side-tab-live" class="side-tab-content active">
+        <div class="sub-section">
+          <div class="stitle">Positions</div>
+          <div id="positions-area"><div class="no-pos-small">Empty</div></div>
+        </div>
+        <div class="sub-section">
+          <div class="stitle">Pending Orders</div>
+          <div id="limit-orders-area"><div class="no-pos-small">Empty</div></div>
+        </div>
+      </div>
+
+      <!-- OPEN ORDERS TAB -->
+      <div id="side-tab-orders" class="side-tab-content">
+        <div class="sub-section">
+          <div class="stitle">Active Binance Orders</div>
+          <div class="table-wrap">
+            <table class="mini-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Price</th>
+                  <th>Qty</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="open-orders-list"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TRADE HISTORY TAB -->
+      <div id="side-tab-history" class="side-tab-content">
+        <div class="sub-section">
+          <div class="stitle" style="display:flex; justify-content:space-between; align-items:center;">
+            Order History
+            <div style="display:flex; gap:8px;">
+              <button class="btn btn-sm" onclick="account.fetchTradeHistoryManual()" style="font-size:10px; padding:4px 10px; background:var(--primary); border:none; color:white; border-radius:4px; cursor:pointer;">Refresh History</button>
+              <a href="https://www.binance.com/en/my/orders/exchange/usertrade" target="_blank" class="btn btn-sm" style="font-size:10px; padding:4px 10px; background:#f0b90b; border:none; color:#000; border-radius:4px; cursor:pointer; text-decoration:none; display:flex; align-items:center; gap:4px; font-weight:bold;">
+                <span style="font-size:12px;">📊</span> View on Binance
+              </a>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="mini-table">
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Price</th>
+                  <th>Executed</th>
+                  <th>Fee</th>
+                  <th>Total</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody id="trade-history-list"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- WALLET TAB: Asset Balances -->
+      <div id="side-tab-wallet" class="side-tab-content">
+        <div class="sub-section">
+          <div class="stitle">Account Balances</div>
+          <div class="wallet-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Asset</th>
+                  <th>Free</th>
+                  <th>Total</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="wallet-body">
+                <tr><td colspan="4" style="text-align:center;padding:20px;color:var(--muted)">Loading balances...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div><!-- /.right -->
+  </div><!-- /.grid -->
+</div><!-- /#view-home -->
+
+
+
+<style>
+  /* Premium Portfolio Styles */
+  #view-portfolio {
+    padding: 30px;
+    background: #0b0e11;
+    position: relative;
+    z-index: 10;
+    flex: 1;
+    display: none;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  #view-home {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .portfolio-container {
+    display: flex;
+    flex-direction: column;
+    gap: 30px;
+    max-width: 1400px;
+    margin: 0 auto;
+    padding-bottom: 50px;
+  }
+
+  .p-card {
+    background: #1e2329;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+    transition: transform 0.2s;
+  }
+  .p-card:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.15); }
+
+  .p-card-head {
+    padding: 25px 30px;
+    background: rgba(255,255,255,0.03);
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .p-card-icon { font-size: 28px; }
+  .p-card-title-group { display: flex; flex-direction: column; }
+  .p-card-title { font-size: 20px; font-weight: 700; color: #fff; letter-spacing: -0.5px; }
+  .p-card-sub { font-size: 13px; color: #848e9c; }
+
+  .p-table-wrap { padding: 15px; overflow-x: auto; }
+  .p-table { width: 100%; border-collapse: collapse; }
+  .p-table th { text-align: left; padding: 15px 20px; font-size: 12px; color: #848e9c; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; }
+  .p-table td { padding: 18px 20px; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 15px; }
+  .p-table tr:hover { background: rgba(255,255,255,0.02); }
+  .p-empty { text-align: center; padding: 80px !important; color: #848e9c; font-style: italic; font-size: 16px; }
+
+  /* Nav Styles */
+  .app-nav { display: flex; gap: 8px; margin: 0 25px; }
+  .nav-item {
+    background: transparent;
+    border: 1px solid transparent;
+    color: #848e9c;
+    padding: 8px 18px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 700;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+  }
+  .nav-item:hover { background: rgba(255,255,255,0.06); color: #fff; }
+  .nav-item.active { background: #2f8af5; color: #fff; box-shadow: 0 4px 15px rgba(47,138,245,0.3); }
+
+  .sep-v { width: 1px; height: 24px; background: rgba(255,255,255,0.12); margin: 0 10px; }
+
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+</style>
+
+
+
+<!-- ════════════════════════════════════════════════════════════════════════════
+     COIN ANALYSIS MODAL — populated by analyzeCoin() in main.js
+     ════════════════════════════════════════════════════════════════════════════ -->
+<div id="analysis-modal" class="modal-overlay" style="display:none" onclick="closeAnalysisModal(event)">
+  <div class="modal-box" id="analysis-box">
+
+    <!-- Header -->
+    <div class="modal-header">
+      <div class="modal-title-wrap">
+        <span id="modal-symbol" class="modal-symbol">—</span>
+        <span id="modal-rec-badge" class="modal-rec-badge">—</span>
+      </div>
+      <button class="modal-close" onclick="closeAnalysisModal(null)">✕</button>
+    </div>
+
+    <!-- Loading state -->
+    <div id="modal-loading" class="modal-loading">
+      <div class="modal-spinner"></div>
+      <span>Fetching 60 days of data…</span>
+    </div>
+
+    <!-- Content (hidden while loading) -->
+    <div id="modal-content" style="display:none">
+
+      <!-- Score ring + summary -->
+      <div class="modal-score-row">
+        <div class="modal-score-wrap">
+          <svg class="score-ring" viewBox="0 0 80 80">
+            <circle class="sr-bg" cx="40" cy="40" r="32"/>
+            <circle class="sr-fill" id="sr-fill" cx="40" cy="40" r="32"
+                    stroke-dasharray="201" stroke-dashoffset="201"/>
+          </svg>
+          <div class="score-center">
+            <span id="modal-score" class="score-num">0</span>
+            <span class="score-denom">/7</span>
+          </div>
+        </div>
+        <div class="modal-summary">
+          <div id="modal-rec-label" class="modal-rec-label">—</div>
+          <div id="modal-reason" class="modal-reason">—</div>
+        </div>
+      </div>
+
+      <!-- Price stats grid -->
+      <div class="modal-section-title">📊 2-Month Price History</div>
+      <div class="modal-price-grid">
+        <div class="mpg-item">
+          <span class="mpg-lbl">2M High</span>
+          <span id="m-high" class="mpg-val red">—</span>
+        </div>
+        <div class="mpg-item">
+          <span class="mpg-lbl">Current</span>
+          <span id="m-curr" class="mpg-val">—</span>
+        </div>
+        <div class="mpg-item">
+          <span class="mpg-lbl">2M Low</span>
+          <span id="m-low" class="mpg-val green">—</span>
+        </div>
+        <div class="mpg-item">
+          <span class="mpg-lbl">2M Avg</span>
+          <span id="m-avg" class="mpg-val">—</span>
+        </div>
+        <div class="mpg-item">
+          <span class="mpg-lbl">7d Trend</span>
+          <span id="m-t7" class="mpg-val">—</span>
+        </div>
+        <div class="mpg-item">
+          <span class="mpg-lbl">30d Trend</span>
+          <span id="m-t30" class="mpg-val">—</span>
+        </div>
+      </div>
+
+      <!-- Price position gauge -->
+      <div class="modal-section-title">📍 Price Position in 2-Month Range</div>
+      <div class="modal-gauge-wrap">
+        <span class="gauge-label-l">Low</span>
+        <div class="modal-gauge">
+          <div class="gauge-fill" id="gauge-fill" style="width:50%"></div>
+          <div class="gauge-needle" id="gauge-needle" style="left:50%"></div>
+        </div>
+        <span class="gauge-label-r">High</span>
+      </div>
+      <div class="gauge-pct-label">
+        Current is at <strong id="gauge-pct">—</strong> of the 2-month range
+      </div>
+
+      <!-- Intelligence Engine section -->
+      <div class="modal-section-title">🧠 Intelligence Engine</div>
+      <div class="modal-price-grid">
+        <div class="mpg-item">
+          <span class="mpg-lbl">Market Regime</span>
+          <span id="q-regime" class="mpg-val" style="color:var(--neon-cyan)">PENDING</span>
+        </div>
+        <div class="mpg-item">
+          <span class="mpg-lbl">Fakeout Risk</span>
+          <span id="q-fakeout" class="mpg-val">LOW</span>
+        </div>
+      </div>
+
+      <!-- News Analysis section -->
+      <div class="modal-section-title" id="m-news-title" style="display:none">📰 News & Sentiment</div>
+      <div class="modal-vol-grid" id="m-news-grid" style="display:none">
+        <div class="mvg-item">
+          <span class="mvg-lbl">News Sentiment</span>
+          <span id="m-news-sentiment" class="mvg-val">—</span>
+        </div>
+        <div class="mvg-item">
+          <span class="mvg-lbl">News Score</span>
+          <span id="m-news-score" class="mvg-val">—</span>
+        </div>
+        <div class="mvg-item">
+          <span class="mvg-lbl">Articles</span>
+          <span id="m-news-articles" class="mvg-val">—</span>
+        </div>
+        <div class="mvg-item">
+          <span class="mvg-lbl">Signal</span>
+          <span id="m-news-signal" class="mvg-val" style="font-weight:bold">—</span>
+        </div>
+      </div>
+
+      <!-- Volume section -->
+      <div class="modal-section-title">📦 Volume Analysis</div>
+      <div class="modal-vol-grid">
+        <div class="mvg-item">
+          <span class="mvg-lbl">24h Volume</span>
+          <span id="m-v24" class="mvg-val">—</span>
+        </div>
+        <div class="mvg-item">
+          <span class="mvg-lbl">7d Daily Avg</span>
+          <span id="m-v7" class="mvg-val">—</span>
+        </div>
+        <div class="mvg-item">
+          <span class="mvg-lbl">30d Daily Avg</span>
+          <span id="m-v30" class="mvg-val">—</span>
+        </div>
+        <div class="mvg-item">
+          <span class="mvg-lbl">Volume Ratio</span>
+          <span id="m-vr" class="mvg-val">—</span>
+        </div>
+      </div>
+
+      <!-- Volume bar -->
+      <div class="modal-vol-bar-wrap">
+        <div class="modal-vol-bar">
+          <div class="vol-bar-fill" id="vol-bar-fill" style="width:33%"></div>
+        </div>
+        <span class="vol-bar-label" id="vol-bar-label">1.0× avg</span>
+      </div>
+
+    </div><!-- /#modal-content -->
+  </div><!-- /.modal-box -->
+</div><!-- /#analysis-modal -->
+
+
+<div id="dust-modal" class="modal-overlay" style="display:none">
+  <div class="modal-box" style="max-width:400px">
+    <div class="modal-header">
+      <span class="modal-title">🧹 Transfer</span>
+      <button class="modal-close" onclick="wallet.closeDustModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="term-field">
+        <span class="term-lbl">From</span>
+        <input type="text" value="Funding Wallet" disabled style="background:var(--bg-card)"/>
+      </div>
+      <div class="term-field" style="margin-top:10px">
+        <span class="term-lbl">To</span>
+        <input type="text" value="Fiat and Spot" disabled style="background:var(--bg-card)"/>
+      </div>
+      <div class="term-field" style="margin-top:10px">
+        <span class="term-lbl">Coin</span>
+        <input type="text" id="dust-asset-name" value="---" disabled/>
+      </div>
+      <div class="term-field" style="margin-top:10px">
+        <span class="term-lbl">Amount</span>
+        <input type="number" id="dust-amount" value="0.00" disabled/>
+      </div>
+      <p style="font-size:11px;color:var(--muted);margin-top:10px">
+        Transferring non-tradable leftover balances to your spot wallet.
+      </p>
+      <button class="term-btn buy" id="dust-confirm-btn" style="margin-top:20px">Confirm Transfer</button>
+    </div>
+  </div>
+</div>
+
+<!-- 🧠 INTELLIGENCE RADAR VIEW -->
+<div id="view-intelligence">
+  <div class="intelligence-grid" id="intelligence-grid">
+    <!-- Intelligence cards injected here -->
+    <div class="i-card i-glow" style="grid-column: 1 / -1; text-align: center; padding: 100px;">
+      <h2 style="color: var(--neon-cyan)">Syncing Algorithm Data...</h2>
+      <p style="color: var(--dim)">Fetching real-time behavioral sentiment from 16 intelligence engines.</p>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+
+<!-- ════════════════════════════════════════════════════════════════════════════
+     Scripts — loaded in dependency order:
+       1. socket.io  (library, from server)
+       2. utils.js   (shared helpers — no deps)
+       3. scanner.js (table renderer — uses fmt, fmtTime)
+       4. scanner-sort.js (table sorting — uses scanner.js)
+       5. positions.js (card renderer — uses fmt, fmtTime)
+       6. tradeLog.js (log renderer — uses fmt)
+       7. config.js  (form handler — uses toast)
+       8. orders.js  (order placement — uses toast, fetch)
+       9. main.js    (bootstrap, socket hub — uses all above)
+      ════════════════════════════════════════════════════════════════════════════ -->
+<!-- Execution Alert Modal -->
+<div id="exec-modal" class="modal-overlay" style="display:none">
+   <div class="modal-content" style="max-width:300px;text-align:center">
+     <div class="modal-header">
+       <span class="modal-title">🎯 Order Executed!</span>
+       <button class="modal-close" onclick="closeExecModal()">×</button>
+     </div>
+     <div class="modal-body">
+       <p id="exec-msg" style="margin-bottom:20px;font-size:14px">Limit buy filled at ...</p>
+       <div style="display:flex;flex-direction:column;gap:10px">
+         <button class="m-sell-btn" id="exec-sell-market" style="background:var(--green);color:#000;border:none;padding:10px;border-radius:4px;font-weight:700;cursor:pointer">Sell Market</button>
+         <button class="m-sell-btn" id="exec-sell-limit" style="background:var(--blue);color:#fff;border:none;padding:10px;border-radius:4px;font-weight:700;cursor:pointer">Sell Limit</button>
+       </div>
+     </div>
+   </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/utils.js"></script>
+<script src="/js/scanner.js"></script>
+<script src="/js/scanner-sort.js"></script>
+<script src="/js/positions.js"></script>
+<script src="/js/tradeLog.js"></script>
+<script src="/js/config.js"></script>
+<script src="/js/orders.js"></script>
+<script src="js/limitOrders.js"></script>
+  <script src="js/wallet.js"></script>
+  <script src="js/account.js"></script>
+  <script src="js/portfolio.js"></script>
+  <script src="js/layout.js"></script>
+  <script src="js/intelligence.js"></script>
+  <script src="js/main.js"></script>
+
+</body>
+</html>

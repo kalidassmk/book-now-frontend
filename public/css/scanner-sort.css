@@ -1,0 +1,127 @@
+/**
+ * public/css/scanner-sort.css
+ * Styling for sortable table headers and sort indicators
+ */
+
+/* Scanner table header styling */
+.scanner-wrap table thead th {
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.2s ease;
+    position: relative;
+}
+
+/* Hover effect on headers */
+.scanner-wrap table thead th:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #17a2b8;
+}
+
+/* Sort indicator styling */
+.sort-indicator {
+    display: inline-block;
+    margin-left: 5px;
+    color: #17a2b8;
+    font-weight: bold;
+    font-size: 1.2em;
+    animation: blink 1s infinite;
+}
+
+/* Blink animation for sort indicator */
+@keyframes blink {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.6;
+    }
+}
+
+/* Active header styling */
+.scanner-wrap table thead th.sort-active {
+    background-color: rgba(23, 162, 184, 0.1);
+    border-bottom: 2px solid #17a2b8;
+}
+
+/* Table body row highlight on hover */
+.scanner-wrap table tbody tr {
+    transition: background-color 0.1s ease;
+}
+
+.scanner-wrap table tbody tr:hover {
+    background-color: rgba(255, 255, 255, 0.03);
+}
+
+/* Row selection highlight */
+.scanner-wrap table tbody tr.sort-active {
+    background-color: rgba(23, 162, 184, 0.05);
+}
+
+/* Analysis score styling */
+.score-small {
+    font-size: 0.85em;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background-color: rgba(255, 255, 255, 0.05);
+    margin-left: 4px;
+}
+
+/* Sort direction tooltip */
+.sort-indicator::before {
+    content: attr(data-direction);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: rgba(0, 0, 0, 0.8);
+    color: #17a2b8;
+    padding: 4px 8px;
+    border-radius: 3px;
+    font-size: 0.75em;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+    margin-bottom: 5px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .scanner-wrap table thead th {
+        padding: 0.5rem 0.25rem;
+        font-size: 0.75rem;
+    }
+
+    .sort-indicator {
+        font-size: 1em;
+        margin-left: 2px;
+    }
+
+    .score-small {
+        font-size: 0.75em;
+        padding: 1px 3px;
+    }
+}
+
+/* Accessibility improvements */
+.scanner-wrap table thead th:focus {
+    outline: 2px solid #17a2b8;
+    outline-offset: -2px;
+}
+
+/* Keyboard navigation support */
+.scanner-wrap table thead th:focus-visible {
+    box-shadow: 0 0 0 3px rgba(23, 162, 184, 0.3);
+}
+
+/* Smooth transitions */
+.scanner-wrap table {
+    transition: all 0.2s ease;
+}
+
+/* Loading state */
+.scanner-wrap table tbody tr.loading {
+    opacity: 0.5;
+    pointer-events: none;
+}
+

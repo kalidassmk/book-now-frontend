@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Success Radar — Profit Intelligence</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        bg: '#0b0e11',
+                        card: '#1e2329',
+                        brand: '#f0b90b',
+                        border: 'rgba(255, 255, 255, 0.08)',
+                        success: '#0ecb81',
+                        danger: '#f6465d'
+                    }
+                }
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0b0e11; color: #eaecef; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .glass { background: rgba(30, 35, 41, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
+        .gradient-brand { background: linear-gradient(135deg, #f0b90b 0%, #f8d33a 100%); }
+        .chart-container { position: relative; height: 180px; width: 100%; }
+        .tab-btn.active { background: rgba(240, 185, 11, 0.1); color: #f0b90b; border-color: #f0b90b; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
+        
+        .fade-in { animation: fadeIn 0.4s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="overflow-x-hidden">
+
+    <!-- ── Sidebar ── -->
+    <aside class="fixed left-0 top-0 h-screen w-64 glass border-r z-50">
+        <div class="p-6 flex flex-col h-full">
+            <div class="flex items-center gap-3 mb-10">
+                <div class="w-10 h-10 gradient-brand rounded-xl flex items-center justify-center text-bg font-black text-xl shadow-lg">P</div>
+                <h1 class="text-xl font-bold tracking-tight">Success <span class="text-brand">RADAR</span></h1>
+            </div>
+
+            <nav class="flex-1 space-y-1">
+                <a href="/profit_analysis.html" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-all">
+                    <i data-lucide="trending-up" class="w-5 h-5"></i>
+                    Success Radar
+                </a>
+                <a href="/intelligence_hub.html" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-all">
+                    <i data-lucide="brain-circuit" class="w-5 h-5"></i>
+                    Intel Hub
+                </a>
+                <a href="#" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl bg-brand/10 text-brand font-medium">
+                    <i data-lucide="trending-up" class="w-5 h-5"></i>
+                    Profit Analysis
+                </a>
+            </nav>
+
+            <!-- Global View Controls -->
+            <div class="mt-4 pt-4 border-t border-white/5">
+                <p class="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-3">Global View Mode</p>
+                <div class="grid grid-cols-1 gap-2">
+                    <button onclick="setViewMode('chart')" class="global-view-btn tab-btn active flex items-center gap-2 px-3 py-2 rounded-lg border border-white/5 text-xs transition-all">
+                        <i data-lucide="line-chart" class="w-3 h-3"></i> Trend Charts
+                    </button>
+                    <button onclick="setViewMode('bar')" class="global-view-btn tab-btn flex items-center gap-2 px-3 py-2 rounded-lg border border-white/5 text-xs transition-all">
+                        <i data-lucide="bar-chart-2" class="w-3 h-3"></i> Volume Bars
+                    </button>
+                    <button onclick="setViewMode('text')" class="global-view-btn tab-btn flex items-center gap-2 px-3 py-2 rounded-lg border border-white/5 text-xs transition-all">
+                        <i data-lucide="file-text" class="w-3 h-3"></i> Data Grid
+                    </button>
+                </div>
+            </div>
+
+            <div class="mt-auto pt-6 border-t border-white/5">
+                <div class="flex items-center gap-3 p-3 rounded-xl bg-white/5">
+                    <div id="ws-dot" class="w-2 h-2 rounded-full bg-danger animate-pulse"></div>
+                    <div>
+                        <p class="text-xs font-semibold text-white">Live Intel</p>
+                        <p class="text-[10px] text-gray-500" id="ws-text">Disconnected</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ── Main Content ── -->
+    <main class="ml-64 p-8 min-h-screen">
+        <header class="mb-10 flex justify-between items-end">
+            <div>
+                <h2 class="text-3xl font-black text-white mb-1">Success Intelligence Radar</h2>
+                <p class="text-gray-500">Multi-dimensional tracking for coins that hit the .20 profit target.</p>
+            </div>
+            <div class="flex gap-4">
+                <div class="glass px-4 py-2 rounded-2xl flex flex-col items-end">
+                    <span class="text-[10px] font-bold text-gray-500 uppercase">Last Update</span>
+                    <span class="text-sm font-bold text-brand mono" id="last-update-time">--:--:--</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Summary Stats -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div class="glass p-6 rounded-3xl border-l-4 border-brand">
+                <div class="flex justify-between items-center mb-2">
+                    <p class="text-gray-500 text-xs font-bold uppercase tracking-widest">Winning Assets</p>
+                    <i data-lucide="award" class="w-4 h-4 text-brand"></i>
+                </div>
+                <h3 class="text-4xl font-black text-white mono" id="stat-count">0</h3>
+            </div>
+            <div class="glass p-6 rounded-3xl border-l-4 border-success">
+                <div class="flex justify-between items-center mb-2">
+                    <p class="text-gray-500 text-xs font-bold uppercase tracking-widest">Growth Bias</p>
+                    <i data-lucide="trending-up" class="w-4 h-4 text-success"></i>
+                </div>
+                <h3 class="text-4xl font-black text-success mono" id="stat-vol-bias">0%</h3>
+            </div>
+            <div class="glass p-6 rounded-3xl border-l-4 border-blue-500">
+                <div class="flex justify-between items-center mb-2">
+                    <p class="text-gray-500 text-xs font-bold uppercase tracking-widest">Avg Price Change</p>
+                    <i data-lucide="activity" class="w-4 h-4 text-blue-500"></i>
+                </div>
+                <h3 class="text-4xl font-black text-white mono" id="stat-avg-change">0.00</h3>
+            </div>
+        </div>
+
+        <!-- Analysis Grid -->
+        <div id="analysis-grid" class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-12">
+            <!-- Asset Cards -->
+        </div>
+
+        <!-- Empty State -->
+        <div id="empty-state" class="glass p-20 rounded-3xl flex flex-col items-center justify-center text-gray-600 hidden">
+            <i data-lucide="radar" class="w-16 h-16 mb-6 animate-ping"></i>
+            <h3 class="text-xl font-bold text-white mb-2">Searching Market...</h3>
+            <p class="text-sm">No coins have reached the $0.20 profit milestone in this cycle yet.</p>
+        </div>
+    </main>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        let currentViewMode = 'chart'; // 'chart', 'bar', 'text'
+        let lastKnownData = null;
+        const charts = {};
+
+        function setViewMode(mode) {
+            currentViewMode = mode;
+            // Update sidebar buttons
+            document.querySelectorAll('.global-view-btn').forEach((btn, idx) => {
+                const modes = ['chart', 'bar', 'text'];
+                btn.classList.toggle('active', modes[idx] === mode);
+            });
+            // Re-render
+            if (lastKnownData) renderData(lastKnownData);
+        }
+
+        function initCharts(symbol, data, mode) {
+            const canvas = document.getElementById(`chart-${symbol}`);
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            if (charts[symbol]) charts[symbol].destroy();
+
+            const labels = data.map(d => d.time.split(' ')[1]);
+            const prices = data.map(d => d.price);
+            const volumes = data.map(d => d.volume);
+            const priceChanges = data.map(d => d.price_increase);
+
+            const config = {
+                type: mode === 'bar' ? 'bar' : 'line',
+                data: {
+                    labels: labels,
+                    datasets: []
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { intersect: false, mode: 'index' },
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { display: false },
+                        y: { position: 'left', display: false },
+                        y1: { position: 'right', display: false, grid: { display: false } }
+                    }
+                }
+            };
+
+            if (mode === 'chart') {
+                config.data.datasets = [
+                    {
+                        label: 'Price',
+                        data: prices,
+                        borderColor: '#f0b90b',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        tension: 0.3,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Volume',
+                        data: volumes,
+                        backgroundColor: 'rgba(14, 203, 129, 0.1)',
+                        borderColor: 'rgba(14, 203, 129, 0.4)',
+                        fill: true,
+                        borderWidth: 1,
+                        pointRadius: 0,
+                        yAxisID: 'y1',
+                        type: 'bar'
+                    }
+                ];
+            } else if (mode === 'bar') {
+                config.data.datasets = [
+                    {
+                        label: 'Price Δ',
+                        data: priceChanges,
+                        backgroundColor: priceChanges.map(v => v >= 0 ? '#0ecb81' : '#f6465d'),
+                        borderWidth: 0,
+                        yAxisID: 'y'
+                    }
+                ];
+            }
+
+            charts[symbol] = new Chart(ctx, config);
+        }
+
+        function renderData(data) {
+            const rawTimeline = data.fullTimeline || {};
+            const grid = document.getElementById('analysis-grid');
+            const emptyState = document.getElementById('empty-state');
+            const symbols = Object.keys(rawTimeline);
+            
+            // Pre-parse the timeline data
+            const timeline = {};
+            symbols.forEach(s => {
+                try {
+                    timeline[s] = typeof rawTimeline[s] === 'string' ? JSON.parse(rawTimeline[s]) : rawTimeline[s];
+                } catch(e) {
+                    timeline[s] = [];
+                }
+            });
+
+            if (symbols.length === 0) {
+                grid.innerHTML = '';
+                emptyState.classList.remove('hidden');
+                return;
+            }
+            emptyState.classList.add('hidden');
+
+            // Stats
+            document.getElementById('stat-count').textContent = symbols.length;
+            document.getElementById('last-update-time').textContent = new Date().toLocaleTimeString();
+            
+            let volIncCount = 0;
+            let totalChange = 0;
+            symbols.forEach(s => {
+                const points = timeline[s];
+                if (points && points.length > 0) {
+                    const last = points[points.length-1];
+                    if (last.volume_gradual_inc) volIncCount++;
+                    totalChange += last.price_increase;
+                }
+            });
+            document.getElementById('stat-vol-bias').textContent = Math.round((volIncCount / symbols.length) * 100) + '%';
+            document.getElementById('stat-avg-change').textContent = (totalChange / symbols.length).toFixed(6);
+
+            // Grid Rendering
+            grid.innerHTML = symbols.map(s => {
+                const history = timeline[s];
+                const last = history[history.length - 1];
+                const statusColor = last.status === 'increase' ? 'text-success' : last.status === 'decrease' ? 'text-danger' : 'text-gray-400';
+                const statusIcon = last.status === 'increase' ? 'trending-up' : last.status === 'decrease' ? 'trending-down' : 'minus';
+                
+                let contentHtml = '';
+                if (currentViewMode === 'text') {
+                    // Render Data Grid
+                    contentHtml = `
+                        <div class="overflow-x-auto mt-4 h-[180px]">
+                            <table class="w-full text-[10px] text-left">
+                                <thead class="text-gray-500 uppercase border-b border-white/5">
+                                    <tr>
+                                        <th class="py-1">Time</th>
+                                        <th class="py-1 text-right">Price</th>
+                                        <th class="py-1 text-right">Δ / Candle</th>
+                                        <th class="py-1 text-right">Vol</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-white/5">
+                                    ${history.slice(-15).reverse().map(h => `
+                                        <tr class="${h.is_candle ? 'bg-white/[0.02]' : ''}">
+                                            <td class="py-1 text-gray-500 flex items-center gap-1">
+                                                ${h.time.split(' ')[1]}
+                                                ${h.is_candle ? '<span class="text-[6px] bg-blue-500/20 text-blue-400 px-1 rounded">1m</span>' : ''}
+                                            </td>
+                                            <td class="py-1 text-right mono font-bold">${h.price.toFixed(6)}</td>
+                                            <td class="py-1 text-right mono ${h.price_increase >= 0 ? 'text-success' : 'text-danger'}">
+                                                ${h.price_increase > 0 ? '+' : ''}${h.price_increase.toFixed(h.is_candle ? 4 : 6)}
+                                            </td>
+                                            <td class="py-1 text-right text-gray-400">${(h.volume/1000).toFixed(1)}k</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    `;
+                } else {
+                    // Render Chart or Bar container
+                    contentHtml = `<div class="chart-container mt-4"><canvas id="chart-${s}"></canvas></div>`;
+                }
+
+                return `
+                    <div class="glass p-6 rounded-[2.5rem] border border-white/5 hover:border-brand/40 transition-all fade-in">
+                        <div class="flex justify-between items-start mb-2">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 rounded-2xl bg-white/5 flex items-center justify-center">
+                                    <i data-lucide="zap" class="w-5 h-5 text-brand"></i>
+                                </div>
+                                <div>
+                                    <h4 class="text-xl font-black text-white mono tracking-tighter">${s}</h4>
+                                    <span class="text-[10px] font-bold text-gray-500 uppercase">${last.time.split(' ')[1]} Snapshot</span>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <div class="flex items-center justify-end gap-2 ${statusColor}">
+                                    <i data-lucide="${statusIcon}" class="w-4 h-4"></i>
+                                    <span class="text-2xl font-black mono">${last.price.toFixed(6)}</span>
+                                </div>
+                                <p class="text-xs font-bold ${statusColor} mono tracking-wider">${last.price_increase > 0 ? '+' : ''}${last.price_increase.toFixed(8)}</p>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-4 mt-4 mb-2">
+                            <div class="bg-white/5 rounded-2xl p-3 border border-white/5">
+                                <p class="text-[9px] font-bold text-gray-500 uppercase mb-1">24h Quote Vol</p>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-sm font-black text-white mono">${(last.volume / 1000).toFixed(2)}k</span>
+                                    ${last.volume_gradual_inc ? '<span class="text-[8px] bg-success/20 text-success px-1.5 py-0.5 rounded-md">GRADUAL ↑</span>' : ''}
+                                </div>
+                            </div>
+                            <div class="bg-white/5 rounded-2xl p-3 border border-white/5">
+                                <p class="text-[9px] font-bold text-gray-500 uppercase mb-1">Sequence Intel (3x)</p>
+                                <div class="flex flex-col">
+                                    ${last.sequence_report && last.sequence_report.type !== 'neutral' ? `
+                                        <span class="text-[10px] font-bold ${last.sequence_report.type === 'bullish_seq' ? 'text-success' : 'text-danger'}">
+                                            ${last.sequence_report.type === 'bullish_seq' ? '3x Vol ↑' : '3x Vol ↓'} → ${last.sequence_report.price_impact.toFixed(4)}%
+                                        </span>
+                                    ` : '<span class="text-[10px] text-gray-600 italic">No sequence detected</span>'}
+                                </div>
+                            </div>
+                        </div>
+
+                        ${contentHtml}
+                    </div>
+                `;
+            }).join('');
+
+            // Init Charts if not in text mode
+            if (currentViewMode !== 'text') {
+                symbols.forEach(s => initCharts(s, timeline[s], currentViewMode));
+            }
+            lucide.createIcons();
+        }
+
+        const socket = io();
+        socket.on('connect', () => {
+            document.getElementById('ws-dot').className = 'w-2 h-2 rounded-full bg-success animate-pulse';
+            document.getElementById('ws-text').textContent = 'Stream Active';
+        });
+
+        socket.on('update', (data) => {
+            lastKnownData = data;
+            renderData(data);
+        });
+
+        lucide.createIcons();
+    </script>
+</body>
+</html>
