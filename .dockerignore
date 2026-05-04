@@ -1,0 +1,17 @@
+node_modules
+npm-debug.log
+.env
+.env.local
+.env.*.local
+.git
+.github
+.gitignore
+.idea
+.vscode
+e2e
+playwright-report
+test-results
+scratch
+*.log
+README.md
+.DS_Store
