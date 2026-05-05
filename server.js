@@ -8,9 +8,9 @@ const { spawn } = require('child_process');
 
 
 // ─── Config ─────────────────────────────────────────────────────────────────
-const PORT = 3000;
-const REDIS_HOST = '127.0.0.1';
-const REDIS_PORT = 6379;
+const PORT = parseInt(process.env.PORT || '3000', 10);
+const REDIS_HOST = process.env.REDIS_HOST || '127.0.0.1';
+const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
 const POLL_MS = 1500;   // Reduced from 400ms to 1500ms to lower Redis load
 // BookNow Python engine (replaces the old Engine backend in 2026-Q2).
 // Path layout matches Spring's: /api/v1/* trading + /api/v1/binance/* dashboard
