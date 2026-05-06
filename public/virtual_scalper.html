@@ -281,10 +281,23 @@
     }
     .vs-hl-row:hover { background: rgba(255,255,255,0.03); }
     .vs-hl-row.expanded { background: rgba(59,130,246,0.06); border-bottom-color: var(--blue); }
-    .vs-hl-row .sym { font-weight: 700; color: var(--text); font-family: 'Inter', sans-serif; }
+    /* High specificity + explicit colour — protects against the global
+       .sym rule in dashboard.css and any inherited dim/transparent colour. */
+    .vs-history-list .vs-hl-row .vs-hl-sym {
+      font-weight: 700;
+      color: #e2e8f0 !important;
+      font-family: 'Inter', sans-serif;
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
     .vs-hl-row .pnl-pos { color: var(--vs-green-2); font-weight: 700; }
     .vs-hl-row .pnl-neg { color: var(--vs-red-2); font-weight: 700; }
-    .vs-hl-row .when { color: var(--dim); }
+    .vs-hl-row .when { color: var(--dim); white-space: nowrap; }
+    .vs-hl-row > div { min-width: 0; overflow: hidden; }   /* keep grid cells from blowing out */
 
     .vs-hl-detail { display: none; }
     .vs-hl-detail.show {
@@ -799,7 +812,7 @@
           return `
             <div class="vs-hl-row ${isOpen ? 'expanded' : ''}" data-key="${key}">
               <div class="right"><span class="vs-chev">›</span></div>
-              <div class="sym">${h.symbol}</div>
+              <div class="vs-hl-sym">${h.symbol || '—'}</div>
               <div class="right ${cls}">${fmtPct(h.pnl_pct)}</div>
               <div class="right ${cls}">${fmtUsd(h.pnl_usdt)}</div>
               <div><span class="vs-reason-pill ${reasonClass(h.reason)}">${reasonLabel(h.reason)}</span></div>
