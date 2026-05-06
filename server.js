@@ -71,7 +71,17 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+// Disable browser caching for HTML so dashboard updates land immediately
+// after a deploy. Static assets (JS/CSS bundles, images) get sane defaults.
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html')) {
+      res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.set('Pragma', 'no-cache');
+      res.set('Expires', '0');
+    }
+  },
+}));
 
 // ── Binance Worker ───────────────────────────────────────────────────────────
 const binanceWorker = require('./binance-worker');
