@@ -4,13 +4,20 @@
   <!--
     public/virtual_scalper.html
     ──────────────────────────────────────────────────────────────────────────
-    Virtual Scalper P&L view.
+    Virtual Scalper P&L view (v2 redesign).
 
     Shows what the Virtual Scalper subprocess (booknow.sentiment.scripts.
-    virtual_scalp_executor) bought and sold, and how much profit/loss
-    each trade produced — net of simulated 0.1%/side Binance fees.
+    virtual_scalp_executor) bought and sold and how much profit/loss each
+    trade produced — net of simulated 0.1%/side Binance fees.
 
-    Data sources:
+    Layout (top to bottom):
+      ① Verdict bar — one-glance answer to "is the strategy working?"
+      ② 3 KPI cards — Net P&L / Win Rate + Profit Factor / Avg Hold
+      ③ Cumulative P&L equity curve  +  ④ Exit reasons with avg per reason
+      ⑤ Open positions card grid w/ SL/TP visual
+      ⑥ Trade history table with filter chips
+
+    Data sources unchanged from v1:
       * GET /api/virtual-scalper      one-shot snapshot on page load
       * Socket.io 'update' event      live updates piggy-backed on the
                                       regular scanner broadcast
@@ -18,366 +25,771 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Virtual Scalper — BookNow</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="/css/dashboard.css"/>
   <style>
-    /* virtual_scalper.html — small additions on top of dashboard.css */
+    /* Variables we add on top of dashboard.css. */
+    :root {
+      --vs-panel:    #131a2c;
+      --vs-panel-2:  #1a2238;
+      --vs-border-2: #283b5d;
+      --vs-text-2:   #b8c2d6;
+      --vs-green-2:  #34d399;
+      --vs-red-2:    #f87171;
+      --vs-radius-sm: 10px;
+    }
 
-    .vs-page                { max-width: 1400px; margin: 0 auto; padding: 24px; color: var(--text); font-family: 'Inter', system-ui, sans-serif; }
-    .vs-header              { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 24px; }
-    .vs-header h1           { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; }
-    .vs-header .subtitle    { color: var(--dim); font-size: 13px; margin-top: 4px; }
-    .vs-back                { color: var(--blue); text-decoration: none; font-size: 13px; }
-    .vs-back:hover          { text-decoration: underline; }
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .vs-page { max-width: 1500px; margin: 0 auto; padding: 28px 32px 60px; color: var(--text); }
 
-    /* Summary cards row */
-    .vs-stats               { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 24px; }
-    .vs-stat                { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
-    .vs-stat .label         { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; margin-bottom: 6px; }
-    .vs-stat .value         { font-family: var(--mono); font-size: 22px; font-weight: 700; }
-    .vs-stat .value.green   { color: var(--green); }
-    .vs-stat .value.red     { color: var(--red); }
-    .vs-stat .value.blue    { color: var(--blue); }
-    .vs-stat .sub           { font-size: 10px; color: var(--dim); margin-top: 4px; }
+    /* ── Topbar ────────────────────────────────────────────────────────── */
+    .vs-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+    .vs-topbar h1 { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; margin: 0; }
+    .vs-topbar .sub { color: var(--dim); font-size: 12px; margin-top: 2px; }
+    .vs-topbar .right { display: flex; gap: 16px; align-items: center; font-size: 12px; }
+    .vs-topbar a { color: var(--blue); text-decoration: none; }
+    .vs-topbar a:hover { text-decoration: underline; }
+    .vs-live { display: inline-flex; align-items: center; gap: 6px; color: var(--green); font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; }
+    .vs-live::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: vs-pulse 1.5s ease-in-out infinite; }
+    .vs-live.off { color: var(--dim); }
+    .vs-live.off::before { background: var(--dim); animation: none; }
+    @keyframes vs-pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
 
-    /* Section headers */
-    .vs-section             { margin-bottom: 28px; }
-    .vs-section-title       { font-size: 15px; font-weight: 700; margin-bottom: 10px; display: flex; align-items: baseline; gap: 10px; }
-    .vs-section-title .badge{ background: var(--gdim); color: var(--green); font-size: 10px; padding: 2px 8px; border-radius: 999px; font-family: var(--mono); }
-    .vs-section-title .badge.gray { background: rgba(100,116,139,0.15); color: var(--dim); }
+    /* ── ① Verdict bar ─────────────────────────────────────────────────── */
+    .vs-verdict {
+      background: linear-gradient(135deg, var(--vs-panel) 0%, var(--vs-panel-2) 100%);
+      border: 1px solid var(--vs-border-2);
+      border-radius: var(--radius);
+      padding: 24px 28px;
+      margin-bottom: 24px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 32px;
+      align-items: center;
+    }
+    .vs-verdict-status { display: flex; align-items: center; gap: 16px; }
+    .vs-verdict-icon {
+      width: 56px; height: 56px;
+      border-radius: 14px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 28px;
+      background: var(--gdim); color: var(--green);
+      border: 1px solid rgba(16,185,129,0.3);
+    }
+    .vs-verdict-icon.warn { background: var(--ydim); color: var(--yellow); border-color: rgba(245,158,11,0.3); }
+    .vs-verdict-icon.bad  { background: var(--rdim); color: var(--red);    border-color: rgba(239,68,68,0.3); }
+    .vs-verdict-icon.idle { background: rgba(100,116,139,0.15); color: var(--dim); border-color: rgba(100,116,139,0.3); }
 
-    /* Tables */
-    .vs-table               { width: 100%; border-collapse: collapse; font-size: 12px; }
-    .vs-table th            { text-align: left; padding: 10px 12px; font-size: 10px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); }
-    .vs-table th.right      { text-align: right; }
-    .vs-table td            { padding: 10px 12px; border-bottom: 1px solid rgba(30,48,80,0.4); font-family: var(--mono); }
-    .vs-table td.right      { text-align: right; }
-    .vs-table td.symbol     { font-weight: 700; color: var(--text); font-family: 'Inter', sans-serif; letter-spacing: 0.02em; }
-    .vs-table tr:hover td   { background: rgba(255,255,255,0.02); }
-    .vs-table .pnl-pos      { color: var(--green); font-weight: 700; }
-    .vs-table .pnl-neg      { color: var(--red); font-weight: 700; }
-    .vs-table .reason       { font-size: 9px; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; }
-    .vs-table .reason.tp    { background: var(--gdim); color: var(--green); }
-    .vs-table .reason.hsl   { background: var(--rdim); color: var(--red); }
-    .vs-table .reason.ssl   { background: var(--rdim); color: var(--red); }
-    .vs-table .reason.exit  { background: var(--ydim); color: var(--yellow); }
-    .vs-table .empty        { text-align: center; color: var(--dim); padding: 40px 12px; font-family: 'Inter', sans-serif; font-size: 12px; }
+    .vs-verdict-text .label  { font-size: 11px; color: var(--dim); font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; }
+    .vs-verdict-text .status { font-size: 32px; font-weight: 900; letter-spacing: -0.02em; line-height: 1.1; }
+    .vs-verdict-text .status.healthy { color: var(--vs-green-2); }
+    .vs-verdict-text .status.warn    { color: var(--yellow); }
+    .vs-verdict-text .status.bad     { color: var(--vs-red-2); }
+    .vs-verdict-text .status.idle    { color: var(--dim); }
+    .vs-verdict-text .reason { font-size: 13px; color: var(--vs-text-2); margin-top: 4px; }
 
-    .vs-card                { background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-    .vs-meta                { color: var(--dim); font-size: 11px; padding: 10px 14px; background: rgba(255,255,255,0.02); border-bottom: 1px solid var(--border); }
+    .vs-verdict-spark { display: flex; align-items: center; height: 64px; }
+    .vs-verdict-spark svg { width: 100%; height: 100%; }
 
-    /* Reason breakdown chips */
-    .vs-reasons             { display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 14px; }
-    .vs-reason-chip         { background: rgba(255,255,255,0.03); border: 1px solid var(--border); padding: 6px 12px; border-radius: 999px; font-size: 11px; font-family: var(--mono); }
-    .vs-reason-chip strong  { color: var(--text); margin-right: 6px; }
+    .vs-verdict-summary { display: grid; grid-template-columns: repeat(3, auto); gap: 28px; }
+    .vs-verdict-summary .item { text-align: right; }
+    .vs-verdict-summary .v { font-family: var(--mono); font-size: 20px; font-weight: 700; }
+    .vs-verdict-summary .v.green { color: var(--vs-green-2); }
+    .vs-verdict-summary .v.red   { color: var(--vs-red-2); }
+    .vs-verdict-summary .l { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; }
 
-    /* Live indicator */
-    .vs-live                { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; color: var(--green); font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
-    .vs-live .dot           { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: vs-pulse 1.5s ease-in-out infinite; }
-    .vs-live.off            { color: var(--dim); }
-    .vs-live.off .dot       { background: var(--dim); animation: none; }
-    @keyframes vs-pulse     { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+    /* ── ② KPI cards ───────────────────────────────────────────────────── */
+    .vs-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
+    .vs-kpi {
+      background: var(--vs-panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+    }
+    .vs-kpi .label { font-size: 11px; color: var(--dim); font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+    .vs-kpi .value { font-family: var(--mono); font-size: 32px; font-weight: 700; line-height: 1.1; }
+    .vs-kpi .value.green { color: var(--vs-green-2); }
+    .vs-kpi .value.red   { color: var(--vs-red-2); }
+    .vs-kpi .value.blue  { color: var(--blue); }
+    .vs-kpi .value-sub { color: var(--dim); font-size: 18px; font-weight: 500; }
+    .vs-kpi .sub { font-size: 12px; color: var(--vs-text-2); margin-top: 8px; }
+    .vs-kpi .sub strong { color: var(--text); font-family: var(--mono); }
+
+    /* ── ③+④ Charts row ────────────────────────────────────────────────── */
+    .vs-charts { display: grid; grid-template-columns: 1.5fr 1fr; gap: 16px; margin-bottom: 24px; }
+    .vs-card-chart {
+      background: var(--vs-panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+    }
+    .vs-card-chart h3   { font-size: 13px; font-weight: 700; margin: 0 0 4px; color: var(--text); }
+    .vs-card-chart .desc { font-size: 11px; color: var(--dim); margin-bottom: 16px; }
+    .vs-card-chart svg  { width: 100%; height: 220px; }
+
+    /* Reasons list (inside ④) */
+    .vs-reasons-list { display: flex; flex-direction: column; gap: 10px; }
+    .vs-reasons-list .empty { color: var(--dim); font-size: 12px; padding: 24px 0; text-align: center; }
+    .vs-reason-row { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .vs-reason-row:last-child { border-bottom: none; }
+    .vs-reason-row .name-bar { display: flex; align-items: center; gap: 10px; }
+    .vs-reason-row .bar { height: 6px; border-radius: 3px; max-width: 110px; min-width: 6px; }
+    .vs-reason-row .bar.tp   { background: var(--green); }
+    .vs-reason-row .bar.hsl  { background: var(--red); }
+    .vs-reason-row .bar.ssl  { background: var(--vs-red-2); }
+    .vs-reason-row .bar.exit { background: var(--yellow); }
+    .vs-reason-row .name { font-size: 11px; font-weight: 700; min-width: 100px; }
+    .vs-reason-row .count { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--text); }
+    .vs-reason-row .avg { font-family: var(--mono); font-size: 12px; }
+    .vs-reason-row .avg.green { color: var(--vs-green-2); }
+    .vs-reason-row .avg.red   { color: var(--vs-red-2); }
+
+    /* ── Section heading (used by ⑤ and ⑥) ─────────────────────────────── */
+    .vs-section { margin-bottom: 24px; }
+    .vs-section-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+    .vs-section-head h2 { font-size: 15px; font-weight: 700; margin: 0; }
+    .vs-section-head .badge { background: var(--bdim, rgba(59,130,246,0.12)); color: var(--blue); font-size: 11px; padding: 3px 10px; border-radius: 999px; font-family: var(--mono); font-weight: 700; }
+    .vs-section-head .badge.gray { background: rgba(100,116,139,0.15); color: var(--dim); }
+    .vs-section-head .meta { color: var(--dim); font-size: 11px; margin-left: auto; }
+
+    /* ── ⑤ Open positions card grid ────────────────────────────────────── */
+    .vs-pos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+    .vs-pos-grid .empty {
+      grid-column: 1 / -1;
+      background: var(--vs-panel);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius-sm);
+      padding: 36px 16px; text-align: center;
+      color: var(--dim); font-size: 12px;
+    }
+    .vs-pos-card {
+      background: var(--vs-panel);
+      border: 1px solid var(--border);
+      border-radius: var(--vs-radius-sm);
+      padding: 16px 18px;
+    }
+    .vs-pos-card .top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+    .vs-pos-card .sym  { font-size: 14px; font-weight: 700; letter-spacing: 0.02em; }
+    .vs-pos-card .hold { font-size: 11px; color: var(--dim); font-family: var(--mono); }
+    .vs-pos-card .pnl  { font-family: var(--mono); font-size: 22px; font-weight: 700; line-height: 1.1; margin-bottom: 12px; }
+    .vs-pos-card .pnl.green { color: var(--vs-green-2); }
+    .vs-pos-card .pnl.red   { color: var(--vs-red-2); }
+    .vs-pos-card .pnl.dim   { color: var(--dim); }
+    .vs-pos-card .pnl small { font-size: 12px; color: var(--vs-text-2); margin-left: 6px; font-weight: 500; }
+
+    .vs-slider { position: relative; height: 22px; margin-top: 4px; }
+    .vs-slider .track   { position: absolute; top: 50%; transform: translateY(-50%); width: 100%; height: 4px; background: var(--vs-border-2); border-radius: 2px; }
+    .vs-slider .zone-tp { position: absolute; top: 50%; transform: translateY(-50%); height: 4px; background: var(--gdim); border-radius: 2px; }
+    .vs-slider .zone-sl { position: absolute; top: 50%; transform: translateY(-50%); height: 4px; background: var(--rdim); border-radius: 2px; }
+    .vs-slider .marker-entry { position: absolute; top: 50%; width: 2px; height: 12px; background: var(--dim); transform: translate(-50%, -50%); }
+    .vs-slider .dot { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 12px; height: 12px; border-radius: 50%; background: var(--green); border: 2px solid var(--bg); box-shadow: 0 0 0 1px var(--green); }
+    .vs-slider .dot.red { background: var(--red); box-shadow: 0 0 0 1px var(--red); }
+    .vs-slider-labels { display: flex; justify-content: space-between; font-size: 9px; color: var(--dim); margin-top: 4px; font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.08em; }
+    .vs-slider-labels .entry-label { font-weight: 500; color: var(--vs-text-2); text-transform: none; letter-spacing: 0; }
+
+    /* ── ⑥ Trade history ───────────────────────────────────────────────── */
+    .vs-filter-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+    .vs-chip {
+      background: var(--vs-panel);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 14px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--vs-text-2);
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.15s;
+    }
+    .vs-chip:hover { border-color: var(--vs-border-2); color: var(--text); }
+    .vs-chip.active { background: rgba(59,130,246,0.12); color: var(--blue); border-color: var(--blue); }
+    .vs-chip .n { color: var(--dim); margin-left: 6px; font-family: var(--mono); }
+    .vs-chip.active .n { color: var(--blue); }
+
+    .vs-history-card {
+      background: var(--vs-panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .vs-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .vs-table th { text-align: left; padding: 12px 16px; font-size: 10px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); }
+    .vs-table th.right { text-align: right; }
+    .vs-table td { padding: 12px 16px; border-bottom: 1px solid var(--border); font-family: var(--mono); }
+    .vs-table td.right { text-align: right; }
+    .vs-table td.symbol { font-weight: 700; color: var(--text); font-family: 'Inter', sans-serif; }
+    .vs-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .vs-table tr:last-child td { border-bottom: none; }
+    .vs-table .pnl-pos { color: var(--vs-green-2); font-weight: 700; }
+    .vs-table .pnl-neg { color: var(--vs-red-2); font-weight: 700; }
+    .vs-table .empty { text-align: center; color: var(--dim); padding: 36px 12px; font-family: 'Inter', sans-serif; font-size: 12px; }
+    .vs-reason-pill { font-size: 9px; padding: 3px 9px; border-radius: 999px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; font-family: 'Inter', sans-serif; display: inline-flex; align-items: center; gap: 4px; }
+    .vs-reason-pill.tp   { background: var(--gdim); color: var(--vs-green-2); }
+    .vs-reason-pill.hsl  { background: var(--rdim); color: var(--vs-red-2); }
+    .vs-reason-pill.ssl  { background: var(--rdim); color: var(--red); }
+    .vs-reason-pill.exit { background: var(--ydim); color: var(--yellow); }
   </style>
 </head>
-<body style="background: var(--bg); margin: 0;">
-  <div class="vs-page">
+<body>
+<div class="vs-page">
 
-    <!-- Header -->
-    <div class="vs-header">
-      <div>
-        <h1>Virtual Scalper</h1>
-        <div class="subtitle">Paper-trade results from <code>booknow.sentiment.scripts.virtual_scalp_executor</code> — net of simulated 0.1%/side fees</div>
-      </div>
-      <div style="text-align: right;">
-        <a class="vs-back" href="/">← Back to Scanner</a>
-        <div style="margin-top: 8px;"><span id="vs-live" class="vs-live off"><span class="dot"></span>Connecting…</span></div>
-      </div>
+  <!-- Top bar -->
+  <div class="vs-topbar">
+    <div>
+      <h1>Virtual Scalper</h1>
+      <div class="sub">Paper-trade verification — net of simulated 0.1%/side Binance fees</div>
     </div>
-
-    <!-- Summary stats -->
-    <div class="vs-stats" id="vs-stats">
-      <div class="vs-stat"><div class="label">Open</div><div class="value blue" id="vs-open">—</div><div class="sub">positions held</div></div>
-      <div class="vs-stat"><div class="label">Closed</div><div class="value" id="vs-closed">—</div><div class="sub" id="vs-closed-sub">trades</div></div>
-      <div class="vs-stat"><div class="label">Win Rate</div><div class="value" id="vs-winrate">—</div><div class="sub" id="vs-winrate-sub">— wins / — losses</div></div>
-      <div class="vs-stat"><div class="label">Net PnL</div><div class="value" id="vs-totalpnl">—</div><div class="sub" id="vs-fees-sub">— fees paid</div></div>
-      <div class="vs-stat"><div class="label">Avg / Trade</div><div class="value" id="vs-avgpnl">—</div><div class="sub" id="vs-avghold-sub">— avg hold</div></div>
-      <div class="vs-stat"><div class="label">Best Trade</div><div class="value green" id="vs-best">—</div><div class="sub" id="vs-best-sub">—</div></div>
-      <div class="vs-stat"><div class="label">Worst Trade</div><div class="value red" id="vs-worst">—</div><div class="sub" id="vs-worst-sub">—</div></div>
+    <div class="right">
+      <span id="vs-live" class="vs-live off">Connecting…</span>
+      <a href="/">← Scanner</a>
     </div>
-
-    <!-- Open positions -->
-    <div class="vs-section">
-      <div class="vs-section-title">
-        Open Positions
-        <span class="badge" id="vs-open-badge">0</span>
-      </div>
-      <div class="vs-card">
-        <div class="vs-meta">Updated live every 1.5 s. PnL is unrealised — calculated against the latest WS-tick price.</div>
-        <table class="vs-table">
-          <thead>
-            <tr>
-              <th>Symbol</th>
-              <th class="right">Entry</th>
-              <th class="right">Current</th>
-              <th class="right">PnL %</th>
-              <th class="right">PnL $</th>
-              <th class="right">Hold</th>
-              <th class="right">Drawdown</th>
-              <th class="right">Entry Time</th>
-            </tr>
-          </thead>
-          <tbody id="vs-open-tbody">
-            <tr><td colspan="8" class="empty">Loading…</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- Closed trade history -->
-    <div class="vs-section">
-      <div class="vs-section-title">
-        Trade History
-        <span class="badge gray" id="vs-history-badge">0</span>
-      </div>
-      <div class="vs-card">
-        <div class="vs-reasons" id="vs-reasons">
-          <!-- exit-reason chips render here -->
-        </div>
-        <table class="vs-table">
-          <thead>
-            <tr>
-              <th>Symbol</th>
-              <th class="right">Entry</th>
-              <th class="right">Exit</th>
-              <th class="right">Hold</th>
-              <th class="right">PnL %</th>
-              <th class="right">PnL $</th>
-              <th class="right">Fees</th>
-              <th>Reason</th>
-              <th class="right">When</th>
-            </tr>
-          </thead>
-          <tbody id="vs-history-tbody">
-            <tr><td colspan="9" class="empty">Loading…</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
   </div>
 
-  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-  <script>
-    // ── Helpers ──────────────────────────────────────────────────────────────
+  <!-- ① VERDICT BAR -->
+  <div class="vs-verdict">
+    <div class="vs-verdict-status">
+      <div id="vs-verdict-icon" class="vs-verdict-icon idle">·</div>
+      <div class="vs-verdict-text">
+        <div class="label">Strategy verdict</div>
+        <div id="vs-verdict-status" class="status idle">—</div>
+        <div id="vs-verdict-reason" class="reason">Waiting for first trades to evaluate.</div>
+      </div>
+    </div>
+    <div class="vs-verdict-spark">
+      <svg id="vs-spark" viewBox="0 0 400 64" preserveAspectRatio="none"></svg>
+    </div>
+    <div class="vs-verdict-summary">
+      <div class="item"><div id="vs-verdict-pnl" class="v">—</div><div class="l">Net P&amp;L</div></div>
+      <div class="item"><div id="vs-verdict-wr"  class="v">—</div><div class="l">Win Rate</div></div>
+      <div class="item"><div id="vs-verdict-trades" class="v">—</div><div class="l">Trades</div></div>
+    </div>
+  </div>
 
-    const safeParse = s => { try { return JSON.parse(s); } catch { return null; } };
-    const fmtUsd  = n => (n == null || isNaN(n)) ? '—' : `${n >= 0 ? '+' : ''}$${n.toFixed(3)}`;
-    const fmtUsd2 = n => (n == null || isNaN(n)) ? '—' : `$${n.toFixed(2)}`;
-    const fmtUsd4 = n => (n == null || isNaN(n)) ? '—' : `$${n.toFixed(4)}`;
-    const fmtPct  = n => (n == null || isNaN(n)) ? '—' : `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
-    const fmtPrice = n => (n == null || isNaN(n)) ? '—' : (n < 0.01 ? n.toFixed(8) : n < 1 ? n.toFixed(6) : n.toFixed(4));
-    const fmtDur = s => {
-        if (s == null || isNaN(s)) return '—';
-        if (s < 60) return `${Math.round(s)}s`;
-        if (s < 3600) return `${Math.floor(s/60)}m ${Math.round(s%60)}s`;
-        return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
-    };
-    const fmtTimeFromTs = s => {
-        if (!s) return '—';
-        const d = new Date(s * 1000);
-        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    };
-    const reasonClass = r => ({
-        'TAKE_PROFIT':     'tp',
-        'HARD_STOP_LOSS':  'hsl',
-        'SOFT_STOP_LOSS':  'ssl',
-        'STRATEGY_EXIT':   'exit',
-    }[r] || 'gray');
+  <!-- ② KPI cards -->
+  <div class="vs-kpis">
+    <div class="vs-kpi">
+      <div class="label">Net P&L</div>
+      <div id="vs-kpi-pnl" class="value">—</div>
+      <div id="vs-kpi-pnl-sub" class="sub">—</div>
+    </div>
+    <div class="vs-kpi">
+      <div class="label">Win Rate / Profit Factor</div>
+      <div class="value"><span id="vs-kpi-wr">—</span> <span class="value-sub">· PF <span id="vs-kpi-pf">—</span></span></div>
+      <div id="vs-kpi-wr-sub" class="sub">—</div>
+    </div>
+    <div class="vs-kpi">
+      <div class="label">Avg Hold</div>
+      <div id="vs-kpi-hold" class="value blue">—</div>
+      <div id="vs-kpi-hold-sub" class="sub">—</div>
+    </div>
+  </div>
 
-    // ── Render ───────────────────────────────────────────────────────────────
+  <!-- ③ + ④ Charts row -->
+  <div class="vs-charts">
+    <div class="vs-card-chart">
+      <h3>Cumulative Net P&L</h3>
+      <div class="desc">Each point = one closed trade in chronological order. Final value matches Net P&L above.</div>
+      <svg id="vs-equity" viewBox="0 0 700 220" preserveAspectRatio="none"></svg>
+    </div>
+    <div class="vs-card-chart">
+      <h3>Exit Reasons</h3>
+      <div class="desc">Where do closed trades end up — and what's the avg net P&L per reason?</div>
+      <div id="vs-reasons-list" class="vs-reasons-list">
+        <div class="empty">No closed trades yet</div>
+      </div>
+    </div>
+  </div>
 
-    function renderSummary(s) {
-        const el = id => document.getElementById(id);
+  <!-- ⑤ OPEN POSITIONS -->
+  <div class="vs-section">
+    <div class="vs-section-head">
+      <h2>Open Positions</h2>
+      <span id="vs-open-badge" class="badge">0</span>
+      <span class="meta">Unrealised PnL — refreshes on every WS tick</span>
+    </div>
+    <div id="vs-pos-grid" class="vs-pos-grid">
+      <div class="empty">Loading…</div>
+    </div>
+  </div>
 
-        el('vs-open').textContent = s.openCount ?? 0;
-        el('vs-closed').textContent = s.closedCount ?? 0;
-        el('vs-closed-sub').textContent = `${s.wins} wins / ${s.losses} losses`;
+  <!-- ⑥ TRADE HISTORY -->
+  <div class="vs-section">
+    <div class="vs-section-head">
+      <h2>Trade History</h2>
+      <span id="vs-history-badge" class="badge gray">0</span>
+    </div>
+    <div id="vs-filter-chips" class="vs-filter-chips">
+      <span class="vs-chip active" data-filter="all">All <span class="n">0</span></span>
+      <span class="vs-chip" data-filter="wins">Wins <span class="n">0</span></span>
+      <span class="vs-chip" data-filter="losses">Losses <span class="n">0</span></span>
+      <span class="vs-chip" data-filter="TAKE_PROFIT">TP <span class="n">0</span></span>
+      <span class="vs-chip" data-filter="HARD_STOP_LOSS">Hard SL <span class="n">0</span></span>
+      <span class="vs-chip" data-filter="SOFT_STOP_LOSS">Soft SL <span class="n">0</span></span>
+      <span class="vs-chip" data-filter="STRATEGY_EXIT">Exhaustion <span class="n">0</span></span>
+    </div>
+    <div class="vs-history-card">
+      <table class="vs-table">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th class="right">Hold</th>
+            <th class="right">PnL %</th>
+            <th class="right">Net $</th>
+            <th class="right">Fees</th>
+            <th>Reason</th>
+            <th class="right">When</th>
+          </tr>
+        </thead>
+        <tbody id="vs-history-tbody">
+          <tr><td colspan="7" class="empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
 
-        const wr = (s.winRate || 0) * 100;
-        el('vs-winrate').textContent = `${wr.toFixed(1)}%`;
-        el('vs-winrate').classList.toggle('green', wr >= 50);
-        el('vs-winrate').classList.toggle('red', wr < 50 && s.closedCount > 0);
-        el('vs-winrate-sub').textContent = `${s.wins} wins / ${s.losses} losses`;
+</div>
 
-        const pnl = s.totalPnl || 0;
-        el('vs-totalpnl').textContent = fmtUsd(pnl);
-        el('vs-totalpnl').classList.toggle('green', pnl >= 0);
-        el('vs-totalpnl').classList.toggle('red', pnl < 0);
-        el('vs-fees-sub').textContent = `${fmtUsd2(s.totalFees)} fees paid`;
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+  // ── Constants matching the executor's exit rules ──────────────────────
+  // (Used to render the SL/TP slider on each open position card.)
+  // Matches virtual_scalp_executor.py defaults: TP=$0.20 USDT, hard-SL=$1 loss.
+  const TP_USDT_TARGET   = 0.20;
+  const HARD_SL_USDT     = 1.00;
+  const HISTORY_DISPLAY_LIMIT = 100;
 
-        const avg = s.avgPnl || 0;
-        el('vs-avgpnl').textContent = fmtUsd(avg);
-        el('vs-avgpnl').classList.toggle('green', avg >= 0);
-        el('vs-avgpnl').classList.toggle('red', avg < 0);
-        el('vs-avghold-sub').textContent = `${fmtDur(s.avgHoldSeconds)} avg hold`;
+  // ── Helpers ──────────────────────────────────────────────────────────────
+  const $  = id => document.getElementById(id);
+  const safeParse = s => { try { return JSON.parse(s); } catch { return null; } };
+  const fmtUsd  = n => (n == null || isNaN(n)) ? '—' : `${n >= 0 ? '+' : ''}$${n.toFixed(3)}`;
+  const fmtUsd2 = n => (n == null || isNaN(n)) ? '—' : `$${n.toFixed(2)}`;
+  const fmtUsd4 = n => (n == null || isNaN(n)) ? '—' : `$${n.toFixed(4)}`;
+  const fmtPct  = n => (n == null || isNaN(n)) ? '—' : `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
+  const fmtPrice = n => (n == null || isNaN(n)) ? '—' : (n < 0.01 ? n.toFixed(8) : n < 1 ? n.toFixed(6) : n.toFixed(4));
+  const fmtDur = s => {
+      if (s == null || isNaN(s)) return '—';
+      if (s < 60) return `${Math.round(s)}s`;
+      if (s < 3600) return `${Math.floor(s/60)}m ${Math.round(s%60).toString().padStart(2,'0')}s`;
+      return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+  };
+  const reasonClass = r => ({
+      'TAKE_PROFIT':     'tp',
+      'HARD_STOP_LOSS':  'hsl',
+      'SOFT_STOP_LOSS':  'ssl',
+      'STRATEGY_EXIT':   'exit',
+  }[r] || 'gray');
+  const reasonLabel = r => ({
+      'TAKE_PROFIT':     '✓ Take Profit',
+      'HARD_STOP_LOSS':  '✗ Hard Stop',
+      'SOFT_STOP_LOSS':  '✗ Soft Stop',
+      'STRATEGY_EXIT':   '⚠ Exhaustion',
+  }[r] || (r || 'UNKNOWN').replace(/_/g, ' '));
 
-        if (s.best) {
-            el('vs-best').textContent = fmtUsd(s.best.pnl_usdt);
-            el('vs-best-sub').textContent = `${s.best.symbol} • ${s.best.reason}`;
-        } else {
-            el('vs-best').textContent = '—';
-            el('vs-best-sub').textContent = '—';
-        }
-        if (s.worst) {
-            el('vs-worst').textContent = fmtUsd(s.worst.pnl_usdt);
-            el('vs-worst-sub').textContent = `${s.worst.symbol} • ${s.worst.reason}`;
-        } else {
-            el('vs-worst').textContent = '—';
-            el('vs-worst-sub').textContent = '—';
-        }
+  // Map a $-valued PnL to a 0..100 slider position over [-HARD_SL, +TP_TARGET].
+  const slidePctForPnl = u => {
+      const min = -HARD_SL_USDT, max = TP_USDT_TARGET;
+      const clamped = Math.max(min, Math.min(max, u || 0));
+      return ((clamped - min) / (max - min)) * 100;
+  };
+  // Where "entry" (0 PnL) sits on that same scale.
+  const entrySlidePct = () => slidePctForPnl(0);
 
-        // Reasons chips
-        const reasonsBox = el('vs-reasons');
-        const reasons = s.reasons || {};
-        if (Object.keys(reasons).length === 0) {
-            reasonsBox.innerHTML = '<span class="vs-reason-chip" style="color: var(--dim);">No closed trades yet</span>';
-        } else {
-            reasonsBox.innerHTML = Object.entries(reasons)
-                .sort((a, b) => b[1] - a[1])
-                .map(([r, c]) => `<span class="vs-reason-chip"><strong>${c}</strong>${r.replace(/_/g, ' ')}</span>`)
-                .join('');
-        }
-    }
+  // ── Derived metrics on top of /api/virtual-scalper summary ─────────────
+  function deriveExtra(history) {
+      const grossWins  = history.filter(h => (h.pnl_usdt || 0) > 0).reduce((s,h) => s + h.pnl_usdt, 0);
+      const grossLossAbs = Math.abs(history.filter(h => (h.pnl_usdt || 0) < 0).reduce((s,h) => s + h.pnl_usdt, 0));
+      const profitFactor = grossLossAbs > 0
+          ? grossWins / grossLossAbs
+          : (grossWins > 0 ? Infinity : null);
 
-    function renderOpen(positions, prices) {
-        const tbody = document.getElementById('vs-open-tbody');
-        document.getElementById('vs-open-badge').textContent = positions.length;
-        if (!positions.length) {
-            tbody.innerHTML = '<tr><td colspan="8" class="empty">No open virtual positions. Waiting for a SCALP_BUY_SIGNAL.</td></tr>';
-            return;
-        }
-        const now = Date.now() / 1000;
-        tbody.innerHTML = positions.map(p => {
-            const cur = prices[p.symbol];
-            let pnlPct = null, pnlUsd = null;
-            if (cur && p.entry_price) {
-                pnlPct = ((cur - p.entry_price) / p.entry_price) * 100;
-                pnlUsd = 100 * pnlPct / 100;   // $100 nominal investment, same as the executor
-            }
-            const cls  = pnlPct == null ? '' : (pnlPct >= 0 ? 'pnl-pos' : 'pnl-neg');
-            const hold = p.entry_timestamp ? now - p.entry_timestamp : null;
-            const dd   = (p.max_drawdown || 0) * 100;
-            return `
-                <tr>
-                    <td class="symbol">${p.symbol}</td>
-                    <td class="right">${fmtPrice(p.entry_price)}</td>
-                    <td class="right">${cur ? fmtPrice(cur) : '—'}</td>
-                    <td class="right ${cls}">${fmtPct(pnlPct)}</td>
-                    <td class="right ${cls}">${fmtUsd(pnlUsd)}</td>
-                    <td class="right">${fmtDur(hold)}</td>
-                    <td class="right pnl-neg">${fmtPct(dd)}</td>
-                    <td class="right" style="color: var(--dim);">${p.entry_time || '—'}</td>
-                </tr>
-            `;
-        }).join('');
-    }
+      // Per-reason: count + avg pnl
+      const byReason = {};
+      for (const h of history) {
+          const r = h.reason || 'UNKNOWN';
+          if (!byReason[r]) byReason[r] = { count: 0, sum: 0 };
+          byReason[r].count += 1;
+          byReason[r].sum   += (h.pnl_usdt || 0);
+      }
+      for (const r of Object.keys(byReason)) {
+          byReason[r].avg = byReason[r].count ? byReason[r].sum / byReason[r].count : 0;
+      }
 
-    function renderHistory(history) {
-        const tbody = document.getElementById('vs-history-tbody');
-        document.getElementById('vs-history-badge').textContent = history.length;
-        if (!history.length) {
-            tbody.innerHTML = '<tr><td colspan="9" class="empty">No trade history yet.</td></tr>';
-            return;
-        }
-        tbody.innerHTML = history.slice(0, 100).map(h => {
-            const cls = (h.pnl_usdt || 0) >= 0 ? 'pnl-pos' : 'pnl-neg';
-            return `
-                <tr>
-                    <td class="symbol">${h.symbol}</td>
-                    <td class="right">${fmtPrice(h.entry_price)}</td>
-                    <td class="right">${fmtPrice(h.exit_price)}</td>
-                    <td class="right">${fmtDur(h.hold_duration)}</td>
-                    <td class="right ${cls}">${fmtPct(h.pnl_pct)}</td>
-                    <td class="right ${cls}">${fmtUsd(h.pnl_usdt)}</td>
-                    <td class="right" style="color: var(--dim);">${fmtUsd4(h.fees_paid)}</td>
-                    <td><span class="reason ${reasonClass(h.reason)}">${(h.reason || 'UNKNOWN').replace(/_/g, ' ')}</span></td>
-                    <td class="right" style="color: var(--dim);">${h.exit_time || '—'}</td>
-                </tr>
-            `;
-        }).join('');
-    }
+      // Hold range
+      const holds = history.map(h => h.hold_duration || 0).filter(x => x > 0);
+      const holdMin = holds.length ? Math.min(...holds) : null;
+      const holdMax = holds.length ? Math.max(...holds) : null;
 
-    // ── Data flow ────────────────────────────────────────────────────────────
+      // Equity curve: cumulative pnl in chronological order. /api/virtual-scalper
+      // returns history newest-first, so reverse.
+      const chronological = history.slice().reverse();
+      let cum = 0;
+      const equity = chronological.map(h => { cum += (h.pnl_usdt || 0); return cum; });
 
-    let livePrices = {};
+      return {
+          grossWins, grossLossAbs, profitFactor,
+          byReason, holdMin, holdMax, equity,
+      };
+  }
 
-    async function fetchSnapshot() {
-        try {
-            const r = await fetch('/api/virtual-scalper');
-            if (!r.ok) throw new Error(`HTTP ${r.status}`);
-            const data = await r.json();
-            livePrices = data.prices || {};
-            renderSummary(data.summary);
-            renderOpen(data.open || [], livePrices);
-            renderHistory(data.history || []);
-        } catch (err) {
-            console.error('[snapshot]', err);
-            document.getElementById('vs-open-tbody').innerHTML =
-                `<tr><td colspan="8" class="empty">Snapshot failed: ${err.message}</td></tr>`;
-        }
-    }
+  // ── Verdict logic ─────────────────────────────────────────────────────
+  function computeVerdict(summary, extra) {
+      if ((summary.closedCount || 0) === 0) {
+          return { tier: 'idle', icon: '·', label: 'No data',
+                   reason: 'Waiting for first trades to evaluate.' };
+      }
+      const net = summary.totalPnl || 0;
+      const pf  = extra.profitFactor;
+      // PF=Infinity means zero losses with some wins — definitely healthy.
+      if (net > 0 && (pf === null || pf === Infinity || pf >= 1.5)) {
+          return { tier: 'healthy', icon: '✓', label: 'Healthy',
+                   reason: 'Net positive with a comfortable profit factor.' };
+      }
+      if (net > 0 && pf >= 1.0) {
+          return { tier: 'warn', icon: '!', label: 'Marginal',
+                   reason: 'Net positive but profit factor is thin — fees can swing it negative.' };
+      }
+      if (net <= 0 && (pf === null || pf >= 1.0)) {
+          return { tier: 'warn', icon: '!', label: 'Break-even',
+                   reason: 'Wins barely cover losses — fees are eating the profits.' };
+      }
+      return { tier: 'bad', icon: '✗', label: 'Losing',
+               reason: 'More dollars lost than won. Strategy needs adjustment.' };
+  }
 
-    // Live updates piggy-back on the regular Socket.io 'update' broadcast.
-    const socket = io();
-    const live = document.getElementById('vs-live');
+  // ── Equity curve / sparkline rendering ───────────────────────────────
+  function renderSpark(values) {
+      const svg = $('vs-spark');
+      svg.innerHTML = '';
+      if (!values || values.length === 0) {
+          svg.innerHTML = '<line x1="0" y1="32" x2="400" y2="32" stroke="#1e3050" stroke-dasharray="4,4" stroke-width="1"/>';
+          return;
+      }
+      const w = 400, h = 64, pad = 4;
+      const lo = Math.min(0, ...values), hi = Math.max(0, ...values);
+      const range = (hi - lo) || 1;
+      const x = i => values.length > 1 ? (i / (values.length - 1)) * w : w / 2;
+      const y = v => h - pad - ((v - lo) / range) * (h - 2 * pad);
+      const last = values[values.length - 1];
+      const stroke = last >= 0 ? '#10b981' : '#ef4444';
+      const fillTop = last >= 0 ? 'rgba(16,185,129,0.45)' : 'rgba(239,68,68,0.45)';
+      const fillBot = last >= 0 ? 'rgba(16,185,129,0)'    : 'rgba(239,68,68,0)';
+      const linePts = values.map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i)},${y(v)}`).join(' ');
+      const areaPts = `${linePts} L${w},${h} L0,${h} Z`;
+      svg.innerHTML = `
+        <defs>
+          <linearGradient id="vs-spark-grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"   stop-color="${fillTop}"/>
+            <stop offset="100%" stop-color="${fillBot}"/>
+          </linearGradient>
+        </defs>
+        <path d="${areaPts}" fill="url(#vs-spark-grad)"/>
+        <path d="${linePts}" stroke="${stroke}" stroke-width="2" fill="none"/>
+      `;
+  }
 
-    socket.on('connect',    () => { live.classList.remove('off'); live.innerHTML = '<span class="dot"></span>Live'; });
-    socket.on('disconnect', () => { live.classList.add('off');    live.innerHTML = '<span class="dot"></span>Disconnected'; });
+  function renderEquity(values) {
+      const svg = $('vs-equity');
+      svg.innerHTML = '';
+      const w = 700, h = 220, pad = 20;
+      if (!values || values.length === 0) {
+          svg.innerHTML = `
+            <line x1="${pad}" y1="${h/2}" x2="${w}" y2="${h/2}" stroke="#283b5d" stroke-dasharray="3,3"/>
+            <text x="${w/2}" y="${h/2 + 18}" fill="#64748b" font-size="11" font-family="Inter" text-anchor="middle">No closed trades yet</text>
+          `;
+          return;
+      }
+      const lo = Math.min(0, ...values), hi = Math.max(0, ...values);
+      const range = (hi - lo) || 1;
+      const padY = 16;
+      const x = i => pad + (values.length > 1 ? (i / (values.length - 1)) * (w - pad) : (w - pad) / 2);
+      const y = v => padY + ((hi - v) / range) * (h - 2 * padY);
+      const yZero = y(0);
 
-    socket.on('update', data => {
-        // Server already includes virtualPositions, virtualHistory, priceHash —
-        // and getAllHash() / getList() in server.js JSON-parse server-side, so
-        // the values arrive here as objects/arrays already (NOT JSON strings).
-        if (data.priceHash) {
-            // priceHash is a {symbol → CurrentPrice} map. Pull just the prices.
-            for (const [sym, cp] of Object.entries(data.priceHash)) {
-                if (!cp) continue;
-                const obj = (typeof cp === 'string') ? safeParse(cp) : cp;
-                if (obj && obj.price != null) livePrices[sym] = parseFloat(obj.price);
-            }
-        }
-        // Defensive: server.js getAllHash returns parsed objects, but a
-        // future change might pass raw strings — handle both cleanly.
-        const open = Object.values(data.virtualPositions || {})
-            .map(v => (typeof v === 'string') ? safeParse(v) : v)
-            .filter(Boolean);
-        const history = (data.virtualHistory || [])
-            .map(v => (typeof v === 'string') ? safeParse(v) : v)
-            .filter(Boolean);
+      const last = values[values.length - 1];
+      const stroke = last >= 0 ? '#10b981' : '#ef4444';
+      const fillTop = last >= 0 ? 'rgba(16,185,129,0.35)' : 'rgba(239,68,68,0.35)';
+      const fillBot = last >= 0 ? 'rgba(16,185,129,0)'    : 'rgba(239,68,68,0)';
 
-        const wins   = history.filter(h => (h.pnl_usdt || 0) > 0).length;
-        const losses = history.filter(h => (h.pnl_usdt || 0) < 0).length;
-        const totalPnl  = history.reduce((s, h) => s + (h.pnl_usdt || 0), 0);
-        const totalFees = history.reduce((s, h) => s + (h.fees_paid || 0), 0);
-        const best  = history.reduce((b, h) => (h.pnl_usdt > (b?.pnl_usdt ?? -Infinity)) ? h : b, null);
-        const worst = history.reduce((w, h) => (h.pnl_usdt < (w?.pnl_usdt ??  Infinity)) ? h : w, null);
-        const avgHold = history.length
-            ? history.reduce((s, h) => s + (h.hold_duration || 0), 0) / history.length
-            : 0;
-        const reasons = {};
-        for (const h of history) reasons[h.reason || 'UNKNOWN'] = (reasons[h.reason || 'UNKNOWN'] || 0) + 1;
+      const linePts = values.map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i)},${y(v)}`).join(' ');
+      const areaPts = `${linePts} L${x(values.length - 1)},${h} L${x(0)},${h} Z`;
 
-        renderSummary({
-            openCount: open.length, closedCount: history.length,
-            wins, losses, winRate: history.length ? wins / history.length : 0,
-            totalPnl, totalFees, avgPnl: history.length ? totalPnl / history.length : 0,
-            avgHoldSeconds: avgHold, best, worst, reasons,
-        });
-        renderOpen(open, livePrices);
-        renderHistory(history);
-    });
+      const finalLabel = `${last >= 0 ? '+' : ''}$${last.toFixed(2)}`;
 
-    fetchSnapshot();
-  </script>
+      svg.innerHTML = `
+        <defs>
+          <linearGradient id="vs-equity-grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"   stop-color="${fillTop}"/>
+            <stop offset="100%" stop-color="${fillBot}"/>
+          </linearGradient>
+        </defs>
+        <line x1="0" y1="${y(hi)}" x2="${w}" y2="${y(hi)}" stroke="#1e3050" stroke-width="1"/>
+        <line x1="0" y1="${yZero}" x2="${w}" y2="${yZero}" stroke="#283b5d" stroke-width="1" stroke-dasharray="3,3"/>
+        <line x1="0" y1="${y(lo)}" x2="${w}" y2="${y(lo)}" stroke="#1e3050" stroke-width="1"/>
+        <text x="6" y="${y(hi) + 4}"  fill="#64748b" font-size="10" font-family="JetBrains Mono">${(hi >= 0 ? '+' : '') + '$' + hi.toFixed(2)}</text>
+        <text x="6" y="${yZero + 4}"  fill="#64748b" font-size="10" font-family="JetBrains Mono">$0</text>
+        <text x="6" y="${y(lo) + 4}"  fill="#64748b" font-size="10" font-family="JetBrains Mono">${(lo >= 0 ? '+' : '') + '$' + lo.toFixed(2)}</text>
+        <path d="${areaPts}" fill="url(#vs-equity-grad)"/>
+        <path d="${linePts}" stroke="${stroke}" stroke-width="2" fill="none"/>
+        <circle cx="${x(values.length - 1)}" cy="${y(last)}" r="5" fill="${stroke}"/>
+        <text x="${x(values.length - 1) - 8}" y="${y(last) + 4}" fill="${stroke}" font-size="11"
+              font-family="JetBrains Mono" font-weight="600" text-anchor="end">${finalLabel}</text>
+      `;
+  }
+
+  // ── Renderers ─────────────────────────────────────────────────────────
+
+  function renderSummary(summary, extra) {
+      const verdict = computeVerdict(summary, extra);
+
+      // Verdict bar
+      const ic = $('vs-verdict-icon');
+      ic.className = `vs-verdict-icon ${verdict.tier === 'healthy' ? '' : verdict.tier}`;
+      ic.textContent = verdict.icon;
+      const st = $('vs-verdict-status');
+      st.className = `status ${verdict.tier}`;
+      st.textContent = verdict.label;
+      $('vs-verdict-reason').textContent = verdict.reason;
+
+      const pnl = summary.totalPnl || 0;
+      $('vs-verdict-pnl').textContent = fmtUsd(pnl);
+      $('vs-verdict-pnl').className = `v ${pnl >= 0 ? 'green' : 'red'}`;
+      const wr = (summary.winRate || 0) * 100;
+      $('vs-verdict-wr').textContent = (summary.closedCount || 0) > 0 ? `${wr.toFixed(0)}%` : '—';
+      $('vs-verdict-trades').textContent = summary.closedCount || 0;
+
+      // Equity sparkline (top bar)
+      renderSpark(extra.equity);
+
+      // KPIs
+      $('vs-kpi-pnl').textContent = fmtUsd(pnl);
+      $('vs-kpi-pnl').className = `value ${pnl >= 0 ? 'green' : 'red'}`;
+      $('vs-kpi-pnl-sub').innerHTML = `After <strong>${fmtUsd2(summary.totalFees || 0)}</strong> in fees · gross <strong>${fmtUsd((extra.grossWins - extra.grossLossAbs) || 0)}</strong>`;
+
+      $('vs-kpi-wr').textContent = (summary.closedCount || 0) > 0 ? `${wr.toFixed(0)}%` : '—';
+      const pfText = extra.profitFactor === null ? '—'
+                  : extra.profitFactor === Infinity ? '∞'
+                  : extra.profitFactor.toFixed(2);
+      $('vs-kpi-pf').textContent = pfText;
+      $('vs-kpi-wr-sub').innerHTML = `<strong>${summary.wins || 0}</strong> wins · <strong>${summary.losses || 0}</strong> losses · gross win/loss <strong>${extra.grossWins.toFixed(2)} / ${extra.grossLossAbs.toFixed(2)}</strong>`;
+
+      $('vs-kpi-hold').textContent = (summary.closedCount || 0) > 0 ? fmtDur(summary.avgHoldSeconds) : '—';
+      $('vs-kpi-hold-sub').innerHTML = (summary.closedCount || 0) > 0
+          ? `Range <strong>${fmtDur(extra.holdMin)}</strong>–<strong>${fmtDur(extra.holdMax)}</strong>`
+          : '—';
+
+      // Equity curve
+      renderEquity(extra.equity);
+
+      // Reasons list
+      const reasonsEl = $('vs-reasons-list');
+      const reasons = Object.entries(extra.byReason).sort((a, b) => b[1].count - a[1].count);
+      if (!reasons.length) {
+          reasonsEl.innerHTML = '<div class="empty">No closed trades yet</div>';
+      } else {
+          const maxCount = Math.max(...reasons.map(([, v]) => v.count));
+          reasonsEl.innerHTML = reasons.map(([r, v]) => {
+              const pctWidth = maxCount > 0 ? (v.count / maxCount) * 100 : 0;
+              const cls = reasonClass(r);
+              const avgCls = v.avg >= 0 ? 'green' : 'red';
+              return `
+                <div class="vs-reason-row">
+                    <div class="name-bar">
+                      <div class="bar ${cls}" style="width: ${pctWidth}%;"></div>
+                      <span class="name">${(r || 'UNKNOWN').replace(/_/g, ' ')}</span>
+                    </div>
+                    <div class="count">${v.count}</div>
+                    <div class="avg ${avgCls}">${fmtUsd(v.avg)}</div>
+                </div>
+              `;
+          }).join('');
+      }
+  }
+
+  function renderOpenPositions(positions, prices) {
+      const grid = $('vs-pos-grid');
+      $('vs-open-badge').textContent = positions.length;
+      if (!positions.length) {
+          grid.innerHTML = '<div class="empty">No open virtual positions. Waiting for the next SCALP_BUY_SIGNAL.</div>';
+          return;
+      }
+      const now = Date.now() / 1000;
+      const entryPctPos = entrySlidePct();
+      grid.innerHTML = positions.map(p => {
+          const cur = prices[p.symbol];
+          let pnlPct = null, pnlUsd = null;
+          const investment = p.investment || 100;  // matches executor's TradingConfig snapshot
+          if (cur && p.entry_price) {
+              pnlPct = ((cur - p.entry_price) / p.entry_price) * 100;
+              pnlUsd = investment * (pnlPct / 100);
+          }
+          const cls = pnlPct == null ? 'dim' : (pnlPct >= 0 ? 'green' : 'red');
+          const dotCls = pnlPct == null ? '' : (pnlPct >= 0 ? '' : 'red');
+          const hold = p.entry_timestamp ? now - p.entry_timestamp : null;
+
+          // Slider zones — SL covers [0..entry], TP covers [entry..100]
+          const slPct = entryPctPos;
+          const tpStart = entryPctPos;
+          const tpWidth = 100 - entryPctPos;
+          const dotPct = pnlUsd == null ? entryPctPos : slidePctForPnl(pnlUsd);
+
+          return `
+            <div class="vs-pos-card">
+              <div class="top">
+                <span class="sym">${p.symbol}</span>
+                <span class="hold">${fmtDur(hold)}</span>
+              </div>
+              <div class="pnl ${cls}">${pnlUsd == null ? '—' : fmtUsd(pnlUsd)}<small>${pnlPct == null ? '' : `(${fmtPct(pnlPct)})`}</small></div>
+              <div class="vs-slider">
+                <div class="zone-sl" style="left: 0; width: ${slPct}%;"></div>
+                <div class="zone-tp" style="left: ${tpStart}%; width: ${tpWidth}%;"></div>
+                <div class="track"></div>
+                <div class="marker-entry" style="left: ${entryPctPos}%;"></div>
+                <div class="dot ${dotCls}" style="left: ${dotPct}%;"></div>
+              </div>
+              <div class="vs-slider-labels">
+                <span>SL -$${HARD_SL_USDT.toFixed(2)}</span>
+                <span class="entry-label">Entry ${fmtPrice(p.entry_price)}</span>
+                <span>TP +$${TP_USDT_TARGET.toFixed(2)}</span>
+              </div>
+            </div>
+          `;
+      }).join('');
+  }
+
+  function renderHistoryRows(history, filter) {
+      const tbody = $('vs-history-tbody');
+      let filtered = history;
+      if (filter === 'wins')   filtered = history.filter(h => (h.pnl_usdt || 0) > 0);
+      else if (filter === 'losses') filtered = history.filter(h => (h.pnl_usdt || 0) < 0);
+      else if (filter && filter !== 'all') filtered = history.filter(h => h.reason === filter);
+
+      if (!filtered.length) {
+          tbody.innerHTML = '<tr><td colspan="7" class="empty">No matching trades.</td></tr>';
+          return;
+      }
+      tbody.innerHTML = filtered.slice(0, HISTORY_DISPLAY_LIMIT).map(h => {
+          const cls = (h.pnl_usdt || 0) >= 0 ? 'pnl-pos' : 'pnl-neg';
+          return `
+            <tr>
+              <td class="symbol">${h.symbol}</td>
+              <td class="right">${fmtDur(h.hold_duration)}</td>
+              <td class="right ${cls}">${fmtPct(h.pnl_pct)}</td>
+              <td class="right ${cls}">${fmtUsd(h.pnl_usdt)}</td>
+              <td class="right" style="color: var(--dim);">${fmtUsd4(h.fees_paid)}</td>
+              <td><span class="vs-reason-pill ${reasonClass(h.reason)}">${reasonLabel(h.reason)}</span></td>
+              <td class="right" style="color: var(--dim);">${h.exit_time || '—'}</td>
+            </tr>
+          `;
+      }).join('');
+  }
+
+  function renderHistoryChips(history) {
+      const chips = document.querySelectorAll('#vs-filter-chips .vs-chip');
+      const counts = {
+          all:                history.length,
+          wins:               history.filter(h => (h.pnl_usdt || 0) > 0).length,
+          losses:             history.filter(h => (h.pnl_usdt || 0) < 0).length,
+          'TAKE_PROFIT':      history.filter(h => h.reason === 'TAKE_PROFIT').length,
+          'HARD_STOP_LOSS':   history.filter(h => h.reason === 'HARD_STOP_LOSS').length,
+          'SOFT_STOP_LOSS':   history.filter(h => h.reason === 'SOFT_STOP_LOSS').length,
+          'STRATEGY_EXIT':    history.filter(h => h.reason === 'STRATEGY_EXIT').length,
+      };
+      chips.forEach(c => {
+          const filter = c.dataset.filter;
+          const n = c.querySelector('.n');
+          if (n) n.textContent = counts[filter] ?? 0;
+      });
+      $('vs-history-badge').textContent = history.length;
+  }
+
+  // ── State ─────────────────────────────────────────────────────────────
+
+  let livePrices    = {};
+  let lastHistory   = [];
+  let activeFilter  = 'all';
+
+  // ── Filter chip wiring ────────────────────────────────────────────────
+  document.querySelectorAll('#vs-filter-chips .vs-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+          document.querySelectorAll('#vs-filter-chips .vs-chip')
+              .forEach(c => c.classList.remove('active'));
+          chip.classList.add('active');
+          activeFilter = chip.dataset.filter || 'all';
+          renderHistoryRows(lastHistory, activeFilter);
+      });
+  });
+
+  // ── Data flow ─────────────────────────────────────────────────────────
+
+  function applyFullPayload(open, history, prices, summary) {
+      livePrices  = prices || {};
+      lastHistory = history || [];
+      const extra = deriveExtra(lastHistory);
+      const computedSummary = summary || {
+          openCount:      open.length,
+          closedCount:    lastHistory.length,
+          wins:           lastHistory.filter(h => (h.pnl_usdt || 0) > 0).length,
+          losses:         lastHistory.filter(h => (h.pnl_usdt || 0) < 0).length,
+          winRate:        lastHistory.length
+                          ? lastHistory.filter(h => (h.pnl_usdt || 0) > 0).length / lastHistory.length
+                          : 0,
+          totalPnl:       lastHistory.reduce((s, h) => s + (h.pnl_usdt || 0), 0),
+          totalFees:      lastHistory.reduce((s, h) => s + (h.fees_paid || 0), 0),
+          avgPnl:         lastHistory.length
+                          ? lastHistory.reduce((s, h) => s + (h.pnl_usdt || 0), 0) / lastHistory.length
+                          : 0,
+          avgHoldSeconds: lastHistory.length
+                          ? lastHistory.reduce((s, h) => s + (h.hold_duration || 0), 0) / lastHistory.length
+                          : 0,
+      };
+      renderSummary(computedSummary, extra);
+      renderHistoryChips(lastHistory);
+      renderHistoryRows(lastHistory, activeFilter);
+      renderOpenPositions(open, livePrices);
+  }
+
+  async function fetchSnapshot() {
+      try {
+          const r = await fetch('/api/virtual-scalper');
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const data = await r.json();
+          applyFullPayload(data.open || [], data.history || [], data.prices || {}, data.summary);
+      } catch (err) {
+          console.error('[snapshot]', err);
+          $('vs-pos-grid').innerHTML = `<div class="empty">Snapshot failed: ${err.message}</div>`;
+          $('vs-history-tbody').innerHTML = `<tr><td colspan="7" class="empty">Snapshot failed.</td></tr>`;
+      }
+  }
+
+  // ── Live Socket.io updates ────────────────────────────────────────────
+
+  const socket = io();
+  const live = $('vs-live');
+  socket.on('connect',    () => { live.classList.remove('off'); live.textContent = 'Live'; });
+  socket.on('disconnect', () => { live.classList.add('off');    live.textContent = 'Disconnected'; });
+
+  socket.on('update', data => {
+      // Fold incoming priceHash into the local cache.
+      if (data.priceHash) {
+          for (const [sym, cp] of Object.entries(data.priceHash)) {
+              if (!cp) continue;
+              const obj = (typeof cp === 'string') ? safeParse(cp) : cp;
+              if (obj && obj.price != null) livePrices[sym] = parseFloat(obj.price);
+          }
+      }
+      // server.js JSON-parses these values, but be defensive.
+      const open = Object.values(data.virtualPositions || {})
+          .map(v => (typeof v === 'string') ? safeParse(v) : v)
+          .filter(Boolean);
+      const history = (data.virtualHistory || [])
+          .map(v => (typeof v === 'string') ? safeParse(v) : v)
+          .filter(Boolean);
+
+      // No `summary` on socket payload — let applyFullPayload compute it.
+      applyFullPayload(open, history, livePrices);
+  });
+
+  fetchSnapshot();
+</script>
 </body>
 </html>
