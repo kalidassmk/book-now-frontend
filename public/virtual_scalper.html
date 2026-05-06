@@ -39,13 +39,23 @@
       --vs-radius-sm: 10px;
     }
 
-    body { font-family: 'Inter', system-ui, sans-serif; }
-    .vs-page { max-width: 1500px; margin: 0 auto; padding: 28px 32px 60px; color: var(--text); }
+    /* Single-page app shell — 100vh, no body scroll. Each panel scrolls its own content. */
+    html, body { height: 100%; margin: 0; }
+    body { font-family: 'Inter', system-ui, sans-serif; overflow: hidden; }
+    .vs-page {
+      display: grid;
+      grid-template-rows: auto auto auto 1fr;  /* topbar / verdict / kpis / main(grid) */
+      gap: 12px;
+      height: 100vh;
+      padding: 14px 18px;
+      box-sizing: border-box;
+      color: var(--text);
+    }
 
     /* ── Topbar ────────────────────────────────────────────────────────── */
-    .vs-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
-    .vs-topbar h1 { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; margin: 0; }
-    .vs-topbar .sub { color: var(--dim); font-size: 12px; margin-top: 2px; }
+    .vs-topbar { display: flex; align-items: center; justify-content: space-between; }
+    .vs-topbar h1 { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; margin: 0; }
+    .vs-topbar .sub { color: var(--dim); font-size: 11px; margin-top: 1px; }
     .vs-topbar .right { display: flex; gap: 16px; align-items: center; font-size: 12px; }
     .vs-topbar a { color: var(--blue); text-decoration: none; }
     .vs-topbar a:hover { text-decoration: underline; }
@@ -60,19 +70,18 @@
       background: linear-gradient(135deg, var(--vs-panel) 0%, var(--vs-panel-2) 100%);
       border: 1px solid var(--vs-border-2);
       border-radius: var(--radius);
-      padding: 24px 28px;
-      margin-bottom: 24px;
+      padding: 12px 18px;
       display: grid;
       grid-template-columns: auto 1fr auto;
-      gap: 32px;
+      gap: 24px;
       align-items: center;
     }
-    .vs-verdict-status { display: flex; align-items: center; gap: 16px; }
+    .vs-verdict-status { display: flex; align-items: center; gap: 12px; }
     .vs-verdict-icon {
-      width: 56px; height: 56px;
-      border-radius: 14px;
+      width: 38px; height: 38px;
+      border-radius: 10px;
       display: flex; align-items: center; justify-content: center;
-      font-size: 28px;
+      font-size: 20px;
       background: var(--gdim); color: var(--green);
       border: 1px solid rgba(16,185,129,0.3);
     }
@@ -80,104 +89,125 @@
     .vs-verdict-icon.bad  { background: var(--rdim); color: var(--red);    border-color: rgba(239,68,68,0.3); }
     .vs-verdict-icon.idle { background: rgba(100,116,139,0.15); color: var(--dim); border-color: rgba(100,116,139,0.3); }
 
-    .vs-verdict-text .label  { font-size: 11px; color: var(--dim); font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; }
-    .vs-verdict-text .status { font-size: 32px; font-weight: 900; letter-spacing: -0.02em; line-height: 1.1; }
+    .vs-verdict-text .label  { font-size: 9px; color: var(--dim); font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; }
+    .vs-verdict-text .status { font-size: 18px; font-weight: 800; letter-spacing: -0.01em; line-height: 1.1; }
     .vs-verdict-text .status.healthy { color: var(--vs-green-2); }
     .vs-verdict-text .status.warn    { color: var(--yellow); }
     .vs-verdict-text .status.bad     { color: var(--vs-red-2); }
     .vs-verdict-text .status.idle    { color: var(--dim); }
-    .vs-verdict-text .reason { font-size: 13px; color: var(--vs-text-2); margin-top: 4px; }
+    .vs-verdict-text .reason { font-size: 11px; color: var(--vs-text-2); margin-top: 1px; }
 
-    .vs-verdict-spark { display: flex; align-items: center; height: 64px; }
+    .vs-verdict-spark { display: flex; align-items: center; height: 40px; }
     .vs-verdict-spark svg { width: 100%; height: 100%; }
 
-    .vs-verdict-summary { display: grid; grid-template-columns: repeat(3, auto); gap: 28px; }
+    .vs-verdict-summary { display: grid; grid-template-columns: repeat(3, auto); gap: 18px; }
     .vs-verdict-summary .item { text-align: right; }
-    .vs-verdict-summary .v { font-family: var(--mono); font-size: 20px; font-weight: 700; }
+    .vs-verdict-summary .v { font-family: var(--mono); font-size: 16px; font-weight: 700; }
     .vs-verdict-summary .v.green { color: var(--vs-green-2); }
     .vs-verdict-summary .v.red   { color: var(--vs-red-2); }
-    .vs-verdict-summary .l { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; }
+    .vs-verdict-summary .l { font-size: 9px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; }
 
     /* ── ② KPI cards ───────────────────────────────────────────────────── */
-    .vs-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
+    .vs-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
     .vs-kpi {
       background: var(--vs-panel);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      padding: 20px 24px;
+      padding: 10px 14px;
     }
-    .vs-kpi .label { font-size: 11px; color: var(--dim); font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
-    .vs-kpi .value { font-family: var(--mono); font-size: 32px; font-weight: 700; line-height: 1.1; }
+    .vs-kpi .label { font-size: 9px; color: var(--dim); font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+    .vs-kpi .value { font-family: var(--mono); font-size: 22px; font-weight: 700; line-height: 1.1; }
     .vs-kpi .value.green { color: var(--vs-green-2); }
     .vs-kpi .value.red   { color: var(--vs-red-2); }
     .vs-kpi .value.blue  { color: var(--blue); }
-    .vs-kpi .value-sub { color: var(--dim); font-size: 18px; font-weight: 500; }
-    .vs-kpi .sub { font-size: 12px; color: var(--vs-text-2); margin-top: 8px; }
+    .vs-kpi .value-sub { color: var(--dim); font-size: 14px; font-weight: 500; }
+    .vs-kpi .sub { font-size: 10px; color: var(--vs-text-2); margin-top: 4px; }
     .vs-kpi .sub strong { color: var(--text); font-family: var(--mono); }
 
-    /* ── ③+④ Charts row ────────────────────────────────────────────────── */
-    .vs-charts { display: grid; grid-template-columns: 1.5fr 1fr; gap: 16px; margin-bottom: 24px; }
+    /* ── Main grid (fills remaining viewport) ──────────────────────────── */
+    .vs-main {
+      display: grid;
+      grid-template-columns: 3fr 2fr;
+      gap: 10px;
+      min-height: 0;
+    }
+    .vs-main-left, .vs-main-right { display: grid; gap: 10px; min-height: 0; }
+    .vs-main-left  { grid-template-rows: 1fr auto; }
+    .vs-main-right { grid-template-rows: auto 1fr; }
+
+    /* ── ③+④ Charts ────────────────────────────────────────────────────── */
     .vs-card-chart {
       background: var(--vs-panel);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      padding: 20px 24px;
+      padding: 12px 16px;
+      display: flex; flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
     }
-    .vs-card-chart h3   { font-size: 13px; font-weight: 700; margin: 0 0 4px; color: var(--text); }
-    .vs-card-chart .desc { font-size: 11px; color: var(--dim); margin-bottom: 16px; }
-    .vs-card-chart svg  { width: 100%; height: 220px; }
+    .vs-card-chart h3   { font-size: 12px; font-weight: 700; margin: 0 0 2px; color: var(--text); }
+    .vs-card-chart .desc { font-size: 10px; color: var(--dim); margin-bottom: 8px; }
+    .vs-card-chart svg  { width: 100%; flex: 1; min-height: 0; }
 
     /* Reasons list (inside ④) */
-    .vs-reasons-list { display: flex; flex-direction: column; gap: 10px; }
-    .vs-reasons-list .empty { color: var(--dim); font-size: 12px; padding: 24px 0; text-align: center; }
-    .vs-reason-row { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .vs-reasons-list { display: flex; flex-direction: column; gap: 6px; flex: 1; overflow-y: auto; min-height: 0; }
+    .vs-reasons-list .empty { color: var(--dim); font-size: 11px; padding: 16px 0; text-align: center; }
+    .vs-reason-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--border); }
     .vs-reason-row:last-child { border-bottom: none; }
-    .vs-reason-row .name-bar { display: flex; align-items: center; gap: 10px; }
-    .vs-reason-row .bar { height: 6px; border-radius: 3px; max-width: 110px; min-width: 6px; }
+    .vs-reason-row .name-bar { display: flex; align-items: center; gap: 8px; }
+    .vs-reason-row .bar { height: 5px; border-radius: 3px; max-width: 90px; min-width: 5px; }
     .vs-reason-row .bar.tp   { background: var(--green); }
     .vs-reason-row .bar.hsl  { background: var(--red); }
     .vs-reason-row .bar.ssl  { background: var(--vs-red-2); }
     .vs-reason-row .bar.exit { background: var(--yellow); }
-    .vs-reason-row .name { font-size: 11px; font-weight: 700; min-width: 100px; }
-    .vs-reason-row .count { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--text); }
-    .vs-reason-row .avg { font-family: var(--mono); font-size: 12px; }
+    .vs-reason-row .name { font-size: 10px; font-weight: 700; min-width: 90px; }
+    .vs-reason-row .count { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--text); }
+    .vs-reason-row .avg { font-family: var(--mono); font-size: 11px; }
     .vs-reason-row .avg.green { color: var(--vs-green-2); }
     .vs-reason-row .avg.red   { color: var(--vs-red-2); }
 
     /* ── Section heading (used by ⑤ and ⑥) ─────────────────────────────── */
-    .vs-section { margin-bottom: 24px; }
-    .vs-section-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
-    .vs-section-head h2 { font-size: 15px; font-weight: 700; margin: 0; }
-    .vs-section-head .badge { background: var(--bdim, rgba(59,130,246,0.12)); color: var(--blue); font-size: 11px; padding: 3px 10px; border-radius: 999px; font-family: var(--mono); font-weight: 700; }
+    .vs-section { display: flex; flex-direction: column; min-height: 0; }
+    .vs-section-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; flex-shrink: 0; }
+    .vs-section-head h2 { font-size: 12px; font-weight: 700; margin: 0; }
+    .vs-section-head .badge { background: var(--bdim, rgba(59,130,246,0.12)); color: var(--blue); font-size: 10px; padding: 2px 8px; border-radius: 999px; font-family: var(--mono); font-weight: 700; }
     .vs-section-head .badge.gray { background: rgba(100,116,139,0.15); color: var(--dim); }
-    .vs-section-head .meta { color: var(--dim); font-size: 11px; margin-left: auto; }
+    .vs-section-head .meta { color: var(--dim); font-size: 10px; margin-left: auto; }
 
-    /* ── ⑤ Open positions card grid ────────────────────────────────────── */
-    .vs-pos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+    /* ── ⑤ Open positions horizontal-scroll row ────────────────────────── */
+    .vs-pos-grid {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding-bottom: 4px;     /* room for the scroll bar */
+    }
     .vs-pos-grid .empty {
-      grid-column: 1 / -1;
+      flex: 1;
       background: var(--vs-panel);
       border: 1px dashed var(--border);
       border-radius: var(--radius-sm);
-      padding: 36px 16px; text-align: center;
-      color: var(--dim); font-size: 12px;
+      padding: 16px;
+      text-align: center;
+      color: var(--dim); font-size: 11px;
     }
     .vs-pos-card {
+      flex: 0 0 200px;
       background: var(--vs-panel);
       border: 1px solid var(--border);
       border-radius: var(--vs-radius-sm);
-      padding: 16px 18px;
+      padding: 10px 12px;
     }
-    .vs-pos-card .top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
-    .vs-pos-card .sym  { font-size: 14px; font-weight: 700; letter-spacing: 0.02em; }
-    .vs-pos-card .hold { font-size: 11px; color: var(--dim); font-family: var(--mono); }
-    .vs-pos-card .pnl  { font-family: var(--mono); font-size: 22px; font-weight: 700; line-height: 1.1; margin-bottom: 12px; }
+    .vs-pos-card .top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 2px; }
+    .vs-pos-card .sym  { font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
+    .vs-pos-card .hold { font-size: 10px; color: var(--dim); font-family: var(--mono); }
+    .vs-pos-card .pnl  { font-family: var(--mono); font-size: 18px; font-weight: 700; line-height: 1.1; margin-bottom: 8px; }
     .vs-pos-card .pnl.green { color: var(--vs-green-2); }
     .vs-pos-card .pnl.red   { color: var(--vs-red-2); }
     .vs-pos-card .pnl.dim   { color: var(--dim); }
-    .vs-pos-card .pnl small { font-size: 12px; color: var(--vs-text-2); margin-left: 6px; font-weight: 500; }
+    .vs-pos-card .pnl small { font-size: 10px; color: var(--vs-text-2); margin-left: 5px; font-weight: 500; }
 
-    .vs-slider { position: relative; height: 22px; margin-top: 4px; }
+    .vs-slider { position: relative; height: 18px; margin-top: 2px; }
     .vs-slider .track   { position: absolute; top: 50%; transform: translateY(-50%); width: 100%; height: 4px; background: var(--vs-border-2); border-radius: 2px; }
     .vs-slider .zone-tp { position: absolute; top: 50%; transform: translateY(-50%); height: 4px; background: var(--gdim); border-radius: 2px; }
     .vs-slider .zone-sl { position: absolute; top: 50%; transform: translateY(-50%); height: 4px; background: var(--rdim); border-radius: 2px; }
@@ -188,13 +218,13 @@
     .vs-slider-labels .entry-label { font-weight: 500; color: var(--vs-text-2); text-transform: none; letter-spacing: 0; }
 
     /* ── ⑥ Trade history ───────────────────────────────────────────────── */
-    .vs-filter-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+    .vs-filter-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; flex-shrink: 0; }
     .vs-chip {
       background: var(--vs-panel);
       border: 1px solid var(--border);
       border-radius: 999px;
-      padding: 6px 14px;
-      font-size: 11px;
+      padding: 4px 10px;
+      font-size: 10px;
       font-weight: 600;
       color: var(--vs-text-2);
       cursor: pointer;
@@ -210,12 +240,16 @@
       background: var(--vs-panel);
       border: 1px solid var(--border);
       border-radius: var(--radius);
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
       overflow: hidden;
     }
-    .vs-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    .vs-table th { text-align: left; padding: 12px 16px; font-size: 10px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); }
+    .vs-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .vs-table thead th { position: sticky; top: 0; z-index: 1; }
+    .vs-table th { text-align: left; padding: 8px 12px; font-size: 9px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1px solid var(--border); background: var(--vs-panel); }
     .vs-table th.right { text-align: right; }
-    .vs-table td { padding: 12px 16px; border-bottom: 1px solid var(--border); font-family: var(--mono); }
+    .vs-table td { padding: 7px 12px; border-bottom: 1px solid var(--border); font-family: var(--mono); }
     .vs-table td.right { text-align: right; }
     .vs-table td.symbol { font-weight: 700; color: var(--text); font-family: 'Inter', sans-serif; }
     .vs-table tr:hover td { background: rgba(255,255,255,0.02); }
@@ -284,40 +318,44 @@
     </div>
   </div>
 
-  <!-- ③ + ④ Charts row -->
-  <div class="vs-charts">
-    <div class="vs-card-chart">
-      <h3>Cumulative Net P&L</h3>
-      <div class="desc">Each point = one closed trade in chronological order. Final value matches Net P&L above.</div>
-      <svg id="vs-equity" viewBox="0 0 700 220" preserveAspectRatio="none"></svg>
-    </div>
-    <div class="vs-card-chart">
-      <h3>Exit Reasons</h3>
-      <div class="desc">Where do closed trades end up — and what's the avg net P&L per reason?</div>
-      <div id="vs-reasons-list" class="vs-reasons-list">
-        <div class="empty">No closed trades yet</div>
+  <!-- Main grid: left = equity + positions, right = reasons + history -->
+  <div class="vs-main">
+
+    <!-- LEFT: equity curve (top) + open positions (bottom) -->
+    <div class="vs-main-left">
+      <div class="vs-card-chart">
+        <h3>Cumulative Net P&L</h3>
+        <div class="desc">Each point = one closed trade in chronological order.</div>
+        <svg id="vs-equity" viewBox="0 0 700 220" preserveAspectRatio="none"></svg>
+      </div>
+
+      <div class="vs-section">
+        <div class="vs-section-head">
+          <h2>Open Positions</h2>
+          <span id="vs-open-badge" class="badge">0</span>
+          <span class="meta">Unrealised PnL — refreshes on every WS tick</span>
+        </div>
+        <div id="vs-pos-grid" class="vs-pos-grid">
+          <div class="empty">Loading…</div>
+        </div>
       </div>
     </div>
-  </div>
 
-  <!-- ⑤ OPEN POSITIONS -->
-  <div class="vs-section">
-    <div class="vs-section-head">
-      <h2>Open Positions</h2>
-      <span id="vs-open-badge" class="badge">0</span>
-      <span class="meta">Unrealised PnL — refreshes on every WS tick</span>
-    </div>
-    <div id="vs-pos-grid" class="vs-pos-grid">
-      <div class="empty">Loading…</div>
-    </div>
-  </div>
+    <!-- RIGHT: exit reasons (top) + trade history (bottom) -->
+    <div class="vs-main-right">
+      <div class="vs-card-chart">
+        <h3>Exit Reasons</h3>
+        <div class="desc">Where trades end up — count + avg net PnL.</div>
+        <div id="vs-reasons-list" class="vs-reasons-list">
+          <div class="empty">No closed trades yet</div>
+        </div>
+      </div>
 
-  <!-- ⑥ TRADE HISTORY -->
-  <div class="vs-section">
-    <div class="vs-section-head">
-      <h2>Trade History</h2>
-      <span id="vs-history-badge" class="badge gray">0</span>
-    </div>
+      <div class="vs-section">
+        <div class="vs-section-head">
+          <h2>Trade History</h2>
+          <span id="vs-history-badge" class="badge gray">0</span>
+        </div>
     <div id="vs-filter-chips" class="vs-filter-chips">
       <span class="vs-chip active" data-filter="all">All <span class="n">0</span></span>
       <span class="vs-chip" data-filter="wins">Wins <span class="n">0</span></span>
@@ -327,24 +365,27 @@
       <span class="vs-chip" data-filter="SOFT_STOP_LOSS">Soft SL <span class="n">0</span></span>
       <span class="vs-chip" data-filter="STRATEGY_EXIT">Exhaustion <span class="n">0</span></span>
     </div>
-    <div class="vs-history-card">
-      <table class="vs-table">
-        <thead>
-          <tr>
-            <th>Symbol</th>
-            <th class="right">Hold</th>
-            <th class="right">PnL %</th>
-            <th class="right">Net $</th>
-            <th class="right">Fees</th>
-            <th>Reason</th>
-            <th class="right">When</th>
-          </tr>
-        </thead>
-        <tbody id="vs-history-tbody">
-          <tr><td colspan="7" class="empty">Loading…</td></tr>
-        </tbody>
-      </table>
+        <div class="vs-history-card">
+          <table class="vs-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th class="right">Hold</th>
+                <th class="right">PnL %</th>
+                <th class="right">Net $</th>
+                <th class="right">Fees</th>
+                <th>Reason</th>
+                <th class="right">When</th>
+              </tr>
+            </thead>
+            <tbody id="vs-history-tbody">
+              <tr><td colspan="7" class="empty">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
+
   </div>
 
 </div>

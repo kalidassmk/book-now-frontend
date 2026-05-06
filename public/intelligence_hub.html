@@ -1,491 +1,816 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Intelligence Hub — Logic & Virtual Performance</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        bg: '#0b0e11',
-                        card: '#1e2329',
-                        brand: '#f0b90b',
-                        border: 'rgba(255, 255, 255, 0.08)',
-                        success: '#0ecb81',
-                        danger: '#f6465d'
-                    }
-                }
-            }
-        }
-    </script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <style>
-        body { font-family: 'Inter', sans-serif; background-color: #0b0e11; color: #eaecef; }
-        .mono { font-family: 'JetBrains Mono', monospace; }
-        .glass { background: rgba(30, 35, 41, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
-        .gradient-brand { background: linear-gradient(135deg, #f0b90b 0%, #f8d33a 100%); }
-        .log-entry { animation: slideIn 0.3s ease-out; }
-        @keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
-    </style>
+  <!--
+    public/intelligence_hub.html — Strategy command center (v2 redesign).
+
+    Single-page app-style layout: 100vh, no body scroll. Each panel
+    scrolls its own content. Fits in any viewport ≥ 1280×680.
+
+    Sections:
+      ① Live Strategy Config   (read from Redis TRADING_CONFIG, never stale)
+      ② Live Signal Feed       (3-column: BUY / WATCH / EXHAUSTION)
+      ③ Sequence Event Log     (durable, filterable)
+      ④ Fee Blueprint           (try-before-you-trade calculator)
+
+    Data sources (server.js socket payload):
+      data.tradingConfig    → TRADING_CONFIG JSON (NEW in this commit)
+      data.analysisTimeline → latest snapshot per coin
+      data.profitTimeline   → coins above +$0.20 from base
+      data.priceHash        → live prices
+      data.feeStats         → precomputed fee scenarios
+  -->
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Intelligence Hub — BookNow</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/css/dashboard.css"/>
+  <style>
+    :root {
+      --ih-panel:    #131a2c;
+      --ih-panel-2:  #1a2238;
+      --ih-border-2: #283b5d;
+      --ih-text-2:   #b8c2d6;
+      --ih-green-2:  #34d399;
+      --ih-red-2:    #f87171;
+      --ih-orange:   #fb923c;
+      --ih-yellow:   #fbbf24;
+      --ih-radius-sm: 10px;
+    }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow: hidden;       /* whole page locked to viewport */
+    }
+
+    /* ── App shell: 100vh grid, no body scroll ───────────────────────── */
+    .ih-app {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      height: 100vh;
+      padding: 14px 18px;
+      gap: 12px;
+      box-sizing: border-box;
+    }
+
+    /* ── ROW 1: Top bar ──────────────────────────────────────────────── */
+    .ih-topbar {
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .ih-topbar h1 { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; margin: 0; }
+    .ih-topbar .sub { color: var(--dim); font-size: 11px; margin-top: 1px; }
+    .ih-topbar .right { display: flex; gap: 14px; align-items: center; font-size: 11px; }
+    .ih-topbar a { color: var(--blue); text-decoration: none; }
+    .ih-topbar a:hover { text-decoration: underline; }
+    .ih-live { display: inline-flex; align-items: center; gap: 6px; color: var(--green); font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; }
+    .ih-live::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: ih-pulse 1.5s ease-in-out infinite; }
+    .ih-live.off { color: var(--dim); }
+    .ih-live.off::before { background: var(--dim); animation: none; }
+    @keyframes ih-pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    /* ── ROW 2: Strategy config strip ────────────────────────────────── */
+    .ih-config {
+      background: linear-gradient(135deg, var(--ih-panel) 0%, var(--ih-panel-2) 100%);
+      border: 1px solid var(--ih-border-2);
+      border-radius: var(--radius);
+      padding: 10px 16px;
+      display: flex; align-items: center; gap: 18px;
+      flex-wrap: wrap;
+      font-size: 11px;
+    }
+    .ih-config .stale { color: var(--dim); font-style: italic; }
+    .ih-cfg { display: inline-flex; align-items: baseline; gap: 6px; }
+    .ih-cfg .l { color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; font-size: 9px; font-weight: 700; }
+    .ih-cfg .v { font-family: var(--mono); font-weight: 700; font-size: 13px; color: var(--text); }
+    .ih-cfg .v.green { color: var(--ih-green-2); }
+    .ih-cfg .v.red   { color: var(--ih-red-2); }
+    .ih-cfg .v.orange{ color: var(--ih-orange); }
+    .ih-cfg-divider { width: 1px; height: 18px; background: var(--ih-border-2); }
+    .ih-pill {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 999px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-family: 'Inter', sans-serif;
+      display: inline-flex; align-items: center; gap: 4px;
+    }
+    .ih-pill.on  { background: rgba(16,185,129,0.15); color: var(--ih-green-2); }
+    .ih-pill.off { background: rgba(100,116,139,0.15); color: var(--dim); }
+
+    /* ── ROW 3: Main grid (fills remaining viewport) ─────────────────── */
+    .ih-main {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 12px;
+      min-height: 0;          /* CRITICAL — lets children honour overflow */
+    }
+    .ih-left {
+      display: grid;
+      grid-template-rows: 1fr 1fr;
+      gap: 12px;
+      min-height: 0;
+    }
+
+    /* ── Generic panel ───────────────────────────────────────────────── */
+    .ih-panel {
+      background: var(--ih-panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      display: flex; flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .ih-panel-head {
+      flex-shrink: 0;
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+    }
+    .ih-panel-head h3 {
+      font-size: 12px; font-weight: 700; margin: 0;
+      letter-spacing: 0.02em;
+    }
+    .ih-panel-head .badge {
+      font-size: 10px; font-family: var(--mono); font-weight: 700;
+      padding: 1px 8px; border-radius: 999px;
+      background: rgba(100,116,139,0.15); color: var(--dim);
+    }
+    .ih-panel-head .badge.green { background: rgba(16,185,129,0.15); color: var(--ih-green-2); }
+    .ih-panel-head .badge.red   { background: rgba(239,68,68,0.15);  color: var(--ih-red-2); }
+    .ih-panel-head .meta { margin-left: auto; color: var(--dim); font-size: 10px; }
+    .ih-panel-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 12px;
+      min-height: 0;
+    }
+    .ih-empty { color: var(--dim); font-size: 11px; text-align: center; padding: 24px 12px; font-style: italic; }
+
+    /* ── ② SIGNAL FEED — 3-col panel ─────────────────────────────────── */
+    .ih-feeds {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0;                /* dividers handled by border-right */
+    }
+    .ih-feeds .ih-panel { border-radius: 0; border-right: 1px solid var(--border); }
+    .ih-feeds .ih-panel:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+    .ih-feeds .ih-panel:last-child  { border-radius: 0 var(--radius) var(--radius) 0; border-right: none; }
+    .ih-feeds .ih-panel { border-bottom: none; border-top: none; }
+
+    /* Wrap the 3-feed group itself so the panel-head visuals look unified */
+    .ih-feed-wrap {
+      background: var(--ih-panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      display: flex; flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .ih-feed-wrap-head {
+      flex-shrink: 0;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+      display: flex; align-items: center; gap: 10px;
+    }
+    .ih-feed-wrap-head h3 { font-size: 12px; font-weight: 700; margin: 0; }
+    .ih-feed-wrap-body {
+      flex: 1;
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      min-height: 0;
+    }
+    .ih-feed-col {
+      display: flex; flex-direction: column;
+      min-height: 0;
+      border-right: 1px solid var(--border);
+    }
+    .ih-feed-col:last-child { border-right: none; }
+    .ih-feed-col-head {
+      flex-shrink: 0;
+      padding: 8px 12px;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .ih-feed-col-head .icon { font-size: 13px; }
+    .ih-feed-col-head .num { margin-left: auto; font-family: var(--mono); color: var(--dim); }
+    .ih-feed-col.buy  .ih-feed-col-head { color: var(--ih-green-2); }
+    .ih-feed-col.watch .ih-feed-col-head { color: var(--ih-yellow); }
+    .ih-feed-col.exhaust .ih-feed-col-head { color: var(--ih-red-2); }
+    .ih-feed-col-body { flex: 1; overflow-y: auto; padding: 6px 8px; min-height: 0; }
+    .ih-signal-item {
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(30,48,80,0.5);
+      display: grid; grid-template-columns: 1fr auto; gap: 4px;
+      align-items: baseline;
+    }
+    .ih-signal-item:last-child { border-bottom: none; }
+    .ih-signal-item .sym { font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
+    .ih-signal-item .age { font-size: 10px; font-family: var(--mono); color: var(--dim); text-align: right; }
+    .ih-signal-item .meta { grid-column: 1 / -1; font-size: 10px; color: var(--ih-text-2); font-family: var(--mono); }
+
+    /* ── ③ EVENT LOG ─────────────────────────────────────────────────── */
+    .ih-log-filter {
+      display: flex; gap: 6px; flex-wrap: wrap;
+      flex-shrink: 0;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .ih-chip {
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--ih-text-2);
+      cursor: pointer;
+      user-select: none;
+    }
+    .ih-chip:hover { border-color: var(--ih-border-2); color: var(--text); }
+    .ih-chip.active { background: rgba(59,130,246,0.12); color: var(--blue); border-color: var(--blue); }
+    .ih-chip .n { color: var(--dim); margin-left: 4px; font-family: var(--mono); }
+    .ih-log-clear {
+      margin-left: auto;
+      background: transparent; border: none;
+      color: var(--dim); font-size: 10px;
+      cursor: pointer;
+      text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700;
+    }
+    .ih-log-clear:hover { color: var(--text); }
+
+    .ih-log-row {
+      display: grid;
+      grid-template-columns: 70px 24px 1fr auto auto;
+      gap: 10px; align-items: center;
+      padding: 6px 12px;
+      border-bottom: 1px solid rgba(30,48,80,0.5);
+      font-size: 11px;
+    }
+    .ih-log-row:last-child { border-bottom: none; }
+    .ih-log-row .ts { font-family: var(--mono); font-size: 10px; color: var(--dim); }
+    .ih-log-row .icon { font-size: 14px; text-align: center; }
+    .ih-log-row .sym { font-weight: 700; letter-spacing: 0.02em; }
+    .ih-log-row .meta { font-family: var(--mono); font-size: 10px; color: var(--ih-text-2); }
+    .ih-log-row .impact { font-family: var(--mono); font-weight: 700; font-size: 11px; }
+    .ih-log-row .impact.green { color: var(--ih-green-2); }
+    .ih-log-row .impact.red   { color: var(--ih-red-2); }
+
+    /* ── ④ FEE BLUEPRINT ─────────────────────────────────────────────── */
+    .ih-bp { padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
+    .ih-bp-row { display: grid; grid-template-columns: 70px 1fr; gap: 8px; align-items: center; }
+    .ih-bp-row .l { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
+    .ih-bp-row select {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono); font-size: 12px;
+      padding: 5px 10px; border-radius: var(--ih-radius-sm);
+      width: 100%; outline: none;
+    }
+    .ih-bp-row select:focus { border-color: var(--blue); }
+    .ih-bp-pills { display: flex; gap: 4px; flex-wrap: wrap; }
+    .ih-bp-pill {
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border);
+      border-radius: var(--ih-radius-sm);
+      padding: 4px 10px;
+      font-size: 11px;
+      font-family: var(--mono);
+      font-weight: 600;
+      color: var(--ih-text-2);
+      cursor: pointer;
+      flex: 1;
+      text-align: center;
+      min-width: 50px;
+    }
+    .ih-bp-pill:hover { border-color: var(--ih-border-2); color: var(--text); }
+    .ih-bp-pill.active { background: rgba(59,130,246,0.12); color: var(--blue); border-color: var(--blue); }
+
+    .ih-bp-result {
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--ih-border-2);
+      border-radius: var(--ih-radius-sm);
+      padding: 12px 14px;
+    }
+    .ih-bp-result .head {
+      font-size: 9px; font-weight: 700; color: var(--dim);
+      text-transform: uppercase; letter-spacing: 0.08em;
+      margin-bottom: 6px;
+    }
+    .ih-bp-result .item {
+      display: flex; justify-content: space-between;
+      padding: 4px 0;
+      border-bottom: 1px solid rgba(30,48,80,0.4);
+      font-size: 12px;
+    }
+    .ih-bp-result .item:last-child { border-bottom: none; }
+    .ih-bp-result .item .l { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; }
+    .ih-bp-result .item .v { font-family: var(--mono); font-weight: 700; }
+    .ih-bp-result .item .v.green { color: var(--ih-green-2); }
+    .ih-bp-result .item .v.red   { color: var(--ih-red-2); }
+    .ih-bp-result .highlight {
+      background: rgba(16,185,129,0.08);
+      margin: 6px -14px;
+      padding: 8px 14px;
+      border-top: 1px solid rgba(16,185,129,0.2);
+      border-bottom: 1px solid rgba(16,185,129,0.2);
+    }
+  </style>
 </head>
-<body class="overflow-x-hidden">
+<body>
+<div class="ih-app">
 
-    <!-- ── Sidebar ── -->
-    <aside class="fixed left-0 top-0 h-screen w-64 glass border-r z-50">
-        <div class="p-6 flex flex-col h-full">
-            <div class="flex items-center gap-3 mb-10">
-                <div class="w-10 h-10 gradient-brand rounded-xl flex items-center justify-center text-bg font-black text-xl shadow-lg">H</div>
-                <h1 class="text-xl font-bold tracking-tight">Intel <span class="text-brand">HUB</span></h1>
-            </div>
+  <!-- ROW 1: Top bar -->
+  <div class="ih-topbar">
+    <div>
+      <h1>Intelligence Hub</h1>
+      <div class="sub">Live signal feed + fee blueprints from the active strategy</div>
+    </div>
+    <div class="right">
+      <span id="ih-live" class="ih-live off">Connecting…</span>
+      <a href="/">← Scanner</a>
+      <a href="/profit_analysis.html">Profit Watch</a>
+      <a href="/virtual_scalper.html">Virtual Scalper</a>
+    </div>
+  </div>
 
-            <nav class="flex-1 space-y-1">
-                <a href="/pro" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 transition-all">
-                    <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
-                    Back to Pro
-                </a>
-                <a href="/profit_analysis.html" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 transition-all">
-                    <i data-lucide="radar" class="w-5 h-5"></i>
-                    Success Radar
-                </a>
-                <a href="#" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl bg-brand/10 text-brand font-medium">
-                    <i data-lucide="brain-circuit" class="w-5 h-5"></i>
-                    Intelligence Hub
-                </a>
-            </nav>
+  <!-- ROW 2: Strategy config strip -->
+  <div class="ih-config" id="ih-config">
+    <span class="stale">Loading strategy config…</span>
+  </div>
 
-            <div class="mt-auto pt-6 border-t border-white/5">
-                <div class="flex items-center gap-3 p-3 rounded-xl bg-white/5">
-                    <div id="ws-dot" class="w-2 h-2 rounded-full bg-danger animate-pulse"></div>
-                    <div>
-                        <p class="text-xs font-semibold text-white">Hub Stream</p>
-                        <p class="text-[10px] text-gray-500" id="ws-text">Disconnected</p>
-                    </div>
-                </div>
-            </div>
+  <!-- ROW 3: Main grid -->
+  <div class="ih-main">
+
+    <!-- LEFT COLUMN — split top/bottom -->
+    <div class="ih-left">
+
+      <!-- ② Signal feed (3 sub-columns) -->
+      <div class="ih-feed-wrap">
+        <div class="ih-feed-wrap-head">
+          <h3>Live Signal Feed</h3>
+          <span class="ih-cfg-divider"></span>
+          <span style="color: var(--dim); font-size: 10px;">Last 10 minutes • auto-prunes</span>
+          <span class="meta" id="ih-feeds-updated" style="margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--dim);">—</span>
         </div>
-    </aside>
-
-    <!-- ── Main Content ── -->
-    <main class="ml-64 p-8 min-h-screen">
-        <header class="mb-10 flex justify-between items-end">
-            <div>
-                <h2 class="text-3xl font-black text-white mb-1">Intelligence Hub</h2>
-                <p class="text-gray-500">Live monitoring of virtual trade performance and strategy logs.</p>
+        <div class="ih-feed-wrap-body">
+          <div class="ih-feed-col buy">
+            <div class="ih-feed-col-head">
+              <span class="icon">🚀</span>BUY <span class="num" id="ih-feed-buy-n">0</span>
             </div>
-            <div class="glass px-4 py-2 rounded-2xl">
-                <span class="text-[10px] font-bold text-gray-500 uppercase">Live Pulse</span>
-                <p class="text-sm font-bold text-brand mono" id="last-pulse">--:--:--</p>
+            <div class="ih-feed-col-body" id="ih-feed-buy">
+              <div class="ih-empty">No SCALP_BUY_SIGNAL fired yet</div>
             </div>
-        </header>
-
-        <div class="grid grid-cols-1 xl:grid-cols-3 gap-8">
-            
-            <!-- Left: Formula & Strategy Guide -->
-            <div class="xl:col-span-1 space-y-6">
-                <div class="flex items-center gap-2 mb-2">
-                    <i data-lucide="book-open" class="w-5 h-5 text-brand"></i>
-                    <h3 class="text-xl font-bold text-white">Strategy Intelligence</h3>
-                </div>
-
-                <div class="glass p-6 rounded-3xl border border-white/5">
-                    <p class="text-brand font-bold mb-2 uppercase text-[10px] tracking-widest">Patience Rule (3m)</p>
-                    <p class="text-gray-400 text-xs leading-relaxed">
-                        Holds positions for <span class="text-white font-bold">180s</span> even in drawdown. This prevents "Panic Selling" during normal volatility. Hard stop at <span class="text-danger font-bold">-$1.00</span>.
-                    </p>
-                </div>
-
-                <div class="glass p-6 rounded-3xl border border-white/5">
-                    <p class="text-success font-bold mb-2 uppercase text-[10px] tracking-widest">Accumulation Sequence</p>
-                    <p class="text-gray-400 text-xs leading-relaxed">
-                        Identifies <span class="text-white font-bold">3x Volume Growth</span>. If volume rises 3 times while price stays stable, a breakout is predicted.
-                    </p>
-                </div>
-
-                <div class="glass p-6 rounded-3xl border border-white/5">
-                    <p class="text-danger font-bold mb-2 uppercase text-[10px] tracking-widest">Exhaustion Warning</p>
-                    <p class="text-gray-400 text-xs leading-relaxed">
-                        Triggered when volume drops for 3 consecutive points. This is a signal to exit immediately.
-                    </p>
-                </div>
-
-                <!-- Fee Intelligence Section -->
-                <div class="glass p-6 rounded-3xl border-t-4 border-brand/50">
-                    <div class="flex items-center gap-2 mb-4">
-                        <i data-lucide="calculator" class="w-4 h-4 text-brand"></i>
-                        <h4 class="text-sm font-bold text-white uppercase">Advanced Scalp Blueprint</h4>
-                    </div>
-                    
-                    <div class="mb-4">
-                        <label class="text-[10px] text-gray-500 uppercase font-bold mb-2 block">Net Profit Goal</label>
-                        <div class="flex gap-2">
-                            <button onclick="setProfitGoal(0.05)" id="goal-0.05" class="goal-btn flex-1 py-1 rounded-lg border border-white/5 text-[10px] text-gray-400 hover:bg-white/5 transition-all">+$0.05</button>
-                            <button onclick="setProfitGoal(0.10)" id="goal-0.10" class="goal-btn flex-1 py-1 rounded-lg border border-white/5 text-[10px] text-gray-400 hover:bg-white/5 transition-all">+$0.10</button>
-                            <button onclick="setProfitGoal(0.20)" id="goal-0.20" class="goal-btn flex-1 py-1 rounded-lg border border-brand/20 bg-brand/10 text-[10px] text-brand font-bold transition-all">+$0.20</button>
-                            <button onclick="setProfitGoal(0.50)" id="goal-0.50" class="goal-btn flex-1 py-1 rounded-lg border border-white/5 text-[10px] text-gray-400 hover:bg-white/5 transition-all">+$0.50</button>
-                        </div>
-                    </div>
-
-                    <div id="blueprint-container" class="space-y-4">
-                        <p class="text-[10px] text-gray-600 italic">Select a coin from the radar to generate a blueprint...</p>
-                    </div>
-
-                    <div class="mt-6 pt-4 border-t border-white/5">
-                        <div class="flex justify-between items-center mb-2">
-                            <span class="text-[10px] text-gray-500">Buy Amount</span>
-                            <span class="text-[10px] font-bold text-white">$100.00 USDT</span>
-                        </div>
-                        <div class="flex justify-between items-center">
-                            <span class="text-[10px] text-gray-500">Binance Fee</span>
-                            <span class="text-[10px] font-bold text-danger">0.1% (Standard)</span>
-                        </div>
-                    </div>
-                </div>
+          </div>
+          <div class="ih-feed-col watch">
+            <div class="ih-feed-col-head">
+              <span class="icon">⚡</span>WATCH <span class="num" id="ih-feed-watch-n">0</span>
             </div>
-
-            <!-- Right: Virtual Performance & Logs -->
-            <div class="xl:col-span-2 space-y-8">
-                
-                <!-- Section 1: Portfolio Performance -->
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <!-- Active Positions -->
-                    <div class="glass p-6 rounded-[2rem] border-t-4 border-brand">
-                        <div class="flex justify-between items-center mb-4">
-                            <h3 class="text-lg font-bold text-white flex items-center gap-2">
-                                <i data-lucide="activity" class="w-5 h-5 text-brand"></i>
-                                Active Paper Trades
-                            </h3>
-                            <span id="active-count" class="text-[10px] font-black text-brand bg-brand/10 px-2 py-0.5 rounded-full">0 ACTIVE</span>
-                        </div>
-                        <div id="active-container" class="space-y-3 min-h-[120px]">
-                            <p class="text-xs text-gray-600 italic text-center py-10">Waiting for buy signals...</p>
-                        </div>
-                    </div>
-
-                    <!-- PnL Stats -->
-                    <div class="glass p-6 rounded-[2rem] border-t-4 border-success">
-                        <div class="flex justify-between items-center mb-4">
-                            <h3 class="text-lg font-bold text-white flex items-center gap-2">
-                                <i data-lucide="bar-chart-3" class="w-5 h-5 text-success"></i>
-                                Portfolio Health
-                            </h3>
-                        </div>
-                        <div class="grid grid-cols-2 gap-4 mb-4">
-                            <div class="bg-white/5 p-4 rounded-2xl">
-                                <p class="text-[9px] text-gray-500 uppercase font-bold">Total PnL</p>
-                                <h4 id="total-pnl" class="text-2xl font-black mono text-white">$0.00</h4>
-                            </div>
-                            <div class="bg-white/5 p-4 rounded-2xl">
-                                <p class="text-[9px] text-gray-500 uppercase font-bold">Success Rate</p>
-                                <h4 id="success-rate" class="text-2xl font-black mono text-success">0%</h4>
-                            </div>
-                        </div>
-                        <div id="history-list" class="space-y-2 max-h-[120px] overflow-y-auto pr-2">
-                            <!-- Recent History items -->
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Section 2: Scalp Radar -->
-                <div>
-                    <div class="flex items-center gap-2 mb-4">
-                        <i data-lucide="zap" class="w-5 h-5 text-brand"></i>
-                        <h3 class="text-xl font-bold text-white uppercase tracking-tighter">Scalp Alert Radar</h3>
-                    </div>
-                    <div id="radar-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4 min-h-[100px]">
-                        <p class="text-xs text-gray-600 col-span-2 text-center py-10">Searching for high-confidence breakouts...</p>
-                    </div>
-                </div>
-
-                <!-- Section 3: Event Logs -->
-                <div>
-                    <div class="flex justify-between items-center mb-6">
-                        <h3 class="text-xl font-bold text-white flex items-center gap-2">
-                            <i data-lucide="list" class="w-5 h-5 text-brand"></i>
-                            Market Sequence Logs
-                        </h3>
-                        <button onclick="clearLog()" class="text-xs text-gray-500 hover:text-white transition-all">Clear Logs</button>
-                    </div>
-                    <div id="log-container" class="space-y-3 max-h-[400px] overflow-y-auto pr-4">
-                        <!-- Log entries -->
-                    </div>
-                </div>
+            <div class="ih-feed-col-body" id="ih-feed-watch">
+              <div class="ih-empty">No accumulation watching</div>
             </div>
+          </div>
+          <div class="ih-feed-col exhaust">
+            <div class="ih-feed-col-head">
+              <span class="icon">⚠</span>EXHAUST <span class="num" id="ih-feed-exhaust-n">0</span>
+            </div>
+            <div class="ih-feed-col-body" id="ih-feed-exhaust">
+              <div class="ih-empty">No exhaustion exits</div>
+            </div>
+          </div>
         </div>
-    </main>
+      </div>
 
-    <script src="/socket.io/socket.io.js"></script>
-    <script>
-        const activeContainer = document.getElementById('active-container');
-        const historyList = document.getElementById('history-list');
-        const radarGrid = document.getElementById('radar-grid');
-        const logContainer = document.getElementById('log-container');
-        
-        const loggedEvents = new Set();
-        const activeSignals = {};
+      <!-- ③ Sequence event log -->
+      <div class="ih-panel">
+        <div class="ih-panel-head">
+          <h3>Sequence Event Log</h3>
+          <span class="badge" id="ih-log-total">0</span>
+          <span class="meta">Durable feed of 3× volume sequences</span>
+        </div>
+        <div class="ih-log-filter" id="ih-log-filter">
+          <span class="ih-chip active" data-filter="all">All <span class="n">0</span></span>
+          <span class="ih-chip" data-filter="bullish_seq">Bullish <span class="n">0</span></span>
+          <span class="ih-chip" data-filter="bearish_seq">Bearish <span class="n">0</span></span>
+          <button class="ih-log-clear" id="ih-log-clear">Clear</button>
+        </div>
+        <div class="ih-panel-body" id="ih-log-body">
+          <div class="ih-empty">No sequence events yet</div>
+        </div>
+      </div>
 
-        let selectedBlueprintSymbol = null;
-        let currentNetGoal = 0.20;
+    </div>
 
-        function setProfitGoal(goal) {
-            currentNetGoal = goal;
-            document.querySelectorAll('.goal-btn').forEach(btn => {
-                const isSelected = Math.abs(parseFloat(btn.id.split('-')[1]) - goal) < 0.001;
-                btn.className = isSelected 
-                    ? `goal-btn flex-1 py-1 rounded-lg border border-brand/20 bg-brand/10 text-[10px] text-brand font-bold transition-all`
-                    : `goal-btn flex-1 py-1 rounded-lg border border-white/5 text-[10px] text-gray-400 hover:bg-white/5 transition-all`;
-            });
-            if (selectedBlueprintSymbol) updateBlueprint();
-        }
+    <!-- RIGHT COLUMN — fee blueprint -->
+    <div class="ih-panel">
+      <div class="ih-panel-head">
+        <h3>Fee Blueprint</h3>
+        <span class="meta">Try-before-you-trade calculator</span>
+      </div>
+      <div class="ih-bp">
+        <div class="ih-bp-row">
+          <span class="l">Coin</span>
+          <select id="ih-bp-coin"><option value="">— pick a coin —</option></select>
+        </div>
+        <div class="ih-bp-row">
+          <span class="l">Net goal</span>
+          <div class="ih-bp-pills" id="ih-bp-goals">
+            <span class="ih-bp-pill" data-val="0.05">$0.05</span>
+            <span class="ih-bp-pill" data-val="0.10">$0.10</span>
+            <span class="ih-bp-pill active" data-val="0.20">$0.20</span>
+            <span class="ih-bp-pill" data-val="0.50">$0.50</span>
+          </div>
+        </div>
+        <div class="ih-bp-row">
+          <span class="l">Invest</span>
+          <div class="ih-bp-pills" id="ih-bp-invs">
+            <span class="ih-bp-pill" data-val="50">$50</span>
+            <span class="ih-bp-pill active" data-val="100">$100</span>
+            <span class="ih-bp-pill" data-val="200">$200</span>
+            <span class="ih-bp-pill" data-val="500">$500</span>
+          </div>
+        </div>
+        <div class="ih-bp-result" id="ih-bp-result">
+          <div class="head">Choose a coin</div>
+          <div class="item"><span class="l">Entry</span><span class="v">—</span></div>
+          <div class="item"><span class="l">Target sell</span><span class="v">—</span></div>
+          <div class="item"><span class="l">Required move</span><span class="v">—</span></div>
+          <div class="item"><span class="l">Total fees</span><span class="v">—</span></div>
+          <div class="item highlight"><span class="l">Net after fees</span><span class="v">—</span></div>
+        </div>
+      </div>
+    </div>
 
-        function updateBlueprint() {
-            if (!selectedBlueprintSymbol || !lastUpdateData) return;
-            const container = document.getElementById('blueprint-container');
-            
-            // Try to find the symbol in current analysis
-            const latestData = lastUpdateData.analysisTimeline || {};
-            const snapshot = latestData[selectedBlueprintSymbol];
-            if (!snapshot) return;
+  </div>
+</div>
 
-            const buyPrice = snapshot.price;
-            const investment = 100.0;
-            const feeRate = 0.001;
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  // ── State ─────────────────────────────────────────────────────────────
+  const SIGNAL_TTL_SEC = 600;   // keep signals visible for 10 min
+  const LOG_CAP        = 200;   // keep latest 200 events
+  const SEEN_DEDUPE_MS = 15000; // 15s key dedup window
+  const FEE_RATE       = 0.001; // 0.1% Binance spot fee
 
-            // PRECISE FORMULA:
-            // Net = SellVal * (1 - Fee) - BuyVal * (1 + Fee)
-            // SellVal = (Net + BuyVal * (1 + Fee)) / (1 - Fee)
-            const requiredSellValue = (currentNetGoal + (investment * (1 + feeRate))) / (1 - feeRate);
-            const sellPrice = (requiredSellValue / (investment * (1 - feeRate) / buyPrice));
-            const requiredMove = ((sellPrice - buyPrice) / buyPrice) * 100;
+  let livePrices = {};
+  let livePrev   = {};        // keep previous priceHash so we can tell new prices
+  let analysis   = {};        // { symbol → latest snapshot }
+  let bpCoin = '', bpGoal = 0.20, bpInv = 100;
 
-            container.innerHTML = `
-                <div class="bg-brand/5 p-4 rounded-2xl border border-brand/20 fade-in">
-                    <div class="flex justify-between items-center mb-3">
-                        <h5 class="text-xl font-black text-white mono">${selectedBlueprintSymbol}</h5>
-                        <span class="text-[10px] bg-brand text-bg px-2 py-0.5 rounded font-black">BLUEPRINT</span>
-                    </div>
-                    <div class="space-y-2">
-                        <div class="flex justify-between text-xs">
-                            <span class="text-gray-500">Entry Price</span>
-                            <span class="text-white mono font-bold">${buyPrice.toFixed(6)}</span>
-                        </div>
-                        <div class="flex justify-between text-xs">
-                            <span class="text-gray-500">Target Sell</span>
-                            <span class="text-success mono font-bold text-lg">${sellPrice.toFixed(6)}</span>
-                        </div>
-                        <div class="flex justify-between text-xs pt-2 border-t border-white/5">
-                            <span class="text-gray-500">Required Move</span>
-                            <span class="text-brand font-black">+${requiredMove.toFixed(2)}%</span>
-                        </div>
-                        <div class="flex justify-between text-[10px]">
-                            <span class="text-gray-600">Total Fees (Est)</span>
-                            <span class="text-danger">$${(requiredSellValue * feeRate + investment * feeRate).toFixed(4)}</span>
-                        </div>
-                    </div>
+  // Rolling structures (capped, in-memory)
+  const buySignals    = []; // { symbol, ts, conf, gainPct }
+  const watchSet      = {}; // { symbol → snapshot }   live, refreshed each tick
+  const exhaustEvents = []; // { symbol, ts, vol_change, price_impact }
+  const logEvents     = []; // { symbol, ts, type, vol_change, price_impact }
+  const seenDedupe    = {}; // dedupe key → last_ts_ms
+
+  // ── Helpers ──────────────────────────────────────────────────────────
+  const $ = id => document.getElementById(id);
+  const fmtPrice = n => (n == null || isNaN(n)) ? '—' : (n < 0.01 ? n.toFixed(8) : n < 1 ? n.toFixed(6) : n.toFixed(4));
+  const fmtAge = sec => {
+      if (sec < 60) return `${Math.round(sec)}s ago`;
+      if (sec < 3600) return `${Math.floor(sec/60)}m ${Math.round(sec%60)}s ago`;
+      return `${Math.floor(sec/3600)}h ago`;
+  };
+  const fmtTs = ts => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const fmtPct = (n, d=2) => (n == null || isNaN(n)) ? '—' : `${n >= 0 ? '+' : ''}${n.toFixed(d)}%`;
+
+  // ── ① Strategy config render ──────────────────────────────────────────
+  function renderConfig(cfg) {
+      const el = $('ih-config');
+      if (!cfg) {
+          el.innerHTML = '<span class="stale">Strategy config unavailable (TRADING_CONFIG empty)</span>';
+          return;
+      }
+      const auto = !!cfg.autoBuyEnabled;
+      const fast = !!cfg.fastScalpMode;
+      const items = [
+          { l: 'Buy', v: `$${(cfg.buyAmountUsdt || 100).toFixed(0)}`, cls: '' },
+          { l: 'TP target', v: `$${(cfg.profitAmountUsdt || 0.20).toFixed(2)}`, cls: 'green' },
+          { l: 'Patience', v: '5m', cls: '' },
+          { l: 'Hard SL', v: '-$1.00', cls: 'red' },
+          { l: 'Soft SL', v: '-0.30%', cls: 'red' },
+          { l: 'TSL', v: `${(cfg.tslPct || 2.0).toFixed(1)}%`, cls: '' },
+          { l: 'Max hold', v: `${Math.round((cfg.maxHoldSeconds || 300) / 60)}m`, cls: '' },
+          { l: 'Limit offset', v: `${(cfg.limitBuyOffsetPct || 0.3).toFixed(2)}%`, cls: '' },
+      ];
+      let html = items.map((it, i) =>
+          `${i > 0 ? '<span class="ih-cfg-divider"></span>' : ''}<span class="ih-cfg"><span class="l">${it.l}</span><span class="v ${it.cls}">${it.v}</span></span>`
+      ).join('');
+      html += `<span class="ih-cfg-divider"></span><span class="ih-pill ${auto ? 'on' : 'off'}">${auto ? '✓ Auto-buy ON' : '✗ Auto-buy OFF'}</span>`;
+      html += `<span class="ih-pill ${fast ? 'on' : 'off'}">${fast ? '✓ Fast-scalp' : '✗ Fast-scalp'}</span>`;
+      el.innerHTML = html;
+  }
+
+  // ── ② Signal feed ingestion ───────────────────────────────────────────
+  function ingestSignals(timeline) {
+      const now = Date.now();
+      const nowSec = now / 1000;
+
+      // Refresh watchSet from current snapshots (live state, not historical)
+      Object.keys(watchSet).forEach(s => delete watchSet[s]);
+
+      for (const [sym, snap] of Object.entries(timeline)) {
+          if (!snap) continue;
+          const sig = snap.micro_signal;
+          const seq = snap.sequence_report || {};
+          const conf = snap.prediction_confidence || 0;
+
+          // BUY tier — record dedup-keyed
+          if (sig === 'SCALP_BUY_SIGNAL') {
+              const key = `BUY-${sym}-${Math.floor(now / SEEN_DEDUPE_MS)}`;
+              if (!seenDedupe[key]) {
+                  seenDedupe[key] = now;
+                  buySignals.unshift({ symbol: sym, ts: now, conf, snap });
+              }
+          }
+
+          // EXHAUSTION tier
+          if (sig === 'EXHAUSTION_EXIT' || (seq.type === 'bearish_seq' && (seq.vol_change || 0) <= -10)) {
+              const key = `EXH-${sym}-${Math.floor(now / SEEN_DEDUPE_MS)}`;
+              if (!seenDedupe[key]) {
+                  seenDedupe[key] = now;
+                  exhaustEvents.unshift({
+                      symbol: sym, ts: now,
+                      vol_change: seq.vol_change, price_impact: seq.price_impact,
+                  });
+              }
+          }
+
+          // WATCH tier — gradual ↑ or early accumulation, refreshed live
+          if (snap.volume_gradual_inc || sig === 'EARLY_ACCUMULATION') {
+              watchSet[sym] = snap;
+          }
+
+          // Sequence events for the log
+          if (seq.type === 'bullish_seq' || seq.type === 'bearish_seq') {
+              const key = `LOG-${sym}-${seq.type}-${Math.floor(now / SEEN_DEDUPE_MS)}`;
+              if (!seenDedupe[key]) {
+                  seenDedupe[key] = now;
+                  logEvents.unshift({
+                      symbol: sym, ts: now, type: seq.type,
+                      vol_change: seq.vol_change, price_impact: seq.price_impact,
+                  });
+              }
+          }
+      }
+
+      // Prune old TTL signals
+      const cutoffMs = now - SIGNAL_TTL_SEC * 1000;
+      while (buySignals.length && buySignals[buySignals.length - 1].ts < cutoffMs) buySignals.pop();
+      while (exhaustEvents.length && exhaustEvents[exhaustEvents.length - 1].ts < cutoffMs) exhaustEvents.pop();
+      // Keep more log events but cap total
+      while (logEvents.length > LOG_CAP) logEvents.pop();
+
+      // Prune dedupe map
+      const dedupCutoff = now - 60000;
+      for (const k of Object.keys(seenDedupe)) {
+          if (seenDedupe[k] < dedupCutoff) delete seenDedupe[k];
+      }
+  }
+
+  function renderFeeds() {
+      const nowSec = Date.now() / 1000;
+      $('ih-feeds-updated').textContent = fmtTs(Date.now());
+
+      // BUY column
+      const buyEl = $('ih-feed-buy');
+      $('ih-feed-buy-n').textContent = buySignals.length;
+      if (!buySignals.length) {
+          buyEl.innerHTML = '<div class="ih-empty">No SCALP_BUY_SIGNAL fired in last 10 min</div>';
+      } else {
+          buyEl.innerHTML = buySignals.map(s => {
+              const ageSec = nowSec - s.ts / 1000;
+              return `
+                <div class="ih-signal-item">
+                  <span class="sym">${s.symbol}</span>
+                  <span class="age">${fmtAge(ageSec)}</span>
+                  <span class="meta">conf ${s.conf}% • last price ${fmtPrice(s.snap?.price)}</span>
                 </div>
-            `;
-        }
+              `;
+          }).join('');
+      }
 
-        let lastUpdateData = null;
-        function updateUI(data) {
-            lastUpdateData = data;
-            try {
-                document.getElementById('last-pulse').textContent = new Date().toLocaleTimeString();
-                
-                // If no blueprint selected, pick the first active signal
-                if (!selectedBlueprintSymbol) {
-                    const symbols = Object.keys(data.analysisTimeline || {});
-                    if (symbols.length > 0) {
-                        selectedBlueprintSymbol = symbols[0];
-                    }
-                }
-                updateBlueprint();
-                const symbols = Object.keys(pos);
-                document.getElementById('active-count').textContent = `${symbols.length} ACTIVE`;
-                
-                if (symbols.length === 0) {
-                    activeContainer.innerHTML = '<p class="text-xs text-gray-600 italic text-center py-10">Waiting for buy signals...</p>';
-                } else {
-                    activeContainer.innerHTML = symbols.map(s => {
-                        const p = JSON.parse(pos[s]);
-                        return `
-                            <div class="bg-white/5 p-4 rounded-2xl border border-white/5 flex justify-between items-center fade-in">
-                                <div>
-                                    <h5 class="font-black text-white mono">${s}</h5>
-                                    <p class="text-[9px] text-gray-500">Entry: ${p.entry_price.toFixed(6)}</p>
-                                </div>
-                                <div class="text-right">
-                                    <p class="text-xs font-bold text-success mono tracking-widest animate-pulse">MONITORING</p>
-                                    <p class="text-[9px] text-gray-500">${p.entry_time}</p>
-                                </div>
-                            </div>
-                        `;
-                    }).join('');
-                }
-
-                // 2. Update Performance & History
-                const history = data.virtualHistory || [];
-                if (history.length > 0) {
-                    const totalPnl = history.reduce((sum, h) => sum + (h.pnl_usdt || 0), 0);
-                    const wins = history.filter(h => h.pnl_usdt > 0).length;
-                    
-                    document.getElementById('total-pnl').textContent = `$${totalPnl.toFixed(2)}`;
-                    document.getElementById('total-pnl').className = `text-2xl font-black mono ${totalPnl >= 0 ? 'text-success' : 'text-danger'}`;
-                    document.getElementById('success-rate').textContent = `${Math.round((wins / history.length) * 100)}%`;
-
-                    historyList.innerHTML = history.slice(0, 15).map(h => `
-                        <div class="flex justify-between items-center text-[10px] border-b border-white/5 pb-1">
-                            <div class="flex flex-col">
-                                <span class="text-gray-400 mono font-bold">${h.symbol}</span>
-                                <span class="text-[8px] text-gray-600 uppercase font-black">${h.reason}</span>
-                            </div>
-                            <div class="flex flex-col text-right">
-                                <span class="${h.pnl_usdt > 0 ? 'text-success' : 'text-danger'} font-black mono text-xs">${h.pnl_usdt > 0 ? '+' : ''}$${h.pnl_usdt.toFixed(3)}</span>
-                                <span class="text-[8px] text-gray-500">Fee: $${(h.fees_paid || 0).toFixed(4)}</span>
-                            </div>
-                        </div>
-                    `).join('');
-                }
-
-                // 3. Update Fee Guide
-                if (data.feeStats) {
-                    const guide = document.getElementById('fee-guide-container');
-                    guide.innerHTML = Object.keys(data.feeStats).map(key => {
-                        const s = data.feeStats[key];
-                        return `
-                            <div class="bg-white/5 p-3 rounded-xl border border-white/5">
-                                <div class="flex justify-between items-center mb-1">
-                                    <span class="text-[10px] font-black text-white">$${s.investment} Trade</span>
-                                    <span class="text-[10px] font-bold text-brand">Goal: +$${s.target_net.toFixed(2)}</span>
-                                </div>
-                                <div class="flex justify-between items-center">
-                                    <span class="text-[9px] text-gray-500 italic">Required Move: ${s.required_price_move_pct}%</span>
-                                    <span class="text-[9px] text-danger font-bold">Est Fee: $${s.total_fees.toFixed(3)}</span>
-                                </div>
-                            </div>
-                        `;
-                    }).join('');
-                }
-
-                // 3. Process Live Analysis for Radar and Logs
-                const timeline = data.analysisTimeline || {};
-                Object.keys(timeline).forEach(symbol => {
-                    const points = timeline[symbol];
-                    if (!points || points.length === 0) return;
-                    
-                    const last = points[points.length - 1];
-                    
-                    // Log Event Detection
-                    if (last.sequence_report && last.sequence_report.type !== 'neutral') {
-                        addLogEntry(symbol, last);
-                    }
-                    
-                    // Radar Signal Detection
-                    if (last.micro_signal && last.micro_signal !== 'NEUTRAL') {
-                        updateRadarCard(symbol, last);
-                    }
-                });
-
-                lucide.createIcons();
-            } catch (err) {
-                console.error("UI Update Error:", err);
-            }
-        }
-
-        function updateRadarCard(symbol, data) {
-            const id = `radar-${symbol}`;
-            let el = document.getElementById(id);
-            if (!el) {
-                if (radarGrid.querySelector('p')) radarGrid.innerHTML = '';
-                el = document.createElement('div');
-                el.id = id;
-                radarGrid.prepend(el);
-            }
-
-            const isBuy = data.micro_signal.includes('BUY') || data.micro_signal.includes('ACCUM');
-            const color = isBuy ? 'success' : 'danger';
-            
-            el.className = `glass p-4 rounded-2xl border border-${color}/30 bg-${color}/5 fade-in transition-all mb-2`;
-            el.innerHTML = `
-                <div class="flex justify-between items-start">
-                    <div>
-                        <p class="text-[9px] font-bold text-${color} uppercase tracking-widest">${data.micro_signal.replace('_', ' ')}</p>
-                        <h4 class="text-lg font-black text-white mono">${symbol}</h4>
-                    </div>
-                    <div class="text-right">
-                        <span class="text-[10px] font-bold text-white">${data.prediction_confidence}% Confidence</span>
-                        <div class="w-20 bg-white/10 h-1 rounded-full mt-1 overflow-hidden">
-                            <div class="bg-brand h-full" style="width: ${data.prediction_confidence}%"></div>
-                        </div>
-                    </div>
+      // WATCH column
+      const watchEntries = Object.entries(watchSet);
+      const watchEl = $('ih-feed-watch');
+      $('ih-feed-watch-n').textContent = watchEntries.length;
+      if (!watchEntries.length) {
+          watchEl.innerHTML = '<div class="ih-empty">No coins in accumulation</div>';
+      } else {
+          watchEl.innerHTML = watchEntries.slice(0, 50).map(([sym, snap]) => {
+              const reason = snap.micro_signal === 'EARLY_ACCUMULATION' ? 'early accumulation' : 'gradual ↑';
+              return `
+                <div class="ih-signal-item">
+                  <span class="sym">${sym}</span>
+                  <span class="age">live</span>
+                  <span class="meta">${reason} • ${fmtPrice(snap.price)}</span>
                 </div>
-                <div class="mt-3 flex justify-between items-center text-[10px]">
-                    <span class="text-gray-400">Impact: ${data.sequence_report.price_impact.toFixed(4)}%</span>
-                    <span class="bg-white/5 px-2 py-0.5 rounded text-gray-500 uppercase font-bold">Micro Target</span>
+              `;
+          }).join('');
+      }
+
+      // EXHAUSTION column
+      const exEl = $('ih-feed-exhaust');
+      $('ih-feed-exhaust-n').textContent = exhaustEvents.length;
+      if (!exhaustEvents.length) {
+          exEl.innerHTML = '<div class="ih-empty">No exhaustion in last 10 min</div>';
+      } else {
+          exEl.innerHTML = exhaustEvents.map(e => {
+              const ageSec = nowSec - e.ts / 1000;
+              const vc = e.vol_change != null ? `vol ${e.vol_change >= 0 ? '+' : ''}${e.vol_change.toFixed(1)}%` : 'vol —';
+              const pi = e.price_impact != null ? `${e.price_impact >= 0 ? '+' : ''}${e.price_impact.toFixed(2)}%` : '—';
+              return `
+                <div class="ih-signal-item">
+                  <span class="sym">${e.symbol}</span>
+                  <span class="age">${fmtAge(ageSec)}</span>
+                  <span class="meta">${vc} • impact ${pi}</span>
                 </div>
-            `;
+              `;
+          }).join('');
+      }
+  }
 
-            // Auto-clean radar signals after 2 minutes of silence
-            clearTimeout(activeSignals[symbol]);
-            activeSignals[symbol] = setTimeout(() => {
-                el.remove();
-                if (radarGrid.children.length === 0) {
-                    radarGrid.innerHTML = '<p class="text-xs text-gray-600 col-span-2 text-center py-10">Searching for high-confidence breakouts...</p>';
-                }
-            }, 120000);
-        }
+  // ── ③ Event log ───────────────────────────────────────────────────────
+  let logFilter = 'all';
+  function renderLog() {
+      const filtered = logFilter === 'all'
+          ? logEvents
+          : logEvents.filter(e => e.type === logFilter);
 
-        function addLogEntry(symbol, data) {
-            const eid = `${symbol}-${data.sequence_report.type}-${Math.floor(Date.now()/15000)}`; // 15s debounce
-            if (loggedEvents.has(eid)) return;
-            loggedEvents.add(eid);
-            setTimeout(() => loggedEvents.delete(eid), 60000);
+      $('ih-log-total').textContent = logEvents.length;
+      const counts = {
+          all:          logEvents.length,
+          bullish_seq:  logEvents.filter(e => e.type === 'bullish_seq').length,
+          bearish_seq:  logEvents.filter(e => e.type === 'bearish_seq').length,
+      };
+      document.querySelectorAll('#ih-log-filter .ih-chip').forEach(c => {
+          const f = c.dataset.filter;
+          const n = c.querySelector('.n');
+          if (n) n.textContent = counts[f] ?? 0;
+      });
 
-            if (logContainer.querySelector('p.font-bold')) logContainer.innerHTML = '';
+      const body = $('ih-log-body');
+      if (!filtered.length) {
+          body.innerHTML = `<div class="ih-empty">${logEvents.length === 0 ? 'No sequence events yet' : 'No events match this filter'}</div>`;
+          return;
+      }
+      body.innerHTML = filtered.map(e => {
+          const isUp = e.type === 'bullish_seq';
+          const icon = isUp ? '🟢' : '🔴';
+          const cls = isUp ? 'green' : 'red';
+          const vc = e.vol_change != null ? `vol ${e.vol_change >= 0 ? '+' : ''}${e.vol_change.toFixed(1)}%` : 'vol —';
+          const pi = e.price_impact != null ? `${e.price_impact >= 0 ? '+' : ''}${e.price_impact.toFixed(2)}%` : '—';
+          return `
+            <div class="ih-log-row">
+              <span class="ts">${fmtTs(e.ts)}</span>
+              <span class="icon">${icon}</span>
+              <span class="sym">${e.symbol}</span>
+              <span class="meta">${vc}</span>
+              <span class="impact ${cls}">${pi}</span>
+            </div>
+          `;
+      }).join('');
+  }
 
-            const isUp = data.sequence_report.type === 'bullish_seq';
-            const entry = document.createElement('div');
-            entry.className = `glass p-4 rounded-2xl border-l-4 ${isUp ? 'border-success' : 'border-danger'} flex justify-between items-center log-entry mb-2`;
-            entry.innerHTML = `
-                <div class="flex items-center gap-3">
-                    <div class="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center">
-                        <i data-lucide="${isUp ? 'trending-up' : 'trending-down'}" class="w-4 h-4 ${isUp ? 'text-success' : 'text-danger'}"></i>
-                    </div>
-                    <div>
-                        <h4 class="font-bold text-white mono text-sm">${symbol}</h4>
-                        <p class="text-[9px] text-gray-500 uppercase font-bold">${isUp ? 'Accumulation' : 'Exhaustion'}</p>
-                    </div>
-                </div>
-                <div class="text-right">
-                    <p class="text-xs font-black mono ${isUp ? 'text-success' : 'text-danger'}">${data.sequence_report.price_impact.toFixed(4)}%</p>
-                    <p class="text-[8px] text-gray-400">${new Date().toLocaleTimeString()}</p>
-                </div>
-            `;
-            logContainer.prepend(entry);
-            if (logContainer.children.length > 50) logContainer.lastElementChild.remove();
-        }
+  // ── Filter chip + clear wiring ────────────────────────────────────────
+  document.querySelectorAll('#ih-log-filter .ih-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+          document.querySelectorAll('#ih-log-filter .ih-chip').forEach(c => c.classList.remove('active'));
+          chip.classList.add('active');
+          logFilter = chip.dataset.filter;
+          renderLog();
+      });
+  });
+  $('ih-log-clear').addEventListener('click', () => {
+      logEvents.length = 0;
+      renderLog();
+  });
 
-        function clearLog() {
-            logContainer.innerHTML = '<p class="text-xs text-gray-600 text-center py-10 font-bold">Logs Cleared.</p>';
-        }
+  // ── ④ Fee blueprint ───────────────────────────────────────────────────
+  function refreshCoinPicker(symbols) {
+      const sel = $('ih-bp-coin');
+      const current = sel.value;
+      const sorted = symbols.slice().sort();
+      const opts = ['<option value="">— pick a coin —</option>',
+                    ...sorted.map(s => `<option value="${s}">${s}</option>`)].join('');
+      // Only rebuild if the list changed (avoids losing user selection mid-tick)
+      if (sel.dataset.symcount !== String(sorted.length) || sel.dataset.symfp !== sorted[0] + ':' + sorted[sorted.length-1]) {
+          sel.innerHTML = opts;
+          sel.dataset.symcount = String(sorted.length);
+          sel.dataset.symfp = sorted[0] + ':' + sorted[sorted.length-1];
+      }
+      if (current && sorted.includes(current)) sel.value = current;
+  }
 
-        const socket = io();
-        socket.on('connect', () => {
-            document.getElementById('ws-dot').className = 'w-2 h-2 rounded-full bg-success animate-pulse';
-            document.getElementById('ws-text').textContent = 'Stream Active';
-        });
+  function renderBlueprint() {
+      const out = $('ih-bp-result');
+      if (!bpCoin) {
+          out.innerHTML = `
+            <div class="head">Choose a coin</div>
+            <div class="item"><span class="l">Entry</span><span class="v">—</span></div>
+            <div class="item"><span class="l">Target sell</span><span class="v">—</span></div>
+            <div class="item"><span class="l">Required move</span><span class="v">—</span></div>
+            <div class="item"><span class="l">Total fees</span><span class="v">—</span></div>
+            <div class="item highlight"><span class="l">Net after fees</span><span class="v">—</span></div>
+          `;
+          return;
+      }
+      const buyPrice = livePrices[bpCoin] || analysis[bpCoin]?.price;
+      if (!buyPrice) {
+          out.innerHTML = `<div class="head">${bpCoin}</div><div class="item"><span class="l">No live price yet</span><span class="v">—</span></div>`;
+          return;
+      }
+      const investment = bpInv;
+      const netGoal    = bpGoal;
+      // Net = sellVal*(1-fee) - investment*(1+fee)
+      // sellVal = (Net + investment*(1+fee)) / (1-fee)
+      const buyFee  = investment * FEE_RATE;
+      const sellVal = (netGoal + investment + buyFee) / (1 - FEE_RATE);
+      const sellFee = sellVal * FEE_RATE;
+      const grossProfit = sellVal - investment;
+      // Required price move is what we need on PRICE itself, given qty = (investment - buyFee) / buyPrice
+      const qty = (investment - buyFee) / buyPrice;
+      const sellPrice = sellVal / qty;
+      const requiredMovePct = ((sellPrice - buyPrice) / buyPrice) * 100;
+      const totalFees = buyFee + sellFee;
+      const netAfter = grossProfit - totalFees;
 
-        socket.on('update', (data) => {
-            updateUI(data);
-        });
+      out.innerHTML = `
+        <div class="head">${bpCoin} — net goal $${netGoal.toFixed(2)} on $${investment} buy</div>
+        <div class="item"><span class="l">Entry now</span><span class="v">${fmtPrice(buyPrice)}</span></div>
+        <div class="item"><span class="l">Target sell</span><span class="v green">${fmtPrice(sellPrice)}</span></div>
+        <div class="item"><span class="l">Required move</span><span class="v">${fmtPct(requiredMovePct, 3)}</span></div>
+        <div class="item"><span class="l">Gross profit</span><span class="v">$${grossProfit.toFixed(3)}</span></div>
+        <div class="item"><span class="l">Total fees</span><span class="v red">-$${totalFees.toFixed(3)}</span></div>
+        <div class="item highlight"><span class="l">Net after fees</span><span class="v ${netAfter >= netGoal - 0.001 ? 'green' : 'red'}">$${netAfter.toFixed(3)}</span></div>
+      `;
+  }
 
-        lucide.createIcons();
-    </script>
+  $('ih-bp-coin').addEventListener('change', e => { bpCoin = e.target.value; renderBlueprint(); });
+  document.querySelectorAll('#ih-bp-goals .ih-bp-pill').forEach(p => {
+      p.addEventListener('click', () => {
+          document.querySelectorAll('#ih-bp-goals .ih-bp-pill').forEach(x => x.classList.remove('active'));
+          p.classList.add('active');
+          bpGoal = parseFloat(p.dataset.val);
+          renderBlueprint();
+      });
+  });
+  document.querySelectorAll('#ih-bp-invs .ih-bp-pill').forEach(p => {
+      p.addEventListener('click', () => {
+          document.querySelectorAll('#ih-bp-invs .ih-bp-pill').forEach(x => x.classList.remove('active'));
+          p.classList.add('active');
+          bpInv = parseFloat(p.dataset.val);
+          renderBlueprint();
+      });
+  });
+
+  // ── Data ingestion + main update ──────────────────────────────────────
+  function ingestPayload(data) {
+      // Live prices
+      const ph = data.priceHash || {};
+      for (const [s, v] of Object.entries(ph)) {
+          try {
+              const r = typeof v === 'string' ? JSON.parse(v) : v;
+              if (r && r.price != null) livePrices[s] = parseFloat(r.price);
+          } catch {}
+      }
+      // Analysis snapshots — server sends `analysisTimeline` as latest-only
+      const at = data.analysisTimeline || {};
+      const flat = {};
+      for (const [s, v] of Object.entries(at)) {
+          try {
+              const r = typeof v === 'string' ? JSON.parse(v) : v;
+              if (r) flat[s] = r;
+          } catch {}
+      }
+      analysis = flat;
+  }
+
+  function updateAll(data) {
+      ingestPayload(data);
+      renderConfig(data.tradingConfig);
+      ingestSignals(analysis);
+      renderFeeds();
+      renderLog();
+      // Coin picker — symbols currently above threshold (= analysisTimeline keys)
+      refreshCoinPicker(Object.keys(analysis));
+      renderBlueprint();
+  }
+
+  // ── Socket.io ─────────────────────────────────────────────────────────
+  const socket = io();
+  const live = $('ih-live');
+  socket.on('connect',    () => { live.classList.remove('off'); live.textContent = 'Live'; });
+  socket.on('disconnect', () => { live.classList.add('off');    live.textContent = 'Disconnected'; });
+  socket.on('update', updateAll);
+</script>
 </body>
 </html>

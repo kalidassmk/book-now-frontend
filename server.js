@@ -392,7 +392,7 @@ async function runAutoTrade(fastCoins, priceHash) {
 async function tick() {
     try {
         // 1. Fast-move sources
-        const [fastMove, lt2min, uf02, uf23, uf03, uf35, sf23, usf57, priceHash, botBuys, botSellsRaw, consensusRaw, profitReachedRaw, analysisTimeline, virtualPositions, virtualHistory] = await Promise.all([
+        const [fastMove, lt2min, uf02, uf23, uf03, uf35, sf23, usf57, priceHash, botBuys, botSellsRaw, consensusRaw, profitReachedRaw, analysisTimeline, virtualPositions, virtualHistory, tradingConfigRaw] = await Promise.all([
             getAllHash(FAST_MOVE_KEY),
             getAllHash(LT2MIN_KEY),
             getAllHash(UF_0_2_KEY),
@@ -409,7 +409,10 @@ async function tick() {
             getAllHash(ANALYSIS_020_KEY),
             getAllHash(VIRTUAL_POSITIONS),
             getList(VIRTUAL_HISTORY, 0, 50),
+            redis.get('TRADING_CONFIG'),
         ]);
+        let tradingConfig = null;
+        try { tradingConfig = tradingConfigRaw ? JSON.parse(tradingConfigRaw) : null; } catch { tradingConfig = null; }
 
         // 2. Merge all fast signals into one map
         const fastCoins = {};
@@ -785,8 +788,9 @@ async function tick() {
             fullTimeline: analysisTimeline,   // Keep full for detailed views if needed
             virtualPositions,
             virtualHistory,
+            tradingConfig,
             feeStats: feeIntelRaw ? JSON.parse(feeIntelRaw) : null,
-            ts: now() 
+            ts: now()
         });
 
     } catch (e) {
