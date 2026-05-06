@@ -762,30 +762,42 @@ async function tick() {
         
         // Optimization: Create a "Latest Only" summary for the Hub to reduce payload size
         const latestAnalysis = {};
+        // Trim full timelines so we don't OOM the Node heap. Up to 100
+        // snapshots × ~200 coins is ~10-20 MB per broadcast at 1.5 s — that
+        // crashed the frontend container with "Reached heap limit". The
+        // dashboards (profit_analysis trajectory chart, intelligence_hub
+        // sequence detection) only need the most recent ~30 snapshots.
+        const TIMELINE_TRIM = 30;
+        const trimmedTimeline = {};
         Object.keys(analysisTimeline).forEach(sym => {
             const history = analysisTimeline[sym];
             if (Array.isArray(history) && history.length > 0) {
                 latestAnalysis[sym] = history[history.length - 1];
+                trimmedTimeline[sym] = history.length > TIMELINE_TRIM
+                    ? history.slice(-TIMELINE_TRIM)
+                    : history;
+            } else {
+                trimmedTimeline[sym] = history;
             }
         });
 
         // [AUDIT] Final broadcast packet - optimized
-        io.emit('update', { 
-            coins: displayed, 
-            activePositions: Array.from(positions.values()), 
-            botPositions, 
-            botSells, 
-            openOrders, 
+        io.emit('update', {
+            coins: displayed,
+            activePositions: Array.from(positions.values()),
+            botPositions,
+            botSells,
+            openOrders,
             tradeHistory,
             orderLists,
-            balances, 
-            stats, 
+            balances,
+            stats,
             behavioralSentiment,
             volumeScores,
             scalperSignals,
-            profitTimeline: profitReachedRaw, 
+            profitTimeline: profitReachedRaw,
             analysisTimeline: latestAnalysis, // Send only latest for most coins
-            fullTimeline: analysisTimeline,   // Keep full for detailed views if needed
+            fullTimeline: trimmedTimeline,    // Trimmed to last 30 snapshots/coin
             virtualPositions,
             virtualHistory,
             tradingConfig,
