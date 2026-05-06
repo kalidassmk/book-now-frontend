@@ -246,12 +246,16 @@
       background: var(--vs-panel);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      overflow: hidden;     /* contain the table inside the rounded card */
+      max-height: 60vh;     /* fixed height, scroll inside */
+      overflow-y: auto;
       overflow: hidden;
     }
     .vs-table { width: 100%; border-collapse: collapse; font-size: 11px; }
-    .vs-table thead th { position: sticky; top: 0; z-index: 1; }
-    .vs-table th { text-align: left; padding: 8px 12px; font-size: 9px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1px solid var(--border); background: var(--vs-panel); }
+    .vs-table thead th {
+      position: sticky; top: 0; z-index: 2;
+      background: var(--vs-panel-2);   /* opaque — rows don't show through while scrolling */
+    }
+    .vs-table th { text-align: left; padding: 8px 12px; font-size: 9px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1px solid var(--border); }
     .vs-table th.right { text-align: right; }
     .vs-table td { padding: 7px 12px; border-bottom: 1px solid var(--border); font-family: var(--mono); }
     .vs-table td.right { text-align: right; }
