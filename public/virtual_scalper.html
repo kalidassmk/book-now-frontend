@@ -125,15 +125,24 @@
     .vs-kpi .sub strong { color: var(--text); font-family: var(--mono); }
 
     /* ── Main grid (fills remaining viewport) ──────────────────────────── */
+    /* Open Positions on top (auto-height horizontal-scroll row),
+       Reasons + History side-by-side filling the rest. No more giant chart. */
     .vs-main {
       display: grid;
-      grid-template-columns: 3fr 2fr;
+      grid-template-rows: auto 1fr;
       gap: 10px;
       min-height: 0;
     }
-    .vs-main-left, .vs-main-right { display: grid; gap: 10px; min-height: 0; }
-    .vs-main-left  { grid-template-rows: 1fr auto; }
-    .vs-main-right { grid-template-rows: auto 1fr; }
+    .vs-main-bottom {
+      display: grid;
+      grid-template-columns: 1fr 2fr;
+      gap: 10px;
+      min-height: 0;
+    }
+    @media (max-width: 1100px) {
+      /* Stack on narrower viewports so nothing gets cut off */
+      .vs-main-bottom { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+    }
 
     /* ── ③+④ Charts ────────────────────────────────────────────────────── */
     .vs-card-chart {
@@ -318,31 +327,24 @@
     </div>
   </div>
 
-  <!-- Main grid: left = equity + positions, right = reasons + history -->
+  <!-- Main grid: positions row at top, reasons + history side-by-side below -->
   <div class="vs-main">
 
-    <!-- LEFT: equity curve (top) + open positions (bottom) -->
-    <div class="vs-main-left">
-      <div class="vs-card-chart">
-        <h3>Cumulative Net P&L</h3>
-        <div class="desc">Each point = one closed trade in chronological order.</div>
-        <svg id="vs-equity" viewBox="0 0 700 220" preserveAspectRatio="none"></svg>
+    <!-- TOP: Open Positions (horizontal-scroll cards) -->
+    <div class="vs-section">
+      <div class="vs-section-head">
+        <h2>Open Positions</h2>
+        <span id="vs-open-badge" class="badge">0</span>
+        <span class="meta">Unrealised PnL — refreshes on every WS tick</span>
       </div>
-
-      <div class="vs-section">
-        <div class="vs-section-head">
-          <h2>Open Positions</h2>
-          <span id="vs-open-badge" class="badge">0</span>
-          <span class="meta">Unrealised PnL — refreshes on every WS tick</span>
-        </div>
-        <div id="vs-pos-grid" class="vs-pos-grid">
-          <div class="empty">Loading…</div>
-        </div>
+      <div id="vs-pos-grid" class="vs-pos-grid">
+        <div class="empty">Loading…</div>
       </div>
     </div>
 
-    <!-- RIGHT: exit reasons (top) + trade history (bottom) -->
-    <div class="vs-main-right">
+    <!-- BOTTOM: Exit Reasons (left) + Trade History (right) -->
+    <div class="vs-main-bottom">
+
       <div class="vs-card-chart">
         <h3>Exit Reasons</h3>
         <div class="desc">Where trades end up — count + avg net PnL.</div>
@@ -617,9 +619,6 @@
       $('vs-kpi-hold-sub').innerHTML = (summary.closedCount || 0) > 0
           ? `Range <strong>${fmtDur(extra.holdMin)}</strong>–<strong>${fmtDur(extra.holdMax)}</strong>`
           : '—';
-
-      // Equity curve
-      renderEquity(extra.equity);
 
       // Reasons list
       const reasonsEl = $('vs-reasons-list');
