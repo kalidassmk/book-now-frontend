@@ -246,8 +246,17 @@
       background: var(--vs-panel);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      max-height: 60vh;     /* fixed height, scroll inside */
+      display: block;
+      /* Use a hard height (not max-height) so the scroll box always
+         has explicit size — Safari/Chrome occasionally fail to engage
+         scroll on a max-height flex child. overscroll-behavior keeps
+         the scroll local so wheel events don't bubble to the page. */
+      height: 60vh;
+      max-height: 600px;
       overflow-y: auto;
+      overflow-x: hidden;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
       overflow: hidden;
     }
     .vs-table { width: 100%; border-collapse: collapse; font-size: 11px; }
