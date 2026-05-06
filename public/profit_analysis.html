@@ -1,384 +1,676 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Success Radar — Profit Intelligence</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        bg: '#0b0e11',
-                        card: '#1e2329',
-                        brand: '#f0b90b',
-                        border: 'rgba(255, 255, 255, 0.08)',
-                        success: '#0ecb81',
-                        danger: '#f6465d'
-                    }
-                }
-            }
-        }
-    </script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        body { font-family: 'Inter', sans-serif; background-color: #0b0e11; color: #eaecef; }
-        .mono { font-family: 'JetBrains Mono', monospace; }
-        .glass { background: rgba(30, 35, 41, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
-        .gradient-brand { background: linear-gradient(135deg, #f0b90b 0%, #f8d33a 100%); }
-        .chart-container { position: relative; height: 180px; width: 100%; }
-        .tab-btn.active { background: rgba(240, 185, 11, 0.1); color: #f0b90b; border-color: #f0b90b; }
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
-        
-        .fade-in { animation: fadeIn 0.4s ease-out; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-    </style>
+  <!--
+    public/profit_analysis.html — Profit Watch (v2 redesign).
+
+    Live coins currently above the +$0.20 profit threshold (vs base
+    price), ranked by signal strength. Replaces the previous "Success
+    Intelligence Radar" 2-col card grid with a dense, ranked-row list
+    + tier classification + click-to-expand trajectory chart.
+
+    Data sources (unchanged from v1):
+      data.fullTimeline    → ANALYSIS_020_TIMELINE Redis hash
+                             { symbol → [snapshots] }
+      data.profitTimeline  → PROFIT_REACHED_020 Redis hash
+                             { symbol → {basePrice, currentPrice, profit, …} }
+      data.priceHash       → CURRENT_PRICE hash
+                             { symbol → {price, …} }
+  -->
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Profit Watch — BookNow</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/css/dashboard.css"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --pw-panel:    #131a2c;
+      --pw-panel-2:  #1a2238;
+      --pw-border-2: #283b5d;
+      --pw-text-2:   #b8c2d6;
+      --pw-green-2:  #34d399;
+      --pw-red-2:    #f87171;
+      --pw-radius-sm: 10px;
+    }
+    body { font-family: 'Inter', system-ui, sans-serif; margin: 0; }
+    .pw-page { max-width: 1500px; margin: 0 auto; padding: 28px 32px 60px; color: var(--text); }
+
+    /* ── Topbar ────────────────────────────────────────────────────────── */
+    .pw-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+    .pw-topbar h1 { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; margin: 0; }
+    .pw-topbar .sub { color: var(--dim); font-size: 12px; margin-top: 2px; }
+    .pw-topbar .right { display: flex; gap: 16px; align-items: center; font-size: 12px; }
+    .pw-topbar a { color: var(--blue); text-decoration: none; }
+    .pw-topbar a:hover { text-decoration: underline; }
+    .pw-live { display: inline-flex; align-items: center; gap: 6px; color: var(--green); font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; }
+    .pw-live::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pw-pulse 1.5s ease-in-out infinite; }
+    .pw-live.off { color: var(--dim); }
+    .pw-live.off::before { background: var(--dim); animation: none; }
+    @keyframes pw-pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    /* ── Top summary bar ───────────────────────────────────────────────── */
+    .pw-summary {
+      background: linear-gradient(135deg, var(--pw-panel) 0%, var(--pw-panel-2) 100%);
+      border: 1px solid var(--pw-border-2);
+      border-radius: var(--radius);
+      padding: 22px 28px;
+      margin-bottom: 20px;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 32px;
+      align-items: center;
+    }
+    .pw-summary .total { display: flex; align-items: center; gap: 16px; }
+    .pw-summary .total-num { font-family: var(--mono); font-size: 36px; font-weight: 800; color: var(--text); line-height: 1; }
+    .pw-summary .total-lbl { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; line-height: 1.3; }
+    .pw-tiers { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
+    .pw-tier-stat { display: flex; align-items: baseline; gap: 6px; }
+    .pw-tier-stat .icon { font-size: 16px; }
+    .pw-tier-stat .num { font-family: var(--mono); font-size: 20px; font-weight: 700; }
+    .pw-tier-stat .lbl { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
+    .pw-tier-stat.hot  .num { color: #fb923c; }
+    .pw-tier-stat.watch .num { color: #fbbf24; }
+    .pw-tier-stat.fresh .num { color: var(--pw-green-2); }
+    .pw-tier-stat.cool  .num { color: var(--pw-red-2); }
+    .pw-tier-stat.stale .num { color: var(--dim); }
+    .pw-summary .right { margin-left: auto; text-align: right; }
+    .pw-summary .right .v { font-family: var(--mono); font-size: 14px; font-weight: 700; }
+    .pw-summary .right .l { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
+    .pw-summary .strongest { color: var(--pw-green-2); }
+
+    /* ── Filter chips ──────────────────────────────────────────────────── */
+    .pw-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    .pw-chip {
+      background: var(--pw-panel);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 14px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--pw-text-2);
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.15s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .pw-chip:hover { border-color: var(--pw-border-2); color: var(--text); }
+    .pw-chip.active { background: rgba(59,130,246,0.12); color: var(--blue); border-color: var(--blue); }
+    .pw-chip .n { color: var(--dim); margin-left: 4px; font-family: var(--mono); }
+    .pw-chip.active .n { color: var(--blue); }
+
+    /* ── Rows ──────────────────────────────────────────────────────────── */
+    .pw-rows { display: flex; flex-direction: column; gap: 6px; }
+    .pw-empty {
+      padding: 60px 20px;
+      text-align: center;
+      color: var(--dim);
+      font-size: 13px;
+      background: var(--pw-panel);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius);
+    }
+    .pw-row {
+      background: var(--pw-panel);
+      border: 1px solid var(--border);
+      border-radius: var(--pw-radius-sm);
+      overflow: hidden;
+      transition: border-color 0.15s;
+    }
+    .pw-row:hover { border-color: var(--pw-border-2); }
+    .pw-row.expanded { border-color: var(--blue); }
+
+    .pw-row-main {
+      display: grid;
+      grid-template-columns:
+        28px            /* tier icon */
+        1.5fr           /* symbol + meta */
+        90px            /* % from base */
+        90px            /* sparkline */
+        1.5fr           /* sequence info */
+        80px            /* time above */
+        100px           /* match score */
+        20px;           /* expand chevron */
+      gap: 14px;
+      align-items: center;
+      padding: 12px 16px;
+      cursor: pointer;
+    }
+    .pw-tier-icon { font-size: 18px; text-align: center; }
+    .pw-row-sym { font-size: 14px; font-weight: 700; letter-spacing: 0.02em; }
+    .pw-row-tier-label { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 2px; font-weight: 700; }
+    .pw-row-tier-label.hot  { color: #fb923c; }
+    .pw-row-tier-label.watch { color: #fbbf24; }
+    .pw-row-tier-label.fresh { color: var(--pw-green-2); }
+    .pw-row-tier-label.cool  { color: var(--pw-red-2); }
+    .pw-row-tier-label.stale { color: var(--dim); }
+    .pw-row-pct { font-family: var(--mono); font-size: 18px; font-weight: 700; text-align: right; }
+    .pw-row-pct.green { color: var(--pw-green-2); }
+    .pw-row-pct.red   { color: var(--pw-red-2); }
+    .pw-spark { width: 90px; height: 28px; }
+    .pw-row-seq { font-size: 11px; }
+    .pw-row-seq .seq-strong { font-weight: 700; font-family: var(--mono); }
+    .pw-row-seq .seq-strong.green { color: var(--pw-green-2); }
+    .pw-row-seq .seq-strong.red   { color: var(--pw-red-2); }
+    .pw-row-seq .seq-meta { font-size: 10px; color: var(--dim); margin-top: 2px; }
+    .pw-row-time { font-family: var(--mono); font-size: 12px; color: var(--pw-text-2); text-align: right; }
+    .pw-row-match { font-family: var(--mono); font-size: 12px; text-align: right; color: var(--dim); }
+    .pw-row-chevron { color: var(--dim); transition: transform 0.15s; user-select: none; }
+    .pw-row.expanded .pw-row-chevron { transform: rotate(90deg); color: var(--blue); }
+
+    /* ── Expanded detail ───────────────────────────────────────────────── */
+    .pw-row-detail {
+      border-top: 1px solid var(--border);
+      padding: 18px 16px;
+      display: none;
+      grid-template-columns: 2fr 1fr;
+      gap: 18px;
+      background: rgba(255,255,255,0.01);
+    }
+    .pw-row.expanded .pw-row-detail { display: grid; }
+    .pw-detail-chart { height: 240px; position: relative; }
+    .pw-detail-chart canvas { width: 100% !important; height: 100% !important; }
+    .pw-detail-info h4 { font-size: 11px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; margin: 0 0 10px; }
+    .pw-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+    .pw-info-item .l { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; }
+    .pw-info-item .v { font-family: var(--mono); font-size: 13px; color: var(--text); margin-top: 2px; }
+    .pw-info-item .v.green { color: var(--pw-green-2); }
+    .pw-info-item .v.red   { color: var(--pw-red-2); }
+    .pw-seq-bars { display: flex; gap: 2px; margin-top: 8px; align-items: end; height: 40px; }
+    .pw-seq-bars .bar { flex: 1; background: var(--blue); opacity: 0.5; border-radius: 2px 2px 0 0; min-height: 2px; }
+    .pw-seq-bars .bar.green { background: var(--green); opacity: 0.8; }
+    .pw-seq-bars .bar.red   { background: var(--red); opacity: 0.8; }
+
+    /* ── Last-update pill ──────────────────────────────────────────────── */
+    .pw-updated { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+  </style>
 </head>
-<body class="overflow-x-hidden">
+<body>
+<div class="pw-page">
 
-    <!-- ── Sidebar ── -->
-    <aside class="fixed left-0 top-0 h-screen w-64 glass border-r z-50">
-        <div class="p-6 flex flex-col h-full">
-            <div class="flex items-center gap-3 mb-10">
-                <div class="w-10 h-10 gradient-brand rounded-xl flex items-center justify-center text-bg font-black text-xl shadow-lg">P</div>
-                <h1 class="text-xl font-bold tracking-tight">Success <span class="text-brand">RADAR</span></h1>
-            </div>
+  <!-- Top bar -->
+  <div class="pw-topbar">
+    <div>
+      <h1>Profit Watch</h1>
+      <div class="sub">Live coins above the +$0.20 profit threshold — ranked by signal strength</div>
+    </div>
+    <div class="right">
+      <span class="pw-updated" id="pw-updated">—</span>
+      <span id="pw-live" class="pw-live off">Connecting…</span>
+      <a href="/">← Scanner</a>
+      <a href="/intelligence_hub.html">Intel Hub</a>
+    </div>
+  </div>
 
-            <nav class="flex-1 space-y-1">
-                <a href="/profit_analysis.html" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-all">
-                    <i data-lucide="trending-up" class="w-5 h-5"></i>
-                    Success Radar
-                </a>
-                <a href="/intelligence_hub.html" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-all">
-                    <i data-lucide="brain-circuit" class="w-5 h-5"></i>
-                    Intel Hub
-                </a>
-                <a href="#" class="nav-link flex items-center gap-3 px-4 py-3 rounded-xl bg-brand/10 text-brand font-medium">
-                    <i data-lucide="trending-up" class="w-5 h-5"></i>
-                    Profit Analysis
-                </a>
-            </nav>
+  <!-- Top summary bar -->
+  <div class="pw-summary">
+    <div class="total">
+      <div>
+        <div class="total-num" id="pw-total">0</div>
+      </div>
+      <div>
+        <div class="total-lbl">Coins<br/>above target</div>
+      </div>
+    </div>
+    <div class="pw-tiers" id="pw-tiers">
+      <div class="pw-tier-stat hot"><span class="icon">🔥</span><span class="num" id="pw-n-hot">0</span><span class="lbl">Hot</span></div>
+      <div class="pw-tier-stat watch"><span class="icon">👀</span><span class="num" id="pw-n-watch">0</span><span class="lbl">Watch</span></div>
+      <div class="pw-tier-stat fresh"><span class="icon">🟢</span><span class="num" id="pw-n-fresh">0</span><span class="lbl">Fresh</span></div>
+      <div class="pw-tier-stat cool"><span class="icon">⚠</span><span class="num" id="pw-n-cool">0</span><span class="lbl">Cooling</span></div>
+      <div class="pw-tier-stat stale"><span class="icon">❄</span><span class="num" id="pw-n-stale">0</span><span class="lbl">Stale</span></div>
+      <div class="right">
+        <div class="v" id="pw-avg-gain">—</div>
+        <div class="l">Avg gain from base</div>
+      </div>
+      <div class="right">
+        <div class="v strongest" id="pw-strongest">—</div>
+        <div class="l">Strongest</div>
+      </div>
+    </div>
+  </div>
 
-            <!-- Global View Controls -->
-            <div class="mt-4 pt-4 border-t border-white/5">
-                <p class="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-3">Global View Mode</p>
-                <div class="grid grid-cols-1 gap-2">
-                    <button onclick="setViewMode('chart')" class="global-view-btn tab-btn active flex items-center gap-2 px-3 py-2 rounded-lg border border-white/5 text-xs transition-all">
-                        <i data-lucide="line-chart" class="w-3 h-3"></i> Trend Charts
-                    </button>
-                    <button onclick="setViewMode('bar')" class="global-view-btn tab-btn flex items-center gap-2 px-3 py-2 rounded-lg border border-white/5 text-xs transition-all">
-                        <i data-lucide="bar-chart-2" class="w-3 h-3"></i> Volume Bars
-                    </button>
-                    <button onclick="setViewMode('text')" class="global-view-btn tab-btn flex items-center gap-2 px-3 py-2 rounded-lg border border-white/5 text-xs transition-all">
-                        <i data-lucide="file-text" class="w-3 h-3"></i> Data Grid
-                    </button>
-                </div>
-            </div>
+  <!-- Filter chips -->
+  <div class="pw-chips" id="pw-chips">
+    <span class="pw-chip active" data-filter="all">All <span class="n">0</span></span>
+    <span class="pw-chip" data-filter="HOT">🔥 HOT <span class="n">0</span></span>
+    <span class="pw-chip" data-filter="WATCH">👀 WATCH <span class="n">0</span></span>
+    <span class="pw-chip" data-filter="FRESH">🟢 FRESH <span class="n">0</span></span>
+    <span class="pw-chip" data-filter="COOLING">⚠ COOLING <span class="n">0</span></span>
+    <span class="pw-chip" data-filter="STALE">❄ STALE <span class="n">0</span></span>
+  </div>
 
-            <div class="mt-auto pt-6 border-t border-white/5">
-                <div class="flex items-center gap-3 p-3 rounded-xl bg-white/5">
-                    <div id="ws-dot" class="w-2 h-2 rounded-full bg-danger animate-pulse"></div>
-                    <div>
-                        <p class="text-xs font-semibold text-white">Live Intel</p>
-                        <p class="text-[10px] text-gray-500" id="ws-text">Disconnected</p>
-                    </div>
-                </div>
-            </div>
+  <!-- Ranked rows -->
+  <div id="pw-rows" class="pw-rows">
+    <div class="pw-empty">Loading…</div>
+  </div>
+
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  // ── State ─────────────────────────────────────────────────────────────
+  let activeFilter = 'all';
+  let lastTimeline = {};   // symbol → [snapshots]
+  let lastBase     = {};   // symbol → basePrice
+  let lastPrice    = {};   // symbol → currentPrice
+  const expandedSymbols = new Set();
+  const charts = {};       // symbol → Chart instance (only for expanded rows)
+
+  // ── Helpers ──────────────────────────────────────────────────────────
+  const $ = id => document.getElementById(id);
+  const fmtPct = (n, decimals = 2) => (n == null || isNaN(n))
+      ? '—' : `${n >= 0 ? '+' : ''}${n.toFixed(decimals)}%`;
+  const fmtDur = s => {
+      if (s == null || isNaN(s) || s < 0) return '—';
+      if (s < 60) return `${Math.round(s)}s`;
+      if (s < 3600) return `${Math.floor(s/60)}m ${Math.round(s%60).toString().padStart(2,'0')}s`;
+      return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+  };
+  const fmtPrice = n => (n == null || isNaN(n)) ? '—'
+      : (n < 0.01 ? n.toFixed(8) : n < 1 ? n.toFixed(6) : n.toFixed(4));
+
+  // ── Tier classification ───────────────────────────────────────────────
+  // Maps a coin's latest snapshot + duration to one of HOT/WATCH/FRESH/
+  // COOLING/STALE plus a numeric sort score (higher = ranked higher).
+  function classify(symbol, snaps, basePrice, currPrice, durationSec) {
+      const last = snaps[snaps.length - 1] || {};
+      const seq = last.sequence_report || {};
+      const seqType  = seq.type;
+      const volChg   = seq.vol_change || 0;
+      const priceImp = seq.price_impact || 0;
+      const overheated = !!last.is_overheated;
+      const microSig = last.micro_signal;
+      const gradualUp = !!last.volume_gradual_inc;
+      const gainPct = (basePrice && currPrice) ? ((currPrice / basePrice) - 1) * 100 : 0;
+
+      // Has the coin shown any sign of cooling in the captured window?
+      const sawExhaustion = snaps.some(s => s.micro_signal === 'EXHAUSTION_EXIT');
+
+      // STALE — flat for 10+ minutes
+      const recent = snaps.slice(-10);
+      const recentRange = recent.length > 1
+          ? Math.max(...recent.map(s => s.price || 0)) - Math.min(...recent.map(s => s.price || 0))
+          : 0;
+      const flatPct = basePrice ? (recentRange / basePrice) * 100 : 0;
+
+      // FRESH — under 5 min above threshold
+      if (durationSec != null && durationSec < 300) {
+          return { tier: 'FRESH', icon: '🟢', label: 'Fresh',
+                   score: 60 + Math.min(20, gainPct * 4) };
+      }
+
+      // COOLING — bearish sequence with vol drop, OR exhaustion was emitted
+      if ((seqType === 'bearish_seq' && volChg <= -10) || sawExhaustion) {
+          return { tier: 'COOLING', icon: '⚠', label: 'Cooling',
+                   score: 40 - Math.min(15, Math.abs(volChg)) };
+      }
+
+      // STALE — flat for 10+ min
+      if (durationSec != null && durationSec >= 600 && flatPct < 0.05) {
+          return { tier: 'STALE', icon: '❄', label: 'Stale', score: 20 };
+      }
+
+      // HOT — bullish sequence + strong volume + not overheated
+      if (seqType === 'bullish_seq' && volChg >= 15 && !overheated) {
+          return { tier: 'HOT', icon: '🔥', label: 'Hot',
+                   score: 100 + Math.min(30, volChg) + Math.min(20, gainPct * 5)
+                          - (microSig === 'OVERHEATED_NO_BUY' ? 30 : 0) };
+      }
+
+      // WATCH — gradual volume increase or early accumulation
+      if (gradualUp || microSig === 'EARLY_ACCUMULATION') {
+          return { tier: 'WATCH', icon: '👀', label: 'Watch',
+                   score: 80 + Math.min(15, volChg) };
+      }
+
+      // Otherwise default to FRESH-ish if positive gain, else WATCH
+      return gainPct > 0
+          ? { tier: 'FRESH', icon: '🟢', label: 'Fresh', score: 50 + gainPct }
+          : { tier: 'WATCH', icon: '👀', label: 'Watch', score: 70 };
+  }
+
+  // ── Sparkline ─────────────────────────────────────────────────────────
+  function buildSparkline(snaps, color) {
+      const points = snaps.slice(-30).map(s => s.price).filter(p => p != null);
+      if (points.length < 2) return '';
+      const w = 90, h = 28, pad = 2;
+      const lo = Math.min(...points), hi = Math.max(...points);
+      const range = (hi - lo) || 1;
+      const x = i => (i / (points.length - 1)) * (w - pad * 2) + pad;
+      const y = v => h - pad - ((v - lo) / range) * (h - pad * 2);
+      const d = points.map((v, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+      return `<svg class="pw-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+        <path d="${d}" stroke="${color}" stroke-width="1.5" fill="none"/>
+      </svg>`;
+  }
+
+  // ── Sequence summary string ───────────────────────────────────────────
+  function seqSummary(snap) {
+      const seq = (snap || {}).sequence_report || {};
+      const t = seq.type;
+      const vc = seq.vol_change;
+      const pi = seq.price_impact;
+      if (t === 'bullish_seq') {
+          return {
+              line1: `<span class="seq-strong green">3× VOL ↑ ${vc >= 0 ? '+' : ''}${vc?.toFixed(1) ?? '?'}%</span>`,
+              line2: `Price impact ${pi >= 0 ? '+' : ''}${pi?.toFixed(2) ?? '?'}%${snap.is_overheated ? ' • overheated' : ''}`,
+          };
+      }
+      if (t === 'bearish_seq') {
+          return {
+              line1: `<span class="seq-strong red">3× VOL ↓ ${vc?.toFixed(1) ?? '?'}%</span>`,
+              line2: `Price impact ${pi >= 0 ? '+' : ''}${pi?.toFixed(2) ?? '?'}%`,
+          };
+      }
+      if (snap?.volume_gradual_inc) {
+          return { line1: `<span class="seq-strong green">Gradual ↑</span>`, line2: 'Volume rising steadily' };
+      }
+      if (snap?.micro_signal === 'EXHAUSTION_EXIT') {
+          return { line1: `<span class="seq-strong red">Exhaustion exit</span>`, line2: 'Volume collapsing' };
+      }
+      if (snap?.micro_signal === 'EARLY_ACCUMULATION') {
+          return { line1: `<span class="seq-strong">Early accumulation</span>`, line2: 'Building, not yet a SCALP signal' };
+      }
+      return { line1: `<span style="color: var(--dim);">No sequence</span>`, line2: '' };
+  }
+
+  // ── Per-row detail (chart + info grid) ────────────────────────────────
+  function buildDetailHtml(symbol, snaps, basePrice, currPrice, classification, durationSec) {
+      const last = snaps[snaps.length - 1] || {};
+      const first = snaps[0] || {};
+      const drawdown = (() => {
+          if (!basePrice || !snaps.length) return 0;
+          const lo = Math.min(...snaps.map(s => s.price || basePrice));
+          return ((lo / basePrice) - 1) * 100;
+      })();
+      const peak = (() => {
+          if (!basePrice || !snaps.length) return 0;
+          const hi = Math.max(...snaps.map(s => s.price || basePrice));
+          return ((hi / basePrice) - 1) * 100;
+      })();
+
+      // Last 4 snapshots for the volume sequence visual.
+      const last4 = snaps.slice(-4);
+      const maxVol = Math.max(1, ...last4.map(s => s.volume || 0));
+      const seqBars = last4.map((s, i) => {
+          const h = ((s.volume || 0) / maxVol) * 100;
+          const cls = i === 0 ? '' : (s.volume > last4[i-1].volume ? 'green' : 'red');
+          return `<div class="bar ${cls}" style="height: ${h.toFixed(1)}%;" title="${(s.volume || 0).toFixed(0)}"></div>`;
+      }).join('');
+
+      return `
+        <div class="pw-detail-chart">
+          <canvas id="pw-chart-${symbol}"></canvas>
         </div>
-    </aside>
+        <div class="pw-detail-info">
+          <h4>Snapshot</h4>
+          <div class="pw-info-grid">
+            <div class="pw-info-item"><div class="l">Base price</div><div class="v">${fmtPrice(basePrice)}</div></div>
+            <div class="pw-info-item"><div class="l">Current</div><div class="v">${fmtPrice(currPrice)}</div></div>
+            <div class="pw-info-item"><div class="l">Peak</div><div class="v green">${fmtPct(peak)}</div></div>
+            <div class="pw-info-item"><div class="l">Drawdown</div><div class="v ${drawdown < 0 ? 'red' : ''}">${fmtPct(drawdown)}</div></div>
+            <div class="pw-info-item"><div class="l">Time above</div><div class="v">${fmtDur(durationSec)}</div></div>
+            <div class="pw-info-item"><div class="l">Snapshots</div><div class="v">${snaps.length}</div></div>
+            <div class="pw-info-item"><div class="l">Micro signal</div><div class="v">${last.micro_signal || '—'}</div></div>
+            <div class="pw-info-item"><div class="l">Overheated</div><div class="v ${last.is_overheated ? 'red' : ''}">${last.is_overheated ? 'YES' : 'no'}</div></div>
+          </div>
+          <h4 style="margin-top: 16px;">Last 4 candles — volume</h4>
+          <div class="pw-seq-bars">${seqBars}</div>
+        </div>
+      `;
+  }
 
-    <!-- ── Main Content ── -->
-    <main class="ml-64 p-8 min-h-screen">
-        <header class="mb-10 flex justify-between items-end">
+  // ── Render: a single row ──────────────────────────────────────────────
+  function buildRowHtml(symbol, snaps, basePrice, currPrice, classification, durationSec, gainPct) {
+      const last = snaps[snaps.length - 1] || {};
+      const seq = seqSummary(last);
+      const sparkColor = gainPct >= 0 ? '#34d399' : '#f87171';
+      const tierLower = classification.tier.toLowerCase();
+      const expandedAttr = expandedSymbols.has(symbol) ? 'expanded' : '';
+
+      return `
+        <div class="pw-row ${expandedAttr}" data-symbol="${symbol}" data-tier="${classification.tier}">
+          <div class="pw-row-main">
+            <div class="pw-tier-icon">${classification.icon}</div>
             <div>
-                <h2 class="text-3xl font-black text-white mb-1">Success Intelligence Radar</h2>
-                <p class="text-gray-500">Multi-dimensional tracking for coins that hit the .20 profit target.</p>
+              <div class="pw-row-sym">${symbol}</div>
+              <div class="pw-row-tier-label ${tierLower === 'hot' ? 'hot' : tierLower === 'watch' ? 'watch' : tierLower === 'fresh' ? 'fresh' : tierLower === 'cooling' ? 'cool' : 'stale'}">${classification.label}</div>
             </div>
-            <div class="flex gap-4">
-                <div class="glass px-4 py-2 rounded-2xl flex flex-col items-end">
-                    <span class="text-[10px] font-bold text-gray-500 uppercase">Last Update</span>
-                    <span class="text-sm font-bold text-brand mono" id="last-update-time">--:--:--</span>
-                </div>
+            <div class="pw-row-pct ${gainPct >= 0 ? 'green' : 'red'}">${fmtPct(gainPct)}</div>
+            <div>${buildSparkline(snaps, sparkColor)}</div>
+            <div class="pw-row-seq">
+              <div>${seq.line1}</div>
+              <div class="seq-meta">${seq.line2 || '&nbsp;'}</div>
             </div>
-        </header>
-
-        <!-- Summary Stats -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            <div class="glass p-6 rounded-3xl border-l-4 border-brand">
-                <div class="flex justify-between items-center mb-2">
-                    <p class="text-gray-500 text-xs font-bold uppercase tracking-widest">Winning Assets</p>
-                    <i data-lucide="award" class="w-4 h-4 text-brand"></i>
-                </div>
-                <h3 class="text-4xl font-black text-white mono" id="stat-count">0</h3>
-            </div>
-            <div class="glass p-6 rounded-3xl border-l-4 border-success">
-                <div class="flex justify-between items-center mb-2">
-                    <p class="text-gray-500 text-xs font-bold uppercase tracking-widest">Growth Bias</p>
-                    <i data-lucide="trending-up" class="w-4 h-4 text-success"></i>
-                </div>
-                <h3 class="text-4xl font-black text-success mono" id="stat-vol-bias">0%</h3>
-            </div>
-            <div class="glass p-6 rounded-3xl border-l-4 border-blue-500">
-                <div class="flex justify-between items-center mb-2">
-                    <p class="text-gray-500 text-xs font-bold uppercase tracking-widest">Avg Price Change</p>
-                    <i data-lucide="activity" class="w-4 h-4 text-blue-500"></i>
-                </div>
-                <h3 class="text-4xl font-black text-white mono" id="stat-avg-change">0.00</h3>
-            </div>
+            <div class="pw-row-time">${fmtDur(durationSec)}</div>
+            <div class="pw-row-match">—</div>
+            <div class="pw-row-chevron">›</div>
+          </div>
+          <div class="pw-row-detail">
+            ${expandedSymbols.has(symbol) ? buildDetailHtml(symbol, snaps, basePrice, currPrice, classification, durationSec) : ''}
+          </div>
         </div>
+      `;
+  }
 
-        <!-- Analysis Grid -->
-        <div id="analysis-grid" class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-12">
-            <!-- Asset Cards -->
-        </div>
+  // ── Render the full ranked list ───────────────────────────────────────
+  function render() {
+      const symbols = Object.keys(lastTimeline).filter(s => (lastTimeline[s] || []).length > 0);
+      const now = Date.now() / 1000;
 
-        <!-- Empty State -->
-        <div id="empty-state" class="glass p-20 rounded-3xl flex flex-col items-center justify-center text-gray-600 hidden">
-            <i data-lucide="radar" class="w-16 h-16 mb-6 animate-ping"></i>
-            <h3 class="text-xl font-bold text-white mb-2">Searching Market...</h3>
-            <p class="text-sm">No coins have reached the $0.20 profit milestone in this cycle yet.</p>
-        </div>
-    </main>
+      // Build a row spec per symbol with classification + score.
+      const specs = symbols.map(s => {
+          const snaps = lastTimeline[s] || [];
+          const basePrice = lastBase[s] || 0;
+          const lastSnap  = snaps[snaps.length - 1] || {};
+          const currPrice = lastPrice[s] || lastSnap.price || 0;
+          const firstTs   = snaps[0]?.timestamp || lastSnap.timestamp || now;
+          const durationSec = Math.max(0, now - firstTs);
+          const gainPct = (basePrice && currPrice) ? ((currPrice / basePrice) - 1) * 100 : 0;
+          const cls = classify(s, snaps, basePrice, currPrice, durationSec);
+          return { symbol: s, snaps, basePrice, currPrice, classification: cls, durationSec, gainPct };
+      });
 
-    <script src="/socket.io/socket.io.js"></script>
-    <script>
-        let currentViewMode = 'chart'; // 'chart', 'bar', 'text'
-        let lastKnownData = null;
-        const charts = {};
+      specs.sort((a, b) => b.classification.score - a.classification.score);
 
-        function setViewMode(mode) {
-            currentViewMode = mode;
-            // Update sidebar buttons
-            document.querySelectorAll('.global-view-btn').forEach((btn, idx) => {
-                const modes = ['chart', 'bar', 'text'];
-                btn.classList.toggle('active', modes[idx] === mode);
-            });
-            // Re-render
-            if (lastKnownData) renderData(lastKnownData);
-        }
+      // Tier counts for the top bar + chips
+      const counts = { HOT: 0, WATCH: 0, FRESH: 0, COOLING: 0, STALE: 0 };
+      specs.forEach(spec => { counts[spec.classification.tier]++; });
 
-        function initCharts(symbol, data, mode) {
-            const canvas = document.getElementById(`chart-${symbol}`);
-            if (!canvas) return;
-            const ctx = canvas.getContext('2d');
-            if (charts[symbol]) charts[symbol].destroy();
+      $('pw-total').textContent = specs.length;
+      $('pw-n-hot').textContent   = counts.HOT;
+      $('pw-n-watch').textContent = counts.WATCH;
+      $('pw-n-fresh').textContent = counts.FRESH;
+      $('pw-n-cool').textContent  = counts.COOLING;
+      $('pw-n-stale').textContent = counts.STALE;
 
-            const labels = data.map(d => d.time.split(' ')[1]);
-            const prices = data.map(d => d.price);
-            const volumes = data.map(d => d.volume);
-            const priceChanges = data.map(d => d.price_increase);
+      const avgGain = specs.length
+          ? specs.reduce((s, sp) => s + sp.gainPct, 0) / specs.length
+          : 0;
+      $('pw-avg-gain').textContent = specs.length ? fmtPct(avgGain) : '—';
+      $('pw-avg-gain').classList.toggle('strongest', avgGain >= 0);
 
-            const config = {
-                type: mode === 'bar' ? 'bar' : 'line',
-                data: {
-                    labels: labels,
-                    datasets: []
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    interaction: { intersect: false, mode: 'index' },
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        x: { display: false },
-                        y: { position: 'left', display: false },
-                        y1: { position: 'right', display: false, grid: { display: false } }
-                    }
-                }
-            };
+      const strongest = specs.reduce((b, sp) => sp.gainPct > (b?.gainPct ?? -Infinity) ? sp : b, null);
+      $('pw-strongest').textContent = strongest
+          ? `${strongest.symbol} ${fmtPct(strongest.gainPct)}`
+          : '—';
 
-            if (mode === 'chart') {
-                config.data.datasets = [
-                    {
-                        label: 'Price',
-                        data: prices,
-                        borderColor: '#f0b90b',
-                        borderWidth: 2,
-                        pointRadius: 0,
-                        tension: 0.3,
-                        yAxisID: 'y'
-                    },
-                    {
-                        label: 'Volume',
-                        data: volumes,
-                        backgroundColor: 'rgba(14, 203, 129, 0.1)',
-                        borderColor: 'rgba(14, 203, 129, 0.4)',
-                        fill: true,
-                        borderWidth: 1,
-                        pointRadius: 0,
-                        yAxisID: 'y1',
-                        type: 'bar'
-                    }
-                ];
-            } else if (mode === 'bar') {
-                config.data.datasets = [
-                    {
-                        label: 'Price Δ',
-                        data: priceChanges,
-                        backgroundColor: priceChanges.map(v => v >= 0 ? '#0ecb81' : '#f6465d'),
-                        borderWidth: 0,
-                        yAxisID: 'y'
-                    }
-                ];
-            }
+      $('pw-updated').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-            charts[symbol] = new Chart(ctx, config);
-        }
+      // Chip counts
+      document.querySelectorAll('#pw-chips .pw-chip').forEach(c => {
+          const f = c.dataset.filter;
+          const n = c.querySelector('.n');
+          if (!n) return;
+          if (f === 'all') n.textContent = specs.length;
+          else n.textContent = counts[f] ?? 0;
+      });
 
-        function renderData(data) {
-            const rawTimeline = data.fullTimeline || {};
-            const grid = document.getElementById('analysis-grid');
-            const emptyState = document.getElementById('empty-state');
-            const symbols = Object.keys(rawTimeline);
-            
-            // Pre-parse the timeline data
-            const timeline = {};
-            symbols.forEach(s => {
-                try {
-                    timeline[s] = typeof rawTimeline[s] === 'string' ? JSON.parse(rawTimeline[s]) : rawTimeline[s];
-                } catch(e) {
-                    timeline[s] = [];
-                }
-            });
+      // Filter
+      const filtered = activeFilter === 'all'
+          ? specs
+          : specs.filter(s => s.classification.tier === activeFilter);
 
-            if (symbols.length === 0) {
-                grid.innerHTML = '';
-                emptyState.classList.remove('hidden');
-                return;
-            }
-            emptyState.classList.add('hidden');
+      const rowsEl = $('pw-rows');
+      if (!filtered.length) {
+          rowsEl.innerHTML = `<div class="pw-empty">${
+              specs.length === 0
+                  ? 'No coins above the +$0.20 threshold yet.'
+                  : `No coins match "${activeFilter}" filter right now.`
+          }</div>`;
+          return;
+      }
 
-            // Stats
-            document.getElementById('stat-count').textContent = symbols.length;
-            document.getElementById('last-update-time').textContent = new Date().toLocaleTimeString();
-            
-            let volIncCount = 0;
-            let totalChange = 0;
-            symbols.forEach(s => {
-                const points = timeline[s];
-                if (points && points.length > 0) {
-                    const last = points[points.length-1];
-                    if (last.volume_gradual_inc) volIncCount++;
-                    totalChange += last.price_increase;
-                }
-            });
-            document.getElementById('stat-vol-bias').textContent = Math.round((volIncCount / symbols.length) * 100) + '%';
-            document.getElementById('stat-avg-change').textContent = (totalChange / symbols.length).toFixed(6);
+      rowsEl.innerHTML = filtered.map(spec =>
+          buildRowHtml(spec.symbol, spec.snaps, spec.basePrice, spec.currPrice, spec.classification, spec.durationSec, spec.gainPct)
+      ).join('');
 
-            // Grid Rendering
-            grid.innerHTML = symbols.map(s => {
-                const history = timeline[s];
-                const last = history[history.length - 1];
-                const statusColor = last.status === 'increase' ? 'text-success' : last.status === 'decrease' ? 'text-danger' : 'text-gray-400';
-                const statusIcon = last.status === 'increase' ? 'trending-up' : last.status === 'decrease' ? 'trending-down' : 'minus';
-                
-                let contentHtml = '';
-                if (currentViewMode === 'text') {
-                    // Render Data Grid
-                    contentHtml = `
-                        <div class="overflow-x-auto mt-4 h-[180px]">
-                            <table class="w-full text-[10px] text-left">
-                                <thead class="text-gray-500 uppercase border-b border-white/5">
-                                    <tr>
-                                        <th class="py-1">Time</th>
-                                        <th class="py-1 text-right">Price</th>
-                                        <th class="py-1 text-right">Δ / Candle</th>
-                                        <th class="py-1 text-right">Vol</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-white/5">
-                                    ${history.slice(-15).reverse().map(h => `
-                                        <tr class="${h.is_candle ? 'bg-white/[0.02]' : ''}">
-                                            <td class="py-1 text-gray-500 flex items-center gap-1">
-                                                ${h.time.split(' ')[1]}
-                                                ${h.is_candle ? '<span class="text-[6px] bg-blue-500/20 text-blue-400 px-1 rounded">1m</span>' : ''}
-                                            </td>
-                                            <td class="py-1 text-right mono font-bold">${h.price.toFixed(6)}</td>
-                                            <td class="py-1 text-right mono ${h.price_increase >= 0 ? 'text-success' : 'text-danger'}">
-                                                ${h.price_increase > 0 ? '+' : ''}${h.price_increase.toFixed(h.is_candle ? 4 : 6)}
-                                            </td>
-                                            <td class="py-1 text-right text-gray-400">${(h.volume/1000).toFixed(1)}k</td>
-                                        </tr>
-                                    `).join('')}
-                                </tbody>
-                            </table>
-                        </div>
-                    `;
-                } else {
-                    // Render Chart or Bar container
-                    contentHtml = `<div class="chart-container mt-4"><canvas id="chart-${s}"></canvas></div>`;
-                }
+      // Wire row click → toggle expand
+      rowsEl.querySelectorAll('.pw-row .pw-row-main').forEach(main => {
+          main.addEventListener('click', () => {
+              const row = main.parentElement;
+              const sym = row.dataset.symbol;
+              if (expandedSymbols.has(sym)) {
+                  expandedSymbols.delete(sym);
+                  if (charts[sym]) { charts[sym].destroy(); delete charts[sym]; }
+              } else {
+                  expandedSymbols.add(sym);
+              }
+              render();
+          });
+      });
 
-                return `
-                    <div class="glass p-6 rounded-[2.5rem] border border-white/5 hover:border-brand/40 transition-all fade-in">
-                        <div class="flex justify-between items-start mb-2">
-                            <div class="flex items-center gap-3">
-                                <div class="w-10 h-10 rounded-2xl bg-white/5 flex items-center justify-center">
-                                    <i data-lucide="zap" class="w-5 h-5 text-brand"></i>
-                                </div>
-                                <div>
-                                    <h4 class="text-xl font-black text-white mono tracking-tighter">${s}</h4>
-                                    <span class="text-[10px] font-bold text-gray-500 uppercase">${last.time.split(' ')[1]} Snapshot</span>
-                                </div>
-                            </div>
-                            <div class="text-right">
-                                <div class="flex items-center justify-end gap-2 ${statusColor}">
-                                    <i data-lucide="${statusIcon}" class="w-4 h-4"></i>
-                                    <span class="text-2xl font-black mono">${last.price.toFixed(6)}</span>
-                                </div>
-                                <p class="text-xs font-bold ${statusColor} mono tracking-wider">${last.price_increase > 0 ? '+' : ''}${last.price_increase.toFixed(8)}</p>
-                            </div>
-                        </div>
+      // For every expanded row, build/refresh its chart
+      filtered.forEach(spec => {
+          if (!expandedSymbols.has(spec.symbol)) return;
+          const cv = document.getElementById(`pw-chart-${spec.symbol}`);
+          if (!cv) return;
+          buildChart(cv, spec);
+      });
+  }
 
-                        <div class="grid grid-cols-2 gap-4 mt-4 mb-2">
-                            <div class="bg-white/5 rounded-2xl p-3 border border-white/5">
-                                <p class="text-[9px] font-bold text-gray-500 uppercase mb-1">24h Quote Vol</p>
-                                <div class="flex items-center gap-2">
-                                    <span class="text-sm font-black text-white mono">${(last.volume / 1000).toFixed(2)}k</span>
-                                    ${last.volume_gradual_inc ? '<span class="text-[8px] bg-success/20 text-success px-1.5 py-0.5 rounded-md">GRADUAL ↑</span>' : ''}
-                                </div>
-                            </div>
-                            <div class="bg-white/5 rounded-2xl p-3 border border-white/5">
-                                <p class="text-[9px] font-bold text-gray-500 uppercase mb-1">Sequence Intel (3x)</p>
-                                <div class="flex flex-col">
-                                    ${last.sequence_report && last.sequence_report.type !== 'neutral' ? `
-                                        <span class="text-[10px] font-bold ${last.sequence_report.type === 'bullish_seq' ? 'text-success' : 'text-danger'}">
-                                            ${last.sequence_report.type === 'bullish_seq' ? '3x Vol ↑' : '3x Vol ↓'} → ${last.sequence_report.price_impact.toFixed(4)}%
-                                        </span>
-                                    ` : '<span class="text-[10px] text-gray-600 italic">No sequence detected</span>'}
-                                </div>
-                            </div>
-                        </div>
+  // ── Chart.js trajectory chart for an expanded row ─────────────────────
+  function buildChart(canvas, spec) {
+      const sym = spec.symbol;
+      const labels = spec.snaps.map(s => (s.time || '').split(' ')[1] || '');
+      const pctFromBase = spec.snaps.map(s => spec.basePrice ? ((s.price - spec.basePrice) / spec.basePrice) * 100 : 0);
+      const volumes = spec.snaps.map(s => s.volume || 0);
 
-                        ${contentHtml}
-                    </div>
-                `;
-            }).join('');
+      if (charts[sym]) {
+          charts[sym].data.labels = labels;
+          charts[sym].data.datasets[0].data = pctFromBase;
+          charts[sym].data.datasets[1].data = volumes;
+          charts[sym].update('none');
+          return;
+      }
 
-            // Init Charts if not in text mode
-            if (currentViewMode !== 'text') {
-                symbols.forEach(s => initCharts(s, timeline[s], currentViewMode));
-            }
-            lucide.createIcons();
-        }
+      charts[sym] = new Chart(canvas.getContext('2d'), {
+          type: 'line',
+          data: {
+              labels,
+              datasets: [
+                  {
+                      label: '% from base',
+                      data: pctFromBase,
+                      borderColor: spec.gainPct >= 0 ? '#34d399' : '#f87171',
+                      backgroundColor: spec.gainPct >= 0 ? 'rgba(52,211,153,0.12)' : 'rgba(248,113,113,0.12)',
+                      borderWidth: 2,
+                      pointRadius: 0,
+                      tension: 0.25,
+                      fill: true,
+                      yAxisID: 'y',
+                  },
+                  {
+                      label: 'Volume',
+                      data: volumes,
+                      type: 'bar',
+                      backgroundColor: 'rgba(59,130,246,0.18)',
+                      borderColor: 'rgba(59,130,246,0.4)',
+                      borderWidth: 1,
+                      yAxisID: 'y1',
+                  },
+              ],
+          },
+          options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              animation: false,
+              plugins: { legend: { display: true, labels: { color: '#b8c2d6', font: { size: 10 }, boxWidth: 12 } } },
+              interaction: { intersect: false, mode: 'index' },
+              scales: {
+                  x: { ticks: { color: '#64748b', font: { size: 9 }, maxTicksLimit: 6 }, grid: { color: 'rgba(30,48,80,0.5)' } },
+                  y: {
+                      position: 'left',
+                      ticks: {
+                          color: '#64748b',
+                          font: { size: 10 },
+                          callback: v => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`,
+                      },
+                      grid: { color: 'rgba(30,48,80,0.5)' },
+                  },
+                  y1: { position: 'right', display: false, grid: { display: false } },
+              },
+          },
+      });
+  }
 
-        const socket = io();
-        socket.on('connect', () => {
-            document.getElementById('ws-dot').className = 'w-2 h-2 rounded-full bg-success animate-pulse';
-            document.getElementById('ws-text').textContent = 'Stream Active';
-        });
+  // ── Filter chips ──────────────────────────────────────────────────────
+  document.querySelectorAll('#pw-chips .pw-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+          document.querySelectorAll('#pw-chips .pw-chip').forEach(c => c.classList.remove('active'));
+          chip.classList.add('active');
+          activeFilter = chip.dataset.filter || 'all';
+          // Wipe charts of rows that won't be visible to free memory
+          for (const sym of Object.keys(charts)) { charts[sym].destroy(); delete charts[sym]; }
+          render();
+      });
+  });
 
-        socket.on('update', (data) => {
-            lastKnownData = data;
-            renderData(data);
-        });
+  // ── Data ingestion ────────────────────────────────────────────────────
+  function ingestPayload(data) {
+      // Timeline → ANALYSIS_020_TIMELINE hash
+      const raw = data.fullTimeline || {};
+      const tl = {};
+      for (const [s, v] of Object.entries(raw)) {
+          try { tl[s] = typeof v === 'string' ? JSON.parse(v) : v; }
+          catch { tl[s] = []; }
+      }
+      lastTimeline = tl;
 
-        lucide.createIcons();
-    </script>
+      // Base prices → PROFIT_REACHED_020 hash
+      const profitRaw = data.profitTimeline || {};
+      const bp = {};
+      for (const [s, v] of Object.entries(profitRaw)) {
+          try {
+              const r = typeof v === 'string' ? JSON.parse(v) : v;
+              if (r && r.basePrice) bp[s] = parseFloat(r.basePrice);
+          } catch {}
+      }
+      lastBase = bp;
+
+      // Live prices → CURRENT_PRICE hash
+      const priceRaw = data.priceHash || {};
+      const lp = { ...lastPrice };
+      for (const [s, v] of Object.entries(priceRaw)) {
+          try {
+              const r = typeof v === 'string' ? JSON.parse(v) : v;
+              if (r && r.price != null) lp[s] = parseFloat(r.price);
+          } catch {}
+      }
+      lastPrice = lp;
+  }
+
+  // ── Socket.io ─────────────────────────────────────────────────────────
+  const socket = io();
+  const live = $('pw-live');
+  socket.on('connect',    () => { live.classList.remove('off'); live.textContent = 'Live'; });
+  socket.on('disconnect', () => { live.classList.add('off');    live.textContent = 'Disconnected'; });
+  socket.on('update', (data) => { ingestPayload(data); render(); });
+
+  // First paint (in case the socket hasn't ticked yet)
+  render();
+</script>
 </body>
 </html>
