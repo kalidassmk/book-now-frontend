@@ -246,8 +246,7 @@
       background: var(--vs-panel);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      max-height: 60vh;     /* cap so 100+ rows don't push the page forever */
-      overflow-y: auto;
+      overflow: hidden;     /* contain the table inside the rounded card */
       overflow: hidden;
     }
     .vs-table { width: 100%; border-collapse: collapse; font-size: 11px; }
@@ -267,6 +266,50 @@
     .vs-reason-pill.hsl  { background: var(--rdim); color: var(--vs-red-2); }
     .vs-reason-pill.ssl  { background: var(--rdim); color: var(--red); }
     .vs-reason-pill.exit { background: var(--ydim); color: var(--yellow); }
+
+    /* ── Expandable history rows ───────────────────────────────────────── */
+    .vs-table tr.row-main { cursor: pointer; transition: background 0.15s; }
+    .vs-table tr.row-main:hover td { background: rgba(255,255,255,0.03); }
+    .vs-table tr.row-main.expanded td { background: rgba(59,130,246,0.06); border-bottom-color: var(--blue); }
+
+    .vs-chev {
+      display: inline-block;
+      transition: transform 0.15s;
+      color: var(--dim);
+      font-size: 10px;
+      user-select: none;
+    }
+    .vs-table tr.row-main.expanded .vs-chev { transform: rotate(90deg); color: var(--blue); }
+
+    .vs-table tr.row-detail { display: none; }
+    .vs-table tr.row-detail.show { display: table-row; }
+    .vs-table tr.row-detail td {
+      padding: 14px 18px;
+      background: rgba(0,0,0,0.25);
+      border-bottom: 1px solid var(--border);
+    }
+    .vs-detail-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 10px 18px;
+    }
+    .vs-detail-item .l {
+      font-size: 9px;
+      color: var(--dim);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-weight: 700;
+    }
+    .vs-detail-item .v {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      margin-top: 2px;
+    }
+    .vs-detail-item .v.green { color: var(--vs-green-2); }
+    .vs-detail-item .v.red   { color: var(--vs-red-2); }
+    .vs-detail-item .v.dim   { color: var(--dim); }
   </style>
 </head>
 <body>
@@ -367,20 +410,16 @@
           <table class="vs-table">
             <thead>
               <tr>
+                <th style="width: 30px;"></th>
                 <th>Symbol</th>
-                <th class="right">Base</th>
-                <th class="right">Buy</th>
-                <th class="right">Sold</th>
-                <th class="right">Hold</th>
                 <th class="right">PnL %</th>
                 <th class="right">Net $</th>
-                <th class="right">Fees</th>
                 <th>Reason</th>
                 <th class="right">When</th>
               </tr>
             </thead>
             <tbody id="vs-history-tbody">
-              <tr><td colspan="10" class="empty">Loading…</td></tr>
+              <tr><td colspan="6" class="empty">Loading…</td></tr>
             </tbody>
           </table>
         </div>
@@ -695,6 +734,13 @@
       }).join('');
   }
 
+  // Track which rows are expanded by trade id (or by index fallback)
+  const expandedTrades = new Set();
+
+  function tradeKey(h, idx) {
+      return h.id || `${h.symbol}-${h.exit_time || idx}`;
+  }
+
   function renderHistoryRows(history, filter) {
       const tbody = $('vs-history-tbody');
       let filtered = history;
@@ -703,26 +749,65 @@
       else if (filter && filter !== 'all') filtered = history.filter(h => h.reason === filter);
 
       if (!filtered.length) {
-          tbody.innerHTML = '<tr><td colspan="10" class="empty">No matching trades.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="6" class="empty">No matching trades.</td></tr>';
           return;
       }
-      tbody.innerHTML = filtered.slice(0, HISTORY_DISPLAY_LIMIT).map(h => {
+
+      tbody.innerHTML = filtered.slice(0, HISTORY_DISPLAY_LIMIT).map((h, idx) => {
+          const key = tradeKey(h, idx);
+          const isOpen = expandedTrades.has(key);
           const cls = (h.pnl_usdt || 0) >= 0 ? 'pnl-pos' : 'pnl-neg';
+          const dd = (h.max_drawdown || 0) * 100;
+
+          // Detail panel — Base / Buy / Sold prices + extra context.
+          const detail = `
+            <div class="vs-detail-grid">
+              <div class="vs-detail-item"><div class="l">Base price</div><div class="v dim">${fmtPrice(h.base_price)}</div></div>
+              <div class="vs-detail-item"><div class="l">Buy price</div><div class="v">${fmtPrice(h.entry_price)}</div></div>
+              <div class="vs-detail-item"><div class="l">Sold price</div><div class="v">${fmtPrice(h.exit_price)}</div></div>
+              <div class="vs-detail-item"><div class="l">Hold</div><div class="v">${fmtDur(h.hold_duration)}</div></div>
+              <div class="vs-detail-item"><div class="l">Fees</div><div class="v dim">${fmtUsd4(h.fees_paid)}</div></div>
+              <div class="vs-detail-item"><div class="l">Investment</div><div class="v">${fmtUsd2(h.investment || 100)}</div></div>
+              <div class="vs-detail-item"><div class="l">Quantity</div><div class="v dim">${h.quantity ? h.quantity.toFixed(4) : '—'}</div></div>
+              <div class="vs-detail-item"><div class="l">Max drawdown</div><div class="v ${dd < 0 ? 'red' : ''}">${dd ? fmtPct(dd) : '—'}</div></div>
+              <div class="vs-detail-item"><div class="l">Entry time</div><div class="v dim">${h.entry_time || '—'}</div></div>
+              <div class="vs-detail-item"><div class="l">Exit time</div><div class="v dim">${h.exit_time || '—'}</div></div>
+              <div class="vs-detail-item"><div class="l">Trade ID</div><div class="v dim">${h.id || '—'}</div></div>
+              <div class="vs-detail-item"><div class="l">TP target</div><div class="v">${h.profit_target_usdt ? fmtUsd2(h.profit_target_usdt) : '$0.20'}</div></div>
+            </div>
+          `;
+
           return `
-            <tr>
+            <tr class="row-main ${isOpen ? 'expanded' : ''}" data-key="${key}">
+              <td class="right"><span class="vs-chev">›</span></td>
               <td class="symbol">${h.symbol}</td>
-              <td class="right" style="color: var(--dim);">${fmtPrice(h.base_price)}</td>
-              <td class="right">${fmtPrice(h.entry_price)}</td>
-              <td class="right">${fmtPrice(h.exit_price)}</td>
-              <td class="right">${fmtDur(h.hold_duration)}</td>
               <td class="right ${cls}">${fmtPct(h.pnl_pct)}</td>
               <td class="right ${cls}">${fmtUsd(h.pnl_usdt)}</td>
-              <td class="right" style="color: var(--dim);">${fmtUsd4(h.fees_paid)}</td>
               <td><span class="vs-reason-pill ${reasonClass(h.reason)}">${reasonLabel(h.reason)}</span></td>
               <td class="right" style="color: var(--dim);">${h.exit_time || '—'}</td>
             </tr>
+            <tr class="row-detail ${isOpen ? 'show' : ''}" data-key="${key}-d">
+              <td colspan="6">${detail}</td>
+            </tr>
           `;
       }).join('');
+
+      // Wire click → toggle expand
+      tbody.querySelectorAll('tr.row-main').forEach(tr => {
+          tr.addEventListener('click', () => {
+              const key = tr.dataset.key;
+              const detail = tbody.querySelector(`tr.row-detail[data-key="${key}-d"]`);
+              if (expandedTrades.has(key)) {
+                  expandedTrades.delete(key);
+                  tr.classList.remove('expanded');
+                  if (detail) detail.classList.remove('show');
+              } else {
+                  expandedTrades.add(key);
+                  tr.classList.add('expanded');
+                  if (detail) detail.classList.add('show');
+              }
+          });
+      });
   }
 
   function renderHistoryChips(history) {
@@ -799,7 +884,7 @@
       } catch (err) {
           console.error('[snapshot]', err);
           $('vs-pos-grid').innerHTML = `<div class="empty">Snapshot failed: ${err.message}</div>`;
-          $('vs-history-tbody').innerHTML = `<tr><td colspan="10" class="empty">Snapshot failed.</td></tr>`;
+          $('vs-history-tbody').innerHTML = `<tr><td colspan="6" class="empty">Snapshot failed.</td></tr>`;
       }
   }
 
