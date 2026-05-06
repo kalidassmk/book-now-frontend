@@ -39,14 +39,16 @@
       --vs-radius-sm: 10px;
     }
 
-    /* Single-page app shell — 100vh, no body scroll. Each panel scrolls its own content. */
-    html, body { height: 100%; margin: 0; }
-    body { font-family: 'Inter', system-ui, sans-serif; overflow: hidden; }
+    /* Page shell — natural document scroll. Each panel sizes to its own
+       content; the trade-history table caps its own height so a long
+       history doesn't push everything else off-screen. */
+    html, body { margin: 0; }
+    body { font-family: 'Inter', system-ui, sans-serif; }
     .vs-page {
-      display: grid;
-      grid-template-rows: auto auto auto 1fr;  /* topbar / verdict / kpis / main(grid) */
+      display: flex;
+      flex-direction: column;
       gap: 12px;
-      height: 100vh;
+      min-height: 100vh;
       padding: 14px 18px;
       box-sizing: border-box;
       color: var(--text);
@@ -124,42 +126,37 @@
     .vs-kpi .sub { font-size: 10px; color: var(--vs-text-2); margin-top: 4px; }
     .vs-kpi .sub strong { color: var(--text); font-family: var(--mono); }
 
-    /* ── Main grid (fills remaining viewport) ──────────────────────────── */
+    /* ── Main grid ─────────────────────────────────────────────────────── */
     /* Open Positions on top (auto-height horizontal-scroll row),
-       Reasons + History side-by-side filling the rest. No more giant chart. */
+       Reasons + History side-by-side below. */
     .vs-main {
-      display: grid;
-      grid-template-rows: auto 1fr;
+      display: flex;
+      flex-direction: column;
       gap: 10px;
-      min-height: 0;
     }
     .vs-main-bottom {
       display: grid;
       grid-template-columns: 1fr 2fr;
       gap: 10px;
-      min-height: 0;
     }
     @media (max-width: 1100px) {
-      /* Stack on narrower viewports so nothing gets cut off */
-      .vs-main-bottom { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+      .vs-main-bottom { grid-template-columns: 1fr; }
     }
 
-    /* ── ③+④ Charts ────────────────────────────────────────────────────── */
+    /* ── ③+④ Charts / panels ───────────────────────────────────────────── */
     .vs-card-chart {
       background: var(--vs-panel);
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 12px 16px;
       display: flex; flex-direction: column;
-      min-height: 0;
-      overflow: hidden;
     }
     .vs-card-chart h3   { font-size: 12px; font-weight: 700; margin: 0 0 2px; color: var(--text); }
     .vs-card-chart .desc { font-size: 10px; color: var(--dim); margin-bottom: 8px; }
-    .vs-card-chart svg  { width: 100%; flex: 1; min-height: 0; }
+    .vs-card-chart svg  { width: 100%; }
 
-    /* Reasons list (inside ④) */
-    .vs-reasons-list { display: flex; flex-direction: column; gap: 6px; flex: 1; overflow-y: auto; min-height: 0; }
+    /* Reasons list (inside ④) — natural height; no internal scroll. */
+    .vs-reasons-list { display: flex; flex-direction: column; gap: 6px; }
     .vs-reasons-list .empty { color: var(--dim); font-size: 11px; padding: 16px 0; text-align: center; }
     .vs-reason-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--border); }
     .vs-reason-row:last-child { border-bottom: none; }
@@ -176,8 +173,8 @@
     .vs-reason-row .avg.red   { color: var(--vs-red-2); }
 
     /* ── Section heading (used by ⑤ and ⑥) ─────────────────────────────── */
-    .vs-section { display: flex; flex-direction: column; min-height: 0; }
-    .vs-section-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; flex-shrink: 0; }
+    .vs-section { display: flex; flex-direction: column; }
+    .vs-section-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
     .vs-section-head h2 { font-size: 12px; font-weight: 700; margin: 0; }
     .vs-section-head .badge { background: var(--bdim, rgba(59,130,246,0.12)); color: var(--blue); font-size: 10px; padding: 2px 8px; border-radius: 999px; font-family: var(--mono); font-weight: 700; }
     .vs-section-head .badge.gray { background: rgba(100,116,139,0.15); color: var(--dim); }
@@ -249,9 +246,8 @@
       background: var(--vs-panel);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      flex: 1;
+      max-height: 60vh;     /* cap so 100+ rows don't push the page forever */
       overflow-y: auto;
-      min-height: 0;
       overflow: hidden;
     }
     .vs-table { width: 100%; border-collapse: collapse; font-size: 11px; }
