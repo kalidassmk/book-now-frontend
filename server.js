@@ -1060,7 +1060,7 @@ app.post('/api/buy', async (req, res) => {
     
     const p = parseFloat(limitPrice);
     const isMarket = (!p || p <= 0);
-    const q = req.body.qty || (12 / (p || 1)); // Use provided qty or $12 default
+    const q = req.body.qty || (100 / (p || 1)); // Use provided qty or $100 default
     const selPct = customSelPct || 2.0;
 
     if (!symbol) return res.status(400).json({ error: 'symbol required' });
