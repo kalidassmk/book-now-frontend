@@ -372,6 +372,9 @@
             <thead>
               <tr>
                 <th>Symbol</th>
+                <th class="right">Base</th>
+                <th class="right">Buy</th>
+                <th class="right">Sold</th>
                 <th class="right">Hold</th>
                 <th class="right">PnL %</th>
                 <th class="right">Net $</th>
@@ -381,7 +384,7 @@
               </tr>
             </thead>
             <tbody id="vs-history-tbody">
-              <tr><td colspan="7" class="empty">Loading…</td></tr>
+              <tr><td colspan="10" class="empty">Loading…</td></tr>
             </tbody>
           </table>
         </div>
@@ -704,7 +707,7 @@
       else if (filter && filter !== 'all') filtered = history.filter(h => h.reason === filter);
 
       if (!filtered.length) {
-          tbody.innerHTML = '<tr><td colspan="7" class="empty">No matching trades.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="10" class="empty">No matching trades.</td></tr>';
           return;
       }
       tbody.innerHTML = filtered.slice(0, HISTORY_DISPLAY_LIMIT).map(h => {
@@ -712,6 +715,9 @@
           return `
             <tr>
               <td class="symbol">${h.symbol}</td>
+              <td class="right" style="color: var(--dim);">${fmtPrice(h.base_price)}</td>
+              <td class="right">${fmtPrice(h.entry_price)}</td>
+              <td class="right">${fmtPrice(h.exit_price)}</td>
               <td class="right">${fmtDur(h.hold_duration)}</td>
               <td class="right ${cls}">${fmtPct(h.pnl_pct)}</td>
               <td class="right ${cls}">${fmtUsd(h.pnl_usdt)}</td>
@@ -797,7 +803,7 @@
       } catch (err) {
           console.error('[snapshot]', err);
           $('vs-pos-grid').innerHTML = `<div class="empty">Snapshot failed: ${err.message}</div>`;
-          $('vs-history-tbody').innerHTML = `<tr><td colspan="7" class="empty">Snapshot failed.</td></tr>`;
+          $('vs-history-tbody').innerHTML = `<tr><td colspan="10" class="empty">Snapshot failed.</td></tr>`;
       }
   }
 
