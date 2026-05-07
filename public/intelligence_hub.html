@@ -493,10 +493,10 @@
       const fast = !!cfg.fastScalpMode;
       const items = [
           { l: 'Buy', v: `$${(cfg.buyAmountUsdt || 100).toFixed(0)}`, cls: '' },
-          { l: 'TP target', v: `$${(cfg.profitAmountUsdt || 0.20).toFixed(2)}`, cls: 'green' },
-          { l: 'Patience', v: '5m', cls: '' },
+          { l: 'TP target', v: `$${(cfg.profitAmountUsdt || 0.50).toFixed(2)}`, cls: 'green' },
+          { l: 'Stop Loss', v: '-0.20%', cls: 'red' },
           { l: 'Hard SL', v: '-$1.00', cls: 'red' },
-          { l: 'Soft SL', v: '-0.30%', cls: 'red' },
+          { l: 'BE arm', v: '+$0.10', cls: '' },
           { l: 'TSL', v: `${(cfg.tslPct || 2.0).toFixed(1)}%`, cls: '' },
           { l: 'Max hold', v: `${Math.round((cfg.maxHoldSeconds || 300) / 60)}m`, cls: '' },
           { l: 'Limit offset', v: `${(cfg.limitBuyOffsetPct || 0.3).toFixed(2)}%`, cls: '' },
