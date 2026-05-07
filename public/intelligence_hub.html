@@ -498,7 +498,7 @@
           { l: 'Hard SL', v: '-$1.00', cls: 'red' },
           { l: 'BE arm', v: '+$0.10', cls: '' },
           { l: 'TSL', v: `${(cfg.tslPct || 2.0).toFixed(1)}%`, cls: '' },
-          { l: 'Max hold', v: `${Math.round((cfg.maxHoldSeconds || 300) / 60)}m`, cls: '' },
+          { l: 'Max hold', v: ((s) => s >= 3600 ? `${(s/3600).toFixed(s % 3600 ? 1 : 0)}h` : `${Math.round(s/60)}m`)(cfg.maxHoldSeconds || 7200), cls: '' },
           { l: 'Limit offset', v: `${(cfg.limitBuyOffsetPct || 0.3).toFixed(2)}%`, cls: '' },
       ];
       let html = items.map((it, i) =>
