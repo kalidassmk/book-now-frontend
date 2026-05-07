@@ -749,7 +749,7 @@ async function tick() {
             autoEnabled: config.autoBuyEnabled, // Dynamic from Redis
             buyAmount: config.buyAmountUsdt || 100,
             profitPct: config.profitPct || 0,
-            profitAmount: config.profitAmountUsdt || 0.50,
+            profitAmount: config.profitAmountUsdt || 0.25,
             simulation: autoConfig.simulationMode,
             redisOk: true,
             walletAssets: balances.length,
@@ -946,7 +946,7 @@ app.get('/api/v1/config', async (req, res) => {
             autoBuyEnabled: false,
             buyAmountUsdt: 100.0,
             profitPct: 0,
-            profitAmountUsdt: 0.50,
+            profitAmountUsdt: 0.25,
             limitBuyOffsetPct: 0.3,
             tslPct: 2.0
         };
