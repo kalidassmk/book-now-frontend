@@ -141,10 +141,49 @@ async function refreshBalanceSnapshot() {
 }
 
 async function refreshOpenOrdersSnapshot() {
+    // Per-symbol querying: each /api/v3/openOrders?symbol=X call costs
+    // 6 weight, vs 80 weight for the no-symbol version that scans the
+    // whole account. With 1-3 active symbols this is 75-90 % cheaper.
+    //
+    // Symbols we query are the union of:
+    //   1. Anything we currently hold (sell-side orders sit on these)
+    //   2. Symbols already present in the previous OPEN_ORDERS cache
+    //      (carries forward limit-buys on coins we don't yet hold)
     try {
-        const orders = await binanceFetch('/api/v3/openOrders', 'GET', {});
-        if (!Array.isArray(orders)) return;
-        await redis.set('BINANCE:OPEN_ORDERS:ALL', JSON.stringify(orders));
+        const symbolSet = new Set();
+
+        const balRaw = await redis.get('BINANCE:BALANCES:ALL');
+        const balances = balRaw ? JSON.parse(balRaw) : [];
+        for (const b of balances) {
+            if (b.asset === 'USDT') continue;
+            const total = parseFloat(b.free || 0) + parseFloat(b.locked || 0);
+            if (total > 0) symbolSet.add(`${b.asset}USDT`);
+        }
+
+        const prevRaw = await redis.get('BINANCE:OPEN_ORDERS:ALL');
+        const prev = prevRaw ? JSON.parse(prevRaw) : [];
+        for (const o of prev) {
+            if (o && o.symbol) symbolSet.add(o.symbol);
+        }
+
+        if (symbolSet.size === 0) {
+            await redis.set('BINANCE:OPEN_ORDERS:ALL', '[]');
+            return;
+        }
+
+        const allOrders = [];
+        for (const symbol of symbolSet) {
+            try {
+                const orders = await binanceFetch('/api/v3/openOrders', 'GET', { symbol });
+                if (Array.isArray(orders) && orders.length > 0) {
+                    allOrders.push(...orders);
+                }
+            } catch (err) {
+                console.warn(`[snapshot] open orders ${symbol} failed:`, err.message);
+            }
+        }
+        await redis.set('BINANCE:OPEN_ORDERS:ALL', JSON.stringify(allOrders));
+        console.log(`[snapshot] open-orders refreshed: ${allOrders.length} orders across ${symbolSet.size} symbols (≈${symbolSet.size * 6} weight)`);
     } catch (err) {
         console.warn('[snapshot] open-orders refresh failed:', err.message);
     }
@@ -172,12 +211,14 @@ const TRADE_HISTORY_PER_SYMBOL = 50; // recent trades per symbol on seed
 
 async function refreshTradeHistorySnapshot() {
     try {
+        // Skip dust (USDT-value < $1) to avoid burning weight on
+        // micro-leftovers from old trades. The dashboard never shows
+        // sub-$1 history rows anyway.
         const balRaw = await redis.get('BINANCE:BALANCES:ALL');
         const balances = balRaw ? JSON.parse(balRaw) : [];
         const symbolsToFetch = balances
-            .map(b => b.asset)
-            .filter(a => a && a !== 'USDT')
-            .map(a => `${a}USDT`);
+            .filter(b => b.asset && b.asset !== 'USDT' && parseFloat(b.valueUsdt || 0) >= 1)
+            .map(b => `${b.asset}USDT`);
 
         if (!symbolsToFetch.length) return;
 
