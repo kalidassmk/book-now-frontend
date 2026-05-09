@@ -1039,6 +1039,11 @@ app.post('/api/open-orders/cancel', async (req, res) => {
             }
 
             io.emit('order-cancelled', { symbol, orderId });
+            // Force fresh snapshots so the dashboard reflects the
+            // cancellation across all components, not just open orders.
+            if (binanceWorker.refreshAllSnapshots) {
+                binanceWorker.refreshAllSnapshots().catch(() => {});
+            }
             return res.json({ ok: true, data });
         }
         res.status(400).json({ error: 'Cancel failed', detail: data });
@@ -1066,9 +1071,51 @@ app.post('/api/wallet/dust-transfer', async (req, res) => {
         // Binance API: POST /sapi/v1/asset/dust (asset can be a comma-separated list)
         const data = await binanceWorker.binanceFetch('/sapi/v1/asset/dust', 'POST', { asset });
         if (data && data.transferResult && data.transferResult.length > 0) {
+            // Force-refresh balances so the UI reflects the conversion
+            // without waiting for the next snapshot tick.
+            if (binanceWorker.refreshAllSnapshots) {
+                binanceWorker.refreshAllSnapshots().catch(() => {});
+            }
             return res.json({ ok: true, data });
         }
         res.status(400).json({ error: 'Transfer failed', detail: data });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── Manual Market Sell (fast exit for orphaned positions) ───────────────────
+// Bypasses the bot. Asset → SELL all free balance at market. Useful when
+// the Binance web UI is slow and you need to dump a position immediately.
+app.post('/api/wallet/market-sell', async (req, res) => {
+    const { asset, qty } = req.body;
+    if (!asset) return res.status(400).json({ error: 'asset required' });
+    const symbol = `${asset.toUpperCase()}USDT`;
+    console.log(`[API] Market Sell | asset=${asset} qty=${qty || 'ALL'}`);
+    try {
+        // Resolve sell quantity: explicit override, else free balance
+        let sellQty = parseFloat(qty);
+        if (!sellQty || sellQty <= 0) {
+            const balRaw = await redis.get('BINANCE:BALANCES:ALL');
+            const balances = balRaw ? JSON.parse(balRaw) : [];
+            const row = balances.find(b => b.asset === asset.toUpperCase());
+            if (!row) return res.status(400).json({ error: `no balance for ${asset}` });
+            sellQty = parseFloat(row.free);
+            if (!sellQty || sellQty <= 0) {
+                return res.status(400).json({ error: `free balance is 0 for ${asset}` });
+            }
+        }
+        const params = {
+            symbol,
+            side: 'SELL',
+            type: 'MARKET',
+            quantity: String(sellQty),
+        };
+        const order = await binanceWorker.binanceFetch('/api/v3/order', 'POST', params);
+        if (binanceWorker.refreshAllSnapshots) {
+            binanceWorker.refreshAllSnapshots().catch(() => {});
+        }
+        return res.json({ ok: true, order });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
