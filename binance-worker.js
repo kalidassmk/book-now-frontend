@@ -9,13 +9,13 @@ let SECRET_KEY = process.env.BINANCE_SECRET_KEY;
 const BASE_URL = 'https://api.binance.com';
 const BINANCE_HOST = 'api.binance.com';
 
-// Snapshot refresh cadence (REST). The User Data Stream pushes deltas on
-// every change, but it only fires AFTER something changes — so initial
-// state and quiet periods need a periodic snapshot to keep the dashboard
-// honest. 30 s is a reasonable balance between responsiveness and
-// Binance's IP weight budget (each call is ~10-20 weight, /1200 budget).
-const SNAPSHOT_REFRESH_MS = 30 * 1000;
-let snapshotTimer = null;
+// We hit Binance REST exactly ONCE on startup to load the current
+// state of balances / open orders / OCO lists. After that, the User
+// Data Stream WebSocket pushes every change (~100 ms latency) and the
+// applyOrderEventToCache / applyListStatusToCache appliers keep Redis
+// in sync. No polling — the dashboard is always live, no IP weight
+// budget burned in quiet periods.
+let snapshotTimer = null;  // kept for cleanup of any prior interval
 
 // Binance deprecated POST/PUT/DELETE /api/v3/userDataStream (returns 410 Gone).
 // The replacement is the WebSocket API: send `userDataStream.start` /
@@ -171,6 +171,104 @@ async function refreshAllSnapshots() {
     ]);
 }
 
+// ─── WebSocket → cache appliers ──────────────────────────────────────
+// These mutate the same Redis keys the snapshot fetchers populate, so
+// reads from server.js see one consistent view whether the latest
+// update arrived via REST snapshot or User Data Stream event.
+
+async function applyOrderEventToCache(msg) {
+    // executionReport status values we care about for cache shape:
+    //   NEW             → add the order
+    //   PARTIALLY_FILLED → update executedQty (still open)
+    //   FILLED, CANCELED, EXPIRED, REJECTED → remove the order
+    const status = msg.X;
+    const orderId = msg.i;
+    const symbol = msg.s;
+    if (!orderId || !symbol) return;
+
+    try {
+        const raw = await redis.get('BINANCE:OPEN_ORDERS:ALL');
+        const orders = raw ? JSON.parse(raw) : [];
+        const idx = orders.findIndex(o => o.orderId === orderId);
+
+        if (status === 'NEW' || status === 'PARTIALLY_FILLED') {
+            // Build a Binance-shape row from the executionReport so the
+            // dashboard sees the same fields whether they came from REST
+            // /api/v3/openOrders or this WebSocket frame.
+            const row = {
+                symbol:               msg.s,
+                orderId:              msg.i,
+                orderListId:          msg.g >= 0 ? msg.g : -1,
+                clientOrderId:        msg.c,
+                price:                msg.p,
+                origQty:              msg.q,
+                executedQty:          msg.z,
+                cummulativeQuoteQty:  msg.Z,
+                status:               msg.X,
+                timeInForce:          msg.f,
+                type:                 msg.o,
+                side:                 msg.S,
+                stopPrice:            msg.P,
+                time:                 msg.T,
+                updateTime:           msg.T,
+                isWorking:            msg.w,
+            };
+            if (idx >= 0) orders[idx] = row;
+            else orders.push(row);
+        } else {
+            // Terminal states — drop from the cache.
+            if (idx >= 0) orders.splice(idx, 1);
+        }
+        await redis.set('BINANCE:OPEN_ORDERS:ALL', JSON.stringify(orders));
+    } catch (err) {
+        // Non-fatal: a bad cache update doesn't break the worker.
+        console.warn('[WS] applyOrderEventToCache failed:', err.message);
+    }
+}
+
+async function applyListStatusToCache(msg) {
+    // listStatus payload (Binance):
+    //   g  = orderListId
+    //   c  = listClientOrderId
+    //   l  = listStatusType   (RESPONSE | EXEC_STARTED | UPDATED | ALL_DONE)
+    //   L  = listOrderStatus  (EXECUTING | ALL_DONE | REJECT)
+    //   r  = listRejectReason
+    //   T  = transactionTime
+    //   O  = orders          [{s, i, c}, ...]
+    if (msg.g === undefined) return;
+    try {
+        const raw = await redis.get('BINANCE:ORDER_LISTS:ALL');
+        const lists = raw ? JSON.parse(raw) : [];
+        const idx = lists.findIndex(x => x.orderListId === msg.g);
+
+        const row = {
+            orderListId:        msg.g,
+            contingencyType:    'OCO',
+            listStatusType:     msg.l,
+            listOrderStatus:    msg.L,
+            listClientOrderId:  msg.c,
+            transactionTime:    msg.T,
+            symbol:             msg.s,
+            orders:             (msg.O || []).map(o => ({
+                symbol:        o.s,
+                orderId:       o.i,
+                clientOrderId: o.c,
+            })),
+        };
+
+        if (msg.L === 'ALL_DONE') {
+            // Resolved — drop from the open lists cache.
+            if (idx >= 0) lists.splice(idx, 1);
+        } else {
+            if (idx >= 0) lists[idx] = row;
+            else lists.push(row);
+        }
+        await redis.set('BINANCE:ORDER_LISTS:ALL', JSON.stringify(lists));
+    } catch (err) {
+        console.warn('[WS] applyListStatusToCache failed:', err.message);
+    }
+}
+
 // Send a single request/response pair over a short-lived WS-API connection.
 // Used for both `userDataStream.start` (one-shot on boot) and
 // `userDataStream.ping` (every 25 min keepalive). Each call opens, sends,
@@ -270,32 +368,54 @@ function connectWS() {
         try {
             const msg = JSON.parse(data);
 
-            // 🔥 Handle Order Execution Updates
+            // 🔥 Order execution events — every order placement, fill,
+            //    partial fill, cancellation. Drives the open-orders cache.
             if (msg.e === 'executionReport') {
-                const executionData = { 
-                    symbol: msg.s, 
-                    orderId: msg.i, 
-                    status: msg.X, 
-                    executedQty: msg.z, 
-                    price: msg.p 
+                const executionData = {
+                    symbol:      msg.s,
+                    orderId:     msg.i,
+                    status:      msg.X,    // NEW, PARTIALLY_FILLED, FILLED, CANCELED, EXPIRED, etc.
+                    executedQty: msg.z,
+                    price:       msg.p,
+                    side:        msg.S,
+                    type:        msg.o,
                 };
                 console.log(`📈 Order Update: ${msg.s} | ${msg.X} | Qty: ${msg.z}`);
-                
+
+                // Reflect the change in the open-orders cache so the
+                // dashboard is correct without waiting for a REST refresh.
+                await applyOrderEventToCache(msg);
+
                 await redis.set('BINANCE:LAST_ORDER_UPDATE', JSON.stringify(msg));
                 if (io) io.emit('order-execution', executionData);
                 if (executionCallback) executionCallback(executionData);
             }
 
-            // 🔥 Handle Balance Updates
+            // 🔥 OCO list status updates. Fires when an OCO is placed
+            //    (EXECUTING) and again when it resolves (ALL_DONE). The
+            //    Fast Scalper polls Redis for ALL_DONE; pushing it via
+            //    WS means it reacts within ~100 ms instead of 2 s.
+            if (msg.e === 'listStatus') {
+                console.log(`📋 OCO List ${msg.l} list=${msg.g} status=${msg.L}`);
+                await applyListStatusToCache(msg);
+                if (io) io.emit('oco-update', msg);
+            }
+
+            // 🔥 Balance updates. outboundAccountPosition fires after
+            //    every fill / cancel; balanceUpdate fires on transfers.
             if (msg.e === 'outboundAccountPosition' || msg.e === 'balanceUpdate') {
                 console.log('💰 Balance Update Received');
-                const balances = msg.B.map(b => ({
-                    asset: b.a,
-                    free: b.f,
-                    locked: b.l
+                const balances = (msg.B || []).map(b => ({
+                    asset:  b.a,
+                    free:   b.f,
+                    locked: b.l,
                 })).filter(b => parseFloat(b.free) > 0 || parseFloat(b.locked) > 0);
-                
+
                 await redis.set('BINANCE:BALANCES:ALL', JSON.stringify(balances));
+                const usdt = balances.find(b => b.asset === 'USDT');
+                if (usdt) {
+                    await redis.set('BINANCE:BALANCE:USDT', JSON.stringify({ free: usdt.free, locked: usdt.locked }));
+                }
                 if (io) io.emit('balance-update', balances);
             }
 
@@ -404,16 +524,22 @@ async function start(socketIo, onExecution = null) {
     }
 
     // One-shot snapshot so the dashboard isn't empty before the first
-    // user-data event arrives. WS gives us deltas; this gives us state.
+    // user-data event arrives. There is no Binance WebSocket "give me
+    // current state" frame — the User Data Stream only emits deltas
+    // when something changes. So one REST call at boot is unavoidable.
+    //
+    // After this, every change (new order, fill, cancel, OCO list status)
+    // arrives via WebSocket within ~100 ms and updates the cache via
+    // applyOrderEventToCache / applyListStatusToCache. No polling.
     if (API_KEY && SECRET_KEY) {
         refreshAllSnapshots().then(() => {
-            console.log('📊 Initial Binance snapshot loaded (balances + open orders + OCO lists)');
+            console.log('📊 Initial Binance snapshot loaded — WS now drives all updates');
         });
-        // Periodic refresh: cheap insurance against missed deltas (e.g. if
-        // the user-data WS reconnected during a fill). Cancels and reschedules
-        // on every start() to avoid duplicate timers across hot-reloads.
+        // Stop any prior periodic snapshot timer (left over from earlier
+        // versions). We do not start a new one — WebSocket deltas are
+        // authoritative from this point on.
         clearInterval(snapshotTimer);
-        snapshotTimer = setInterval(refreshAllSnapshots, SNAPSHOT_REFRESH_MS);
+        snapshotTimer = null;
     }
 }
 
