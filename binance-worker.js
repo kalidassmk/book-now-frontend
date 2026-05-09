@@ -162,13 +162,62 @@ async function refreshOrderListsSnapshot() {
     }
 }
 
+// Trade history is per-symbol on Binance — there is no /api/v3/myTrades
+// without a symbol filter. We seed BINANCE:TRADE_HISTORY:ALL by walking
+// every asset with a non-zero balance and fetching its USDT-pair trades,
+// then keep it fresh going forward via the WebSocket executionReport
+// handler in connectWS().
+const TRADE_HISTORY_CAP = 500;       // cap the global history list
+const TRADE_HISTORY_PER_SYMBOL = 50; // recent trades per symbol on seed
+
+async function refreshTradeHistorySnapshot() {
+    try {
+        const balRaw = await redis.get('BINANCE:BALANCES:ALL');
+        const balances = balRaw ? JSON.parse(balRaw) : [];
+        const symbolsToFetch = balances
+            .map(b => b.asset)
+            .filter(a => a && a !== 'USDT')
+            .map(a => `${a}USDT`);
+
+        if (!symbolsToFetch.length) return;
+
+        const collected = [];
+        for (const symbol of symbolsToFetch) {
+            try {
+                const trades = await binanceFetch('/api/v3/myTrades', 'GET', {
+                    symbol,
+                    limit: TRADE_HISTORY_PER_SYMBOL,
+                });
+                if (Array.isArray(trades)) {
+                    collected.push(...trades);
+                    // Per-symbol cache for the detail view.
+                    await redis.set(`BINANCE:TRADE_HISTORY:${symbol}`, JSON.stringify(trades));
+                }
+            } catch (err) {
+                console.warn(`[snapshot] trade history ${symbol} failed:`, err.message);
+            }
+        }
+
+        // Sort newest-first and cap. ``time`` is epoch-ms on Binance
+        // myTrades response.
+        collected.sort((a, b) => (b.time || 0) - (a.time || 0));
+        const trimmed = collected.slice(0, TRADE_HISTORY_CAP);
+        await redis.set('BINANCE:TRADE_HISTORY:ALL', JSON.stringify(trimmed));
+    } catch (err) {
+        console.warn('[snapshot] trade history refresh failed:', err.message);
+    }
+}
+
 async function refreshAllSnapshots() {
-    // Run in parallel — they hit different endpoints so weight is split.
+    // Balance snapshot must complete before trade history — the latter
+    // walks the asset list to know which symbols to fetch trades for.
     await Promise.allSettled([
         refreshBalanceSnapshot(),
         refreshOpenOrdersSnapshot(),
         refreshOrderListsSnapshot(),
     ]);
+    // Trade history runs after so it has the freshest balances to walk.
+    await refreshTradeHistorySnapshot();
 }
 
 // ─── WebSocket → cache appliers ──────────────────────────────────────
@@ -223,6 +272,51 @@ async function applyOrderEventToCache(msg) {
     } catch (err) {
         // Non-fatal: a bad cache update doesn't break the worker.
         console.warn('[WS] applyOrderEventToCache failed:', err.message);
+    }
+
+    // Trade history append — every fill (full or partial) becomes a row
+    // in BINANCE:TRADE_HISTORY:ALL and the per-symbol list. Mirrors the
+    // shape of REST /api/v3/myTrades so the dashboard sees consistent
+    // fields no matter which path produced the row.
+    if (status === 'PARTIALLY_FILLED' || status === 'FILLED') {
+        try {
+            const lastFillQty = parseFloat(msg.l) || 0;   // last filled qty (this event)
+            const lastFillPx  = parseFloat(msg.L) || 0;   // last fill price
+            if (lastFillQty <= 0 || lastFillPx <= 0) return;
+            const tradeRow = {
+                symbol:           msg.s,
+                id:               msg.t || msg.i,        // tradeId if present, else fall back
+                orderId:          msg.i,
+                orderListId:      msg.g >= 0 ? msg.g : -1,
+                price:            msg.L,                 // last fill price
+                qty:              msg.l,                 // last filled qty
+                quoteQty:         (lastFillQty * lastFillPx).toString(),
+                commission:       msg.n,
+                commissionAsset:  msg.N,
+                time:             msg.T,
+                isBuyer:          msg.S === 'BUY',
+                isMaker:          !!msg.m,
+            };
+
+            // Global cap for the dashboard's recent-history list.
+            const allRaw = await redis.get('BINANCE:TRADE_HISTORY:ALL');
+            const all = allRaw ? JSON.parse(allRaw) : [];
+            all.unshift(tradeRow);
+            if (all.length > TRADE_HISTORY_CAP) all.length = TRADE_HISTORY_CAP;
+            await redis.set('BINANCE:TRADE_HISTORY:ALL', JSON.stringify(all));
+
+            // Per-symbol cache so the detail view can pull fast.
+            const perSymKey = `BINANCE:TRADE_HISTORY:${msg.s}`;
+            const symRaw = await redis.get(perSymKey);
+            const sym = symRaw ? JSON.parse(symRaw) : [];
+            sym.unshift(tradeRow);
+            if (sym.length > TRADE_HISTORY_PER_SYMBOL) sym.length = TRADE_HISTORY_PER_SYMBOL;
+            await redis.set(perSymKey, JSON.stringify(sym));
+
+            if (io) io.emit('trade-fill', tradeRow);
+        } catch (err) {
+            console.warn('[WS] trade history append failed:', err.message);
+        }
     }
 }
 
