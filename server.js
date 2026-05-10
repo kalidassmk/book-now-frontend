@@ -604,7 +604,7 @@ async function tick() {
                 const pnlPct = (isExecuted && bp > 0 && currentPrice)
                     ? parseFloat(((currentPrice - bp) / bp * 100).toFixed(3))
                     : 0;
-                const buyUsdt = 30; // Standard bot buy is $30 (small-scalp config)
+                const buyUsdt = 6;  // Standard bot buy is $6 (Option B sizing 2026-05-10)
                 const curUsdt = (isExecuted && bp > 0 && currentPrice) ? (currentPrice / bp * buyUsdt) : 0;
                 const profitUsdt = isExecuted ? (curUsdt - buyUsdt) : 0;
 
@@ -747,9 +747,9 @@ async function tick() {
             totalPnL: parseFloat(totalPnL.toFixed(4)),
             usdtBalance: usdtAmount,
             autoEnabled: config.autoBuyEnabled, // Dynamic from Redis
-            buyAmount: config.buyAmountUsdt || 30,
-            profitPct: config.profitPct || 0,
-            profitAmount: config.profitAmountUsdt || 0.25,
+            buyAmount: config.buyAmountUsdt || 6,
+            profitPct: config.profitPct || 1.0,
+            profitAmount: config.profitAmountUsdt || 0.05,
             simulation: autoConfig.simulationMode,
             redisOk: true,
             walletAssets: balances.length,
@@ -942,14 +942,16 @@ const CONFIG_KEY = 'TRADING_CONFIG';
 // Authoritative defaults — must mirror booknow.config.trading_config.TradingConfig.
 // Used as the merge target on POST so partial form submissions can never
 // wipe knobs the form doesn't yet expose (falling-knife thresholds etc.).
+// 2026-05-10: Option B sizing — $6 buys / +1% TP / -0.65% limit-buy /
+// $0.06 stop. ≈$0.05 NET per win after Binance round-trip fees.
 const DEFAULT_TRADING_CONFIG = {
     autoBuyEnabled: false,
-    buyAmountUsdt: 30.0,
-    profitPct: 0.267,
+    buyAmountUsdt: 6.0,
+    profitPct: 1.0,
     profitAmountUsdt: 0.0,
-    limitBuyOffsetPct: 0.09,
+    limitBuyOffsetPct: 0.65,
     tslPct: 2.0,
-    stopLossUsdt: 0.30,
+    stopLossUsdt: 0.06,
     limitBuyTimeoutSec: 60,
     fastScalpMode: true,
     maxHoldSeconds: 3600,

@@ -492,9 +492,9 @@
       const auto = !!cfg.autoBuyEnabled;
       const fast = !!cfg.fastScalpMode;
       const items = [
-          { l: 'Buy', v: `$${(cfg.buyAmountUsdt || 30).toFixed(0)}`, cls: '' },
-          { l: 'TP target', v: `$${(cfg.profitAmountUsdt || 0.02).toFixed(2)}`, cls: 'green' },
-          { l: 'Limit-entry', v: `-${(cfg.limitBuyOffsetPct || 0.09).toFixed(2)}%`, cls: '' },
+          { l: 'Buy', v: `$${(cfg.buyAmountUsdt || 6).toFixed(0)}`, cls: '' },
+          { l: 'TP target', v: `$${(cfg.profitAmountUsdt || 0.05).toFixed(2)}`, cls: 'green' },
+          { l: 'Limit-entry', v: `-${(cfg.limitBuyOffsetPct || 0.65).toFixed(2)}%`, cls: '' },
           { l: 'Stop Loss', v: '-0.20%', cls: 'red' },
           { l: 'Hard SL', v: '-$1.00', cls: 'red' },
           { l: 'BE arm', v: '+$0.10', cls: '' },
