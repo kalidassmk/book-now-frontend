@@ -15,8 +15,8 @@ async function loadMasterConfig() {
         
         if (cfg) {
             _el('ck-auto').checked          = cfg.autoBuyEnabled;
-            _el('cfg-buy-amount').value     = cfg.buyAmountUsdt || 12;
-            _el('cfg-profit').value         = cfg.profitPct || 0;
+            _el('cfg-buy-amount').value     = cfg.buyAmountUsdt || 30;
+            _el('cfg-profit').value         = cfg.profitPct || 0.267;
             _el('cfg-profit-amount').value  = cfg.profitAmountUsdt || 0.25;
             _el('cfg-stop').value           = cfg.tslPct || 2.0;
             
