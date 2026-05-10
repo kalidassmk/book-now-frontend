@@ -30,6 +30,7 @@
   .pill.pump { background: rgba(249,115,22,.18); color: var(--pump); }
   .pill.vol  { background: rgba(234,179,8,.18); color: var(--vol); }
   .pill.over { background: rgba(236,72,153,.18); color: var(--over); }
+  .pill.fastdrop { background: rgba(239,68,68,.20); color: #f87171; }
   .pill.pass { background: rgba(46,204,113,.18); color: var(--good); }
   .pill.win  { background: rgba(46,204,113,.18); color: var(--good); }
   .pill.loss { background: rgba(231,76,60,.18); color: var(--bad); }
@@ -65,6 +66,7 @@
     <span class="pill pump">pump_24h</span> 24h change > +8%
     &nbsp;<span class="pill vol">volatile_1h</span> 1h range > 6%
     &nbsp;<span class="pill over">overbought</span> 24h>0% AND 60m>+1.5%
+    &nbsp;<span class="pill fastdrop">fast_drop_no_volume</span> dipped fast w/o vol surge (Pattern C)
   </div>
   <table id="breakdownTbl">
     <thead><tr><th>Rule</th><th class="num">Count</th><th class="num">% of skips</th></tr></thead>
@@ -100,6 +102,9 @@
         <th class="num">Size $</th>
         <th>Filled</th>
         <th class="num">Fill@</th>
+        <th class="num" title="Lowest % from buy price post-fill">Btm%</th>
+        <th class="num" title="Highest % from buy price post-fill">Max%</th>
+        <th class="num" title="Live vol-1m / pre-signal baseline">V-Ratio</th>
         <th>TP Hit</th>
         <th class="num">TP min</th>
         <th>Exited</th>
@@ -126,7 +131,12 @@ function fmtTs(ms) {
     return new Date(Number(ms)).toLocaleTimeString();
 }
 function pillFor(rule) {
-    return `<span class="pill ${rule === 'pump_24h' ? 'pump' : rule === 'volatile_1h' ? 'vol' : rule === 'overbought' ? 'over' : 'pass'}">${rule}</span>`;
+    const cls = rule === 'pump_24h' ? 'pump'
+              : rule === 'volatile_1h' ? 'vol'
+              : rule === 'overbought' ? 'over'
+              : rule === 'fast_drop_no_volume' ? 'fastdrop'
+              : 'pass';
+    return `<span class="pill ${cls}">${rule}</span>`;
 }
 
 async function jget(url) {
@@ -216,7 +226,7 @@ function renderBuys(items) {
 function renderOutcomes(outcomes) {
     const tbody = $('#outcomesTbl tbody');
     if (!outcomes || !outcomes.length) {
-        tbody.innerHTML = `<tr><td colspan="11" class="empty">No outcomes recorded yet today.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="14" class="empty">No outcomes recorded yet today.</td></tr>`;
         return;
     }
     // Most recent buy first
@@ -226,6 +236,18 @@ function renderOutcomes(outcomes) {
         const tp = Number(o.tp_hit) === 1;
         const exited = Number(o.exited) === 1;
         const pnl = Number(o.pnl_usdt || 0);
+        const btm = o.bottom_pct;
+        const max = o.max_pct;
+        const vratio = o.vol_ratio;
+        const btmCell = (btm !== undefined && btm !== null && !isNaN(btm))
+            ? `<span class="${Number(btm) < 0 ? 'neg' : 'mute'}">${fmt(btm, 2)}%</span>`
+            : '<span class="mute">—</span>';
+        const maxCell = (max !== undefined && max !== null && !isNaN(max))
+            ? `<span class="${Number(max) > 0 ? 'pos' : 'mute'}">${fmt(max, 2)}%</span>`
+            : '<span class="mute">—</span>';
+        const vrCell = (vratio !== undefined && vratio !== null && !isNaN(vratio))
+            ? `<span class="${Number(vratio) >= 2 ? 'pos' : 'mute'}">${fmt(vratio, 2)}x</span>`
+            : '<span class="mute">—</span>';
         return `
             <tr>
                 <td>${o.symbol || ''}</td>
@@ -233,6 +255,9 @@ function renderOutcomes(outcomes) {
                 <td class="num">${fmt(o.size_usdt, 2)}</td>
                 <td>${filled ? '<span class="pill pass">yes</span>' : '<span class="mute">—</span>'}</td>
                 <td class="num">${fmt(o.fill_price, 6)}</td>
+                <td class="num">${btmCell}</td>
+                <td class="num">${maxCell}</td>
+                <td class="num">${vrCell}</td>
                 <td>${tp ? '<span class="pill win">TP</span>' : '<span class="mute">—</span>'}</td>
                 <td class="num">${fmt(o.tp_latency_min, 1)}</td>
                 <td>${exited ? `<span class="pill ${pnl >= 0 ? 'win' : 'loss'}">${pnl >= 0 ? 'WIN' : 'LOSS'}</span>` : '<span class="mute">open</span>'}</td>

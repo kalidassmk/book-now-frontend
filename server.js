@@ -966,6 +966,11 @@ const DEFAULT_TRADING_CONFIG = {
     maxRange1hPct: 6.0,
     overboughtSkipEnabled: true,
     overbought60mPct: 1.5,
+    // Fast-drop-without-volume filter (Pattern C, 2026-05-10 trajectory analysis).
+    fastDropFilterEnabled: true,
+    fastDropDetectMinutes: 3,
+    fastDropThresholdPct: 0.5,
+    volSurgeThresholdMultiplier: 2.0,
     metricsEnabled: true,
 };
 
