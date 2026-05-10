@@ -516,7 +516,7 @@ async function tick() {
                     buyUsdt = myPos.qty * myPos.buyPrice;
                     curUsdt = myPos.qty * price;
                 } else if (botBuy) {
-                    buyUsdt = 100; // Standard bot buy
+                    buyUsdt = 30; // Standard bot buy (small-scalp config)
                     curUsdt = bp > 0 ? (price / bp * buyUsdt) : 0;
                 }
             }
@@ -604,7 +604,7 @@ async function tick() {
                 const pnlPct = (isExecuted && bp > 0 && currentPrice)
                     ? parseFloat(((currentPrice - bp) / bp * 100).toFixed(3))
                     : 0;
-                const buyUsdt = 100; // Standard bot buy is $100
+                const buyUsdt = 30; // Standard bot buy is $30 (small-scalp config)
                 const curUsdt = (isExecuted && bp > 0 && currentPrice) ? (currentPrice / bp * buyUsdt) : 0;
                 const profitUsdt = isExecuted ? (curUsdt - buyUsdt) : 0;
 
@@ -747,7 +747,7 @@ async function tick() {
             totalPnL: parseFloat(totalPnL.toFixed(4)),
             usdtBalance: usdtAmount,
             autoEnabled: config.autoBuyEnabled, // Dynamic from Redis
-            buyAmount: config.buyAmountUsdt || 100,
+            buyAmount: config.buyAmountUsdt || 30,
             profitPct: config.profitPct || 0,
             profitAmount: config.profitAmountUsdt || 0.25,
             simulation: autoConfig.simulationMode,
@@ -943,12 +943,19 @@ app.get('/api/v1/config', async (req, res) => {
     try {
         const raw = await redis.get(CONFIG_KEY);
         const config = raw ? JSON.parse(raw) : {
+            // Aligned with backend TradingConfig dataclass (small-scalp).
             autoBuyEnabled: false,
-            buyAmountUsdt: 100.0,
-            profitPct: 0,
-            profitAmountUsdt: 0.25,
-            limitBuyOffsetPct: 0.3,
-            tslPct: 2.0
+            buyAmountUsdt: 30.0,
+            profitPct: 0.267,
+            profitAmountUsdt: 0.0,
+            limitBuyOffsetPct: 0.09,
+            tslPct: 2.0,
+            stopLossUsdt: 0.30,
+            limitBuyTimeoutSec: 60,
+            virtualScalperLiveMode: false,
+            minChange24hPct: -1.0,
+            minRange24hPct: 5.0,
+            minVol24hUsd: 2000000
         };
         res.json(config);
     } catch (err) {
