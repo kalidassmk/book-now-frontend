@@ -32,14 +32,14 @@ const orders = (() => {
         if (event) event.stopPropagation();
         
         let price = 0;
-        let buyAmount = 12; // Default USDT fallback
+        let buyAmount = 30; // Default USDT fallback (small-scalp config)
         let target = 0;
 
         try {
             const res = await fetch('/api/v1/config');
             const cfg = await res.json();
             if (cfg) {
-                buyAmount = cfg.buyAmountUsdt || 12;
+                buyAmount = cfg.buyAmountUsdt || 30;
             }
         } catch (err) {
             console.error('[Orders] QuickBuy config fetch failed:', err);
@@ -91,7 +91,7 @@ const orders = (() => {
         updateSymbol(symbol);
         // Do NOT force LIMIT mode here, respect currentMode
         document.getElementById('m-price').value = price || '';
-        document.getElementById('m-total').value = 12; // Instant default to prevent flicker
+        document.getElementById('m-total').value = 30; // Instant default to prevent flicker (small-scalp config)
         
         try {
             // Fetch latest master config
@@ -115,7 +115,7 @@ const orders = (() => {
 
             if (cfg) {
                 // 1. Fill BUY form defaults
-                document.getElementById('m-total').value = cfg.buyAmountUsdt || 12;
+                document.getElementById('m-total').value = cfg.buyAmountUsdt || 30;
                 _calcTarget(price, cfg);
                 recalc('BUY');
 
@@ -190,7 +190,7 @@ const orders = (() => {
             if (cfg && cfg.profitAmountUsdt > 0) {
                 // Formula: Target = BuyPrice + (ProfitAmount / Quantity)
                 // Quantity = Total / BuyPrice
-                const total = parseFloat(document.getElementById('m-total').value) || 12;
+                const total = parseFloat(document.getElementById('m-total').value) || 30;
                 const qty = total / buyPriceNum;
                 const target = buyPriceNum + (cfg.profitAmountUsdt / qty);
                 targetInput.value = target.toFixed(8);
