@@ -963,10 +963,19 @@ app.post('/api/v1/config', async (req, res) => {
         if (typeof newConfig.autoBuyEnabled !== 'boolean') return res.status(400).json({ error: 'Invalid autoBuyEnabled' });
         if (isNaN(newConfig.buyAmountUsdt)) return res.status(400).json({ error: 'Invalid buyAmountUsdt' });
         if (isNaN(newConfig.profitAmountUsdt)) return res.status(400).json({ error: 'Invalid profitAmountUsdt' });
-        
-        await redis.set(CONFIG_KEY, JSON.stringify(newConfig));
-        console.log('[Config] Configuration updated via dashboard:', newConfig);
-        res.json({ success: true, config: newConfig });
+
+        // MERGE with existing config so fields the form doesn't include
+        // (stopLossUsdt, virtualScalperLiveMode, min*24h*, etc.) are
+        // preserved instead of silently destroyed. Single source of
+        // truth: TRADING_CONFIG holds every field; the dashboard form
+        // is allowed to update a subset.
+        const existingRaw = await redis.get(CONFIG_KEY);
+        const existing = existingRaw ? JSON.parse(existingRaw) : {};
+        const merged = { ...existing, ...newConfig };
+
+        await redis.set(CONFIG_KEY, JSON.stringify(merged));
+        console.log('[Config] Configuration merged via dashboard:', merged);
+        res.json({ success: true, config: merged });
     } catch (err) {
         res.status(500).json({ error: 'Failed to save config' });
     }
