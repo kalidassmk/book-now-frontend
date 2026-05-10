@@ -952,7 +952,7 @@ const DEFAULT_TRADING_CONFIG = {
     limitBuyOffsetPct: 0.65,
     tslPct: 2.0,
     stopLossUsdt: 0.0,    // 0 = disabled (Option B patient hold)
-    limitBuyTimeoutSec: 60,
+    limitBuyTimeoutSec: 3600,    // 60 min — Option B fill window
     fastScalpMode: true,
     maxHoldSeconds: 3600,
     marketExitOnTimeout: true,
