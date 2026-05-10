@@ -967,9 +967,11 @@ const DEFAULT_TRADING_CONFIG = {
     overboughtSkipEnabled: true,
     overbought60mPct: 1.5,
     // Fast-drop-without-volume filter (Pattern C, 2026-05-10 trajectory analysis).
+    // Iter 2 (same day): threshold 0.5 → 0.7 after backtest showed 0.5 % was
+    // catching shallow slow-drifters that eventually became winners.
     fastDropFilterEnabled: true,
     fastDropDetectMinutes: 3,
-    fastDropThresholdPct: 0.5,
+    fastDropThresholdPct: 0.7,
     volSurgeThresholdMultiplier: 2.0,
     metricsEnabled: true,
 };
