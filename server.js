@@ -939,24 +939,40 @@ app.get('/api/trade/order-list', async (req, res) => {
 // ─── Configuration API ────────────────────────────────────────────────────────
 const CONFIG_KEY = 'TRADING_CONFIG';
 
+// Authoritative defaults — must mirror booknow.config.trading_config.TradingConfig.
+// Used as the merge target on POST so partial form submissions can never
+// wipe knobs the form doesn't yet expose (falling-knife thresholds etc.).
+const DEFAULT_TRADING_CONFIG = {
+    autoBuyEnabled: false,
+    buyAmountUsdt: 30.0,
+    profitPct: 0.267,
+    profitAmountUsdt: 0.0,
+    limitBuyOffsetPct: 0.09,
+    tslPct: 2.0,
+    stopLossUsdt: 0.30,
+    limitBuyTimeoutSec: 60,
+    fastScalpMode: true,
+    maxHoldSeconds: 3600,
+    marketExitOnTimeout: true,
+    virtualScalperLiveMode: false,
+    minChange24hPct: -1.0,
+    minRange24hPct: 5.0,
+    minVol24hUsd: 2000000,
+    // Falling-knife filter — added 2026-05-10 from XEC/LUNC/LUMIA backtest.
+    fallingKnifeFilterEnabled: true,
+    maxChange24hPct: 8.0,
+    maxRange1hPct: 6.0,
+    overboughtSkipEnabled: true,
+    overbought60mPct: 1.5,
+    metricsEnabled: true,
+};
+
 app.get('/api/v1/config', async (req, res) => {
     try {
         const raw = await redis.get(CONFIG_KEY);
-        const config = raw ? JSON.parse(raw) : {
-            // Aligned with backend TradingConfig dataclass (small-scalp).
-            autoBuyEnabled: false,
-            buyAmountUsdt: 30.0,
-            profitPct: 0.267,
-            profitAmountUsdt: 0.0,
-            limitBuyOffsetPct: 0.09,
-            tslPct: 2.0,
-            stopLossUsdt: 0.30,
-            limitBuyTimeoutSec: 60,
-            virtualScalperLiveMode: false,
-            minChange24hPct: -1.0,
-            minRange24hPct: 5.0,
-            minVol24hUsd: 2000000
-        };
+        const stored = raw ? JSON.parse(raw) : {};
+        // Merge over defaults so the UI always sees every known field.
+        const config = { ...DEFAULT_TRADING_CONFIG, ...stored };
         res.json(config);
     } catch (err) {
         res.status(500).json({ error: 'Failed to fetch config' });
@@ -965,7 +981,7 @@ app.get('/api/v1/config', async (req, res) => {
 
 app.post('/api/v1/config', async (req, res) => {
     try {
-        const newConfig = req.body;
+        const newConfig = req.body || {};
         // Basic validation
         if (typeof newConfig.autoBuyEnabled !== 'boolean') return res.status(400).json({ error: 'Invalid autoBuyEnabled' });
         if (isNaN(newConfig.buyAmountUsdt)) return res.status(400).json({ error: 'Invalid buyAmountUsdt' });
@@ -978,13 +994,93 @@ app.post('/api/v1/config', async (req, res) => {
         // is allowed to update a subset.
         const existingRaw = await redis.get(CONFIG_KEY);
         const existing = existingRaw ? JSON.parse(existingRaw) : {};
-        const merged = { ...existing, ...newConfig };
+        const merged = { ...DEFAULT_TRADING_CONFIG, ...existing, ...newConfig };
 
         await redis.set(CONFIG_KEY, JSON.stringify(merged));
         console.log('[Config] Configuration merged via dashboard:', merged);
         res.json({ success: true, config: merged });
     } catch (err) {
         res.status(500).json({ error: 'Failed to save config' });
+    }
+});
+
+// ─── Metrics API ──────────────────────────────────────────────────────────────
+// Backend writes via metrics_collector.py to the same Redis under METRICS:*.
+function todayStr() { return new Date().toISOString().slice(0, 10); }
+
+async function _safeParseList(key, limit = 200) {
+    try {
+        const arr = await redis.lrange(key, 0, limit - 1);
+        return arr.map((x) => { try { return JSON.parse(x); } catch (_) { return null; } }).filter(Boolean);
+    } catch (_) { return []; }
+}
+
+app.get('/api/metrics/summary', async (req, res) => {
+    try {
+        const date = req.query.date || todayStr();
+        const [daily, breakdown] = await Promise.all([
+            redis.hgetall(`METRICS:DAILY:${date}`),
+            redis.hgetall(`METRICS:FILTER_BREAKDOWN:${date}`),
+        ]);
+        const toNum = (m) => Object.fromEntries(
+            Object.entries(m || {}).map(([k, v]) => [k, isNaN(Number(v)) ? v : Number(v)])
+        );
+
+        const outcomeKeys = await redis.keys(`METRICS:OUTCOME:${date}:*`);
+        const outcomes = await Promise.all(outcomeKeys.map(async (k) => {
+            const h = await redis.hgetall(k);
+            const obj = {};
+            for (const [k2, v2] of Object.entries(h || {})) {
+                if (v2 === undefined) continue;
+                if (typeof v2 === 'string' && (v2.startsWith('{') || v2.startsWith('['))) {
+                    try { obj[k2] = JSON.parse(v2); continue; } catch (_) {}
+                }
+                obj[k2] = isNaN(Number(v2)) ? v2 : Number(v2);
+            }
+            return obj;
+        }));
+
+        res.json({
+            date,
+            daily: toNum(daily),
+            filterBreakdown: toNum(breakdown),
+            outcomes,
+        });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch metrics summary', detail: err.message });
+    }
+});
+
+app.get('/api/metrics/signals', async (req, res) => {
+    try {
+        const date = req.query.date || todayStr();
+        const limit = Math.min(parseInt(req.query.limit || '200', 10), 1000);
+        const items = await _safeParseList(`METRICS:SIGNAL:${date}`, limit);
+        res.json({ date, count: items.length, items });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch signals', detail: err.message });
+    }
+});
+
+app.get('/api/metrics/skips', async (req, res) => {
+    try {
+        const date = req.query.date || todayStr();
+        const limit = Math.min(parseInt(req.query.limit || '200', 10), 1000);
+        const items = await _safeParseList(`METRICS:SKIP:${date}`, limit);
+        res.json({ date, count: items.length, items });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch skips', detail: err.message });
+    }
+});
+
+app.get('/api/metrics/buys', async (req, res) => {
+    try {
+        const date = req.query.date || todayStr();
+        const limit = Math.min(parseInt(req.query.limit || '200', 10), 1000);
+        const items = await _safeParseList(`METRICS:BUY:${date}`, limit);
+        res.json({ date, count: items.length, items });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch buys', detail: err.message });
     }
 });
 
