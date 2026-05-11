@@ -39,7 +39,7 @@ const orders = (() => {
             const res = await fetch('/api/v1/config');
             const cfg = await res.json();
             if (cfg) {
-                buyAmount = cfg.buyAmountUsdt || 6;
+                buyAmount = cfg.buyAmountUsdt || 12;
             }
         } catch (err) {
             console.error('[Orders] QuickBuy config fetch failed:', err);
@@ -115,7 +115,7 @@ const orders = (() => {
 
             if (cfg) {
                 // 1. Fill BUY form defaults
-                document.getElementById('m-total').value = cfg.buyAmountUsdt || 6;
+                document.getElementById('m-total').value = cfg.buyAmountUsdt || 12;
                 _calcTarget(price, cfg);
                 recalc('BUY');
 
@@ -190,7 +190,7 @@ const orders = (() => {
             if (cfg && cfg.profitAmountUsdt > 0) {
                 // Formula: Target = BuyPrice + (ProfitAmount / Quantity)
                 // Quantity = Total / BuyPrice
-                const total = parseFloat(document.getElementById('m-total').value) || 6;
+                const total = parseFloat(document.getElementById('m-total').value) || 12;
                 const qty = total / buyPriceNum;
                 const target = buyPriceNum + (cfg.profitAmountUsdt / qty);
                 targetInput.value = target.toFixed(8);

@@ -604,7 +604,7 @@ async function tick() {
                 const pnlPct = (isExecuted && bp > 0 && currentPrice)
                     ? parseFloat(((currentPrice - bp) / bp * 100).toFixed(3))
                     : 0;
-                const buyUsdt = 6;  // Standard bot buy is $6 (Option B sizing 2026-05-10)
+                const buyUsdt = 12; // Standard bot buy is $12/leg (2026-05-11 sizing)
                 const curUsdt = (isExecuted && bp > 0 && currentPrice) ? (currentPrice / bp * buyUsdt) : 0;
                 const profitUsdt = isExecuted ? (curUsdt - buyUsdt) : 0;
 
@@ -747,9 +747,9 @@ async function tick() {
             totalPnL: parseFloat(totalPnL.toFixed(4)),
             usdtBalance: usdtAmount,
             autoEnabled: config.autoBuyEnabled, // Dynamic from Redis
-            buyAmount: config.buyAmountUsdt || 6,
+            buyAmount: config.buyAmountUsdt || 12,
             profitPct: config.profitPct || 1.0,
-            profitAmount: config.profitAmountUsdt || 0.05,
+            profitAmount: config.profitAmountUsdt || 0.10,
             simulation: autoConfig.simulationMode,
             redisOk: true,
             walletAssets: balances.length,
@@ -946,7 +946,8 @@ const CONFIG_KEY = 'TRADING_CONFIG';
 // $0.06 stop. ≈$0.05 NET per win after Binance round-trip fees.
 const DEFAULT_TRADING_CONFIG = {
     autoBuyEnabled: false,
-    buyAmountUsdt: 6.0,
+    // 2026-05-11 iter 2: $6 → $12/leg sizing.
+    buyAmountUsdt: 12.0,
     profitPct: 1.0,
     profitAmountUsdt: 0.0,
     // 2026-05-11 iter 3: tighter -0.30% offset (was 0.65) for higher fill rate.
@@ -978,14 +979,15 @@ const DEFAULT_TRADING_CONFIG = {
     fastDropDetectMinutes: 3,
     fastDropThresholdPct: 0.7,
     volSurgeThresholdMultiplier: 2.0,
-    // Laddered Recovery (2026-05-11): single-coin 3-tier averaging-down.
+    // Laddered Recovery (2026-05-11 iter 2): multi-coin 3-tier averaging-down.
     // Default OFF in defaults so a Redis wipe stays on the simpler model.
     // Live Redis sets to true.
     ladderedRecoveryEnabled: false,
-    singleCoinModeEnabled: true,
-    ladderBuy1SizeUsdt: 6.0,
-    ladderBuy2SizeUsdt: 6.0,
-    ladderBuy3SizeUsdt: 6.0,
+    maxConcurrentLadders: 3,
+    singleCoinModeEnabled: false,   // legacy; superseded by maxConcurrentLadders
+    ladderBuy1SizeUsdt: 12.0,
+    ladderBuy2SizeUsdt: 12.0,
+    ladderBuy3SizeUsdt: 12.0,
     ladderBuy2OffsetPct: 0.5,
     ladderBuy3OffsetPct: 1.0,
     ladderTpFromAvgPct: 1.0,
