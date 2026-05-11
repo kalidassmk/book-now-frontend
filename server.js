@@ -949,23 +949,28 @@ const DEFAULT_TRADING_CONFIG = {
     buyAmountUsdt: 6.0,
     profitPct: 1.0,
     profitAmountUsdt: 0.0,
-    limitBuyOffsetPct: 0.65,
+    // 2026-05-11 iter 3: tighter -0.30% offset (was 0.65) for higher fill rate.
+    limitBuyOffsetPct: 0.30,
     tslPct: 2.0,
     stopLossUsdt: 0.0,    // 0 = disabled (Option B patient hold)
-    limitBuyTimeoutSec: 3600,    // 60 min — Option B fill window
+    limitBuyTimeoutSec: 3600,    // 60 min — full Option B fill window
     fastScalpMode: true,
     maxHoldSeconds: 3600,
     marketExitOnTimeout: true,
+    // Trend-reversal exit: True default for safety on Redis wipe, but
+    // operator runs with False (most "panic exits" hit TP later).
+    trendReversalExitEnabled: true,
     virtualScalperLiveMode: false,
     minChange24hPct: -1.0,
     minRange24hPct: 5.0,
     minVol24hUsd: 2000000,
     // Falling-knife filter — added 2026-05-10 from XEC/LUNC/LUMIA backtest.
+    // Iter 2 (2026-05-11): loosened after 58% false-positive rate on skips.
     fallingKnifeFilterEnabled: true,
-    maxChange24hPct: 8.0,
+    maxChange24hPct: 12.0,
     maxRange1hPct: 6.0,
     overboughtSkipEnabled: true,
-    overbought60mPct: 1.5,
+    overbought60mPct: 2.5,
     // Fast-drop-without-volume filter (Pattern C, 2026-05-10 trajectory analysis).
     // Iter 2 (same day): threshold 0.5 → 0.7 after backtest showed 0.5 % was
     // catching shallow slow-drifters that eventually became winners.
