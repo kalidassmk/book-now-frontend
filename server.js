@@ -992,6 +992,9 @@ const DEFAULT_TRADING_CONFIG = {
     ladderBuy2OffsetPct: 0.5,
     ladderBuy3OffsetPct: 1.0,
     ladderTpFromAvgPct: 0.6,
+    // 2026-05-11 iter 8: dollar-target wins when set; TP auto-computed.
+    ladderTargetNetProfitUsdt: 0.05,
+    ladderFeeRatePerSide: 0.00075,  // 0.075 % (BNB-fees ON); set to 0.001 if OFF
     ladderHardStopBelowBuy3Pct: 1.0,
     ladderBuy1UseMarketOrder: true,
     ladderBuy1OffsetPct: 0.0,         // 0 = market; >0 = LIMIT at signal × (1-X%)
