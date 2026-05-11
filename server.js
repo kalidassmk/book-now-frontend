@@ -748,8 +748,8 @@ async function tick() {
             usdtBalance: usdtAmount,
             autoEnabled: config.autoBuyEnabled, // Dynamic from Redis
             buyAmount: config.buyAmountUsdt || 12,
-            profitPct: config.profitPct || 1.0,
-            profitAmount: config.profitAmountUsdt || 0.10,
+            profitPct: config.profitPct || 0.6,
+            profitAmount: config.profitAmountUsdt || 0.05,
             simulation: autoConfig.simulationMode,
             redisOk: true,
             walletAssets: balances.length,
@@ -948,7 +948,8 @@ const DEFAULT_TRADING_CONFIG = {
     autoBuyEnabled: false,
     // 2026-05-11 iter 2: $6 → $12/leg sizing.
     buyAmountUsdt: 12.0,
-    profitPct: 1.0,
+    // 2026-05-11 iter 4: TP 1.0 → 0.6 % → net ~$0.05 per $12 leg.
+    profitPct: 0.6,
     profitAmountUsdt: 0.0,
     // 2026-05-11 iter 3: tighter -0.30% offset (was 0.65) for higher fill rate.
     limitBuyOffsetPct: 0.30,
@@ -990,7 +991,7 @@ const DEFAULT_TRADING_CONFIG = {
     ladderBuy3SizeUsdt: 12.0,
     ladderBuy2OffsetPct: 0.5,
     ladderBuy3OffsetPct: 1.0,
-    ladderTpFromAvgPct: 1.0,
+    ladderTpFromAvgPct: 0.6,
     ladderHardStopBelowBuy3Pct: 1.0,
     ladderBuy1UseMarketOrder: true,
     ladderCooldownSeconds: 14400,    // 4h per-coin cooldown after a ladder closes
