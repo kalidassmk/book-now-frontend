@@ -997,7 +997,7 @@ const DEFAULT_TRADING_CONFIG = {
     ladderFeeRatePerSide: 0.00075,  // 0.075 % (BNB-fees ON); set to 0.001 if OFF
     ladderHardStopBelowBuy3Pct: 1.0,
     ladderBuy1UseMarketOrder: true,
-    ladderBuy1OffsetPct: 0.0,         // 0 = market; >0 = LIMIT at signal × (1-X%)
+    ladderBuy1OffsetPct: 0.09,        // 0 = market; >0 = LIMIT at signal × (1-X%) — iter 10 default
     ladderCooldownSeconds: 14400,    // 4h per-coin cooldown after a ladder closes
     metricsEnabled: true,
 };
