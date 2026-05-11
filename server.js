@@ -978,6 +978,19 @@ const DEFAULT_TRADING_CONFIG = {
     fastDropDetectMinutes: 3,
     fastDropThresholdPct: 0.7,
     volSurgeThresholdMultiplier: 2.0,
+    // Laddered Recovery (2026-05-11): single-coin 3-tier averaging-down.
+    // Default OFF in defaults so a Redis wipe stays on the simpler model.
+    // Live Redis sets to true.
+    ladderedRecoveryEnabled: false,
+    singleCoinModeEnabled: true,
+    ladderBuy1SizeUsdt: 6.0,
+    ladderBuy2SizeUsdt: 6.0,
+    ladderBuy3SizeUsdt: 6.0,
+    ladderBuy2OffsetPct: 0.5,
+    ladderBuy3OffsetPct: 1.0,
+    ladderTpFromAvgPct: 1.0,
+    ladderHardStopBelowBuy3Pct: 1.0,
+    ladderBuy1UseMarketOrder: false,
     metricsEnabled: true,
 };
 
