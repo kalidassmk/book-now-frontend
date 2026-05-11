@@ -992,7 +992,8 @@ const DEFAULT_TRADING_CONFIG = {
     ladderBuy3OffsetPct: 1.0,
     ladderTpFromAvgPct: 1.0,
     ladderHardStopBelowBuy3Pct: 1.0,
-    ladderBuy1UseMarketOrder: false,
+    ladderBuy1UseMarketOrder: true,
+    ladderCooldownSeconds: 14400,    // 4h per-coin cooldown after a ladder closes
     metricsEnabled: true,
 };
 
