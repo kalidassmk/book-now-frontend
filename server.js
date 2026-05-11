@@ -604,7 +604,7 @@ async function tick() {
                 const pnlPct = (isExecuted && bp > 0 && currentPrice)
                     ? parseFloat(((currentPrice - bp) / bp * 100).toFixed(3))
                     : 0;
-                const buyUsdt = 12; // Standard bot buy is $12/leg (2026-05-11 sizing)
+                const buyUsdt = 30; // Standard bot buy is $30/leg (2026-05-11 iter 9 sizing)
                 const curUsdt = (isExecuted && bp > 0 && currentPrice) ? (currentPrice / bp * buyUsdt) : 0;
                 const profitUsdt = isExecuted ? (curUsdt - buyUsdt) : 0;
 
@@ -747,9 +747,9 @@ async function tick() {
             totalPnL: parseFloat(totalPnL.toFixed(4)),
             usdtBalance: usdtAmount,
             autoEnabled: config.autoBuyEnabled, // Dynamic from Redis
-            buyAmount: config.buyAmountUsdt || 12,
-            profitPct: config.profitPct || 0.6,
-            profitAmount: config.profitAmountUsdt || 0.05,
+            buyAmount: config.buyAmountUsdt || 30,
+            profitPct: config.profitPct || 0.7,
+            profitAmount: config.profitAmountUsdt || 0.15,
             simulation: autoConfig.simulationMode,
             redisOk: true,
             walletAssets: balances.length,
@@ -946,8 +946,8 @@ const CONFIG_KEY = 'TRADING_CONFIG';
 // $0.06 stop. ≈$0.05 NET per win after Binance round-trip fees.
 const DEFAULT_TRADING_CONFIG = {
     autoBuyEnabled: false,
-    // 2026-05-11 iter 2: $6 → $12/leg sizing.
-    buyAmountUsdt: 12.0,
+    // 2026-05-11 iter 9: $12 → $30/leg sizing, 1 ladder concurrent.
+    buyAmountUsdt: 30.0,
     // 2026-05-11 iter 4: TP 1.0 → 0.6 % → net ~$0.05 per $12 leg.
     profitPct: 0.6,
     profitAmountUsdt: 0.0,
@@ -965,7 +965,7 @@ const DEFAULT_TRADING_CONFIG = {
     virtualScalperLiveMode: false,
     minChange24hPct: -1.0,
     minRange24hPct: 5.0,
-    minVol24hUsd: 2000000,
+    minVol24hUsd: 5000000,
     // Falling-knife filter — added 2026-05-10 from XEC/LUNC/LUMIA backtest.
     // Iter 2 (2026-05-11): loosened after 58% false-positive rate on skips.
     fallingKnifeFilterEnabled: true,
@@ -984,16 +984,16 @@ const DEFAULT_TRADING_CONFIG = {
     // Default OFF in defaults so a Redis wipe stays on the simpler model.
     // Live Redis sets to true.
     ladderedRecoveryEnabled: false,
-    maxConcurrentLadders: 3,
+    maxConcurrentLadders: 1,
     singleCoinModeEnabled: false,   // legacy; superseded by maxConcurrentLadders
-    ladderBuy1SizeUsdt: 12.0,
-    ladderBuy2SizeUsdt: 12.0,
-    ladderBuy3SizeUsdt: 12.0,
+    ladderBuy1SizeUsdt: 30.0,
+    ladderBuy2SizeUsdt: 30.0,
+    ladderBuy3SizeUsdt: 30.0,
     ladderBuy2OffsetPct: 0.5,
     ladderBuy3OffsetPct: 1.0,
     ladderTpFromAvgPct: 0.6,
     // 2026-05-11 iter 8: dollar-target wins when set; TP auto-computed.
-    ladderTargetNetProfitUsdt: 0.05,
+    ladderTargetNetProfitUsdt: 0.15,
     ladderFeeRatePerSide: 0.00075,  // 0.075 % (BNB-fees ON); set to 0.001 if OFF
     ladderHardStopBelowBuy3Pct: 1.0,
     ladderBuy1UseMarketOrder: true,
