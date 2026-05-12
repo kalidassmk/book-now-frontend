@@ -747,7 +747,7 @@ async function tick() {
             totalPnL: parseFloat(totalPnL.toFixed(4)),
             usdtBalance: usdtAmount,
             autoEnabled: config.autoBuyEnabled, // Dynamic from Redis
-            buyAmount: config.buyAmountUsdt || 50,
+            buyAmount: config.buyAmountUsdt || 48,
             profitPct: config.profitPct || 0.5,
             profitAmount: config.profitAmountUsdt || 0.15,
             simulation: autoConfig.simulationMode,
@@ -946,8 +946,8 @@ const CONFIG_KEY = 'TRADING_CONFIG';
 // $0.06 stop. ≈$0.05 NET per win after Binance round-trip fees.
 const DEFAULT_TRADING_CONFIG = {
     autoBuyEnabled: false,
-    // 2026-05-12 iter 12: $50/leg, 2-leg ladder (Buy 3 off).
-    buyAmountUsdt: 50.0,
+    // 2026-05-12 iter 15: $48 default to match ladderBuy1/2SizeUsdt.
+    buyAmountUsdt: 48.0,
     // 2026-05-11 iter 4: TP 1.0 → 0.6 % → net ~$0.05 per $12 leg.
     profitPct: 0.6,
     profitAmountUsdt: 0.0,
@@ -991,8 +991,10 @@ const DEFAULT_TRADING_CONFIG = {
     ladderedRecoveryEnabled: false,
     maxConcurrentLadders: 1,
     singleCoinModeEnabled: false,   // legacy; superseded by maxConcurrentLadders
-    ladderBuy1SizeUsdt: 50.0,
-    ladderBuy2SizeUsdt: 50.0,
+    // 2026-05-12 iter 15: $50 → $48/leg (operator request — $96/ladder
+    // fits $100 wallet with 3% funds margin and ~$3 headroom).
+    ladderBuy1SizeUsdt: 48.0,
+    ladderBuy2SizeUsdt: 48.0,
     ladderBuy3SizeUsdt: 0.0,
     ladderBuy2OffsetPct: 0.5,
     ladderBuy3OffsetPct: 1.0,
