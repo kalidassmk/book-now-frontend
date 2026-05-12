@@ -962,7 +962,12 @@ const DEFAULT_TRADING_CONFIG = {
     // Trend-reversal exit: True default for safety on Redis wipe, but
     // operator runs with False (most "panic exits" hit TP later).
     trendReversalExitEnabled: true,
-    virtualScalperLiveMode: false,
+    // 2026-05-12 iter 15: default true (was false). Aligns with the backend
+    // dataclass default. The dashboard form only POSTs a subset of fields,
+    // so this default fills in for the rest when the Node frontend merges.
+    // (Note: the live POST is actually served by the Python backend, which
+    // now also merges over existing Redis state instead of overwriting.)
+    virtualScalperLiveMode: true,
     minChange24hPct: -1.0,
     minRange24hPct: 5.0,
     minVol24hUsd: 5000000,
