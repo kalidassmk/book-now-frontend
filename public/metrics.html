@@ -160,9 +160,17 @@ async function loadAudit() {
         const past15 = (it.past_15min_low != null && it.past_15min_high != null)
             ? `${fmtNum(it.past_15min_low)} / ${fmtNum(it.past_15min_high)}`
             : '—';
-        const scalperBadge = it.scalper_origin
+        // Scalper badge + paper/live indicator. 2026-05-12 iter 15:
+        // operator confused paper Virtual Scalper trades with real ones
+        // because the only visual cue was Offset=0%. Now we show an
+        // explicit PAPER tag next to the scalper origin.
+        const ot = String(it.order_type || '');
+        const isPaper = ot.includes('_paper');
+        const baseBadge = it.scalper_origin
             ? `<span class="pill ${it.scalper_origin === 'FAST' ? 'win' : 'open'}">${it.scalper_origin}</span>`
             : '<span class="mute">—</span>';
+        const paperBadge = isPaper ? ' <span class="pill cancel">PAPER</span>' : '';
+        const scalperBadge = baseBadge + paperBadge;
         return `
           <tr>
             <td class="mute">${fmtTime(it.ts)}</td>

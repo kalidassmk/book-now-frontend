@@ -1149,6 +1149,11 @@ app.get('/api/metrics/audit', async (req, res) => {
                     ev.exit_price        = num(h.exit_price);
                     ev.exit_reason       = h.exit_reason || null;
                     ev.pnl_usdt          = num(h.pnl_usdt);
+                    // 2026-05-12 iter 15: surface order_type so dashboard
+                    // can distinguish paper (virtual_..._paper) from live
+                    // (virtual_..._offset_limit / virtual_..._market) and
+                    // from Fast Scalper paths.
+                    ev.order_type        = h.order_type || null;
                 }
             } catch (_) {}
         }
