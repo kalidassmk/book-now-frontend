@@ -2,115 +2,78 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Book-Now — Metrics & Filter Analysis</title>
+<title>Book-Now — Trade Audit</title>
 <style>
   :root {
     --bg: #0c1116; --panel: #141b24; --line: #1f2933;
     --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
     --text: #e6edf3; --muted: #8b949e;
-    --pump: #f97316; --vol: #eab308; --over: #ec4899;
   }
   * { box-sizing: border-box; }
-  body { background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif; margin: 0; padding: 20px; }
-  h1 { margin: 0 0 8px; font-size: 22px; }
-  .sub { color: var(--muted); margin-bottom: 18px; }
-  .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
-  .card h3 { margin: 0 0 6px; color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
-  .card .v { font-size: 24px; font-weight: 700; }
-  .card.good .v { color: var(--good); } .card.bad .v { color: var(--bad); }
-  .section { margin-top: 28px; }
-  .section h2 { font-size: 16px; margin: 0 0 8px; color: var(--accent); }
-  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--line); font-size: 13px; }
-  th { background: #1a232e; color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 18px; }
+  h1 { margin: 0 0 6px; font-size: 20px; }
+  .sub { color: var(--muted); margin-bottom: 16px; font-size: 13px; }
+  .controls { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; }
+  input[type="date"] { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px; }
+  button { background: var(--accent); border: 0; color: #fff; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: 600; }
+  button:hover { filter: brightness(1.1); }
+  .legend { color: var(--muted); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--line); font-size: 12px; white-space: nowrap; }
+  th { background: #1a232e; color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.4px; position: sticky; top: 0; z-index: 1; }
   tr:last-child td { border-bottom: none; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
-  .pill.pump { background: rgba(249,115,22,.18); color: var(--pump); }
-  .pill.vol  { background: rgba(234,179,8,.18); color: var(--vol); }
-  .pill.over { background: rgba(236,72,153,.18); color: var(--over); }
-  .pill.fastdrop { background: rgba(239,68,68,.20); color: #f87171; }
-  .pill.pass { background: rgba(46,204,113,.18); color: var(--good); }
+  .pos { color: var(--good); } .neg { color: var(--bad); } .mute { color: var(--muted); }
+  .empty { padding: 24px; text-align: center; color: var(--muted); }
+  .pill { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 600; }
   .pill.win  { background: rgba(46,204,113,.18); color: var(--good); }
   .pill.loss { background: rgba(231,76,60,.18); color: var(--bad); }
-  .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
-  input[type="date"] { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px; }
-  button { background: var(--accent); border: 0; color: #fff; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-weight: 600; }
-  button:hover { filter: brightness(1.1); }
-  .legend { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
-  .pos { color: var(--good); } .neg { color: var(--bad); } .mute { color: var(--muted); }
-  .empty { padding: 30px; text-align: center; color: var(--muted); }
-  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-  @media (max-width: 900px) { .twocol { grid-template-columns: 1fr; } }
+  .pill.open { background: rgba(241,196,15,.18); color: var(--warn); }
+  .scroll { overflow-x: auto; }
+  .group-hdr { background: #19222d; color: #8aafc2; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
 </style>
 </head>
 <body>
 
-<h1>Metrics & Filter Analysis</h1>
-<div class="sub">Real-time view of every signal the scalper sees, what got filtered, and how filled trades performed.</div>
+<h1>Trade Audit</h1>
+<div class="sub">Per-trade audit: pre-signal price → signal → limit → fill → live extremes → target sell prices for $0.05 / $0.10 / $0.15 net profit.</div>
 
 <div class="controls">
   <label>Date <input type="date" id="dateInput" /></label>
-  <button onclick="loadAll()">Refresh</button>
-  <span class="legend">Auto-refreshes every 15s</span>
+  <button onclick="loadAudit()">Refresh</button>
+  <span class="legend">Auto-refreshes every 15s. All prices in USDT. Past15m = the 15-minute window before signal.</span>
 </div>
 
-<!-- Counter cards -->
-<div class="row" id="cards"></div>
-
-<!-- Filter breakdown -->
-<div class="section">
-  <h2>Filter Breakdown — why signals were skipped</h2>
-  <div class="legend">
-    <span class="pill pump">pump_24h</span> 24h change > +12%
-    &nbsp;<span class="pill vol">volatile_1h</span> 1h range > 6%
-    &nbsp;<span class="pill over">overbought</span> 24h>0% AND 60m>+2.5%
-    &nbsp;<span class="pill fastdrop">fast_drop_no_volume</span> dipped fast w/o vol surge (Pattern C)
-  </div>
-  <table id="breakdownTbl">
-    <thead><tr><th>Rule</th><th class="num">Count</th><th class="num">% of skips</th></tr></thead>
-    <tbody></tbody>
-  </table>
-</div>
-
-<div class="twocol">
-  <div class="section">
-    <h2>Recent skips</h2>
-    <table id="skipsTbl">
-      <thead><tr><th>When</th><th>Symbol</th><th>Rule</th><th>Reason</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
-
-  <div class="section">
-    <h2>Recent buys (with features)</h2>
-    <table id="buysTbl">
-      <thead><tr><th>When</th><th>Symbol</th><th class="num">Price</th><th class="num">24h%</th><th class="num">60m%</th><th class="num">1h rng</th></tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
-</div>
-
-<div class="section">
-  <h2>Outcomes by coin</h2>
-  <table id="outcomesTbl">
+<div class="scroll">
+  <table id="auditTbl">
     <thead>
+      <tr class="group-hdr">
+        <th colspan="2"></th>
+        <th colspan="3">Price context</th>
+        <th colspan="2">Order config</th>
+        <th colspan="2">Buy limits</th>
+        <th colspan="2">Live extremes</th>
+        <th colspan="3">Sell targets (net)</th>
+        <th colspan="3">Outcome</th>
+      </tr>
       <tr>
+        <th>Time UTC</th>
         <th>Symbol</th>
-        <th class="num">Buy@</th>
+        <th class="num">Pre-signal</th>
+        <th class="num">Signal</th>
+        <th class="num">Past15m L/H</th>
         <th class="num">Size $</th>
-        <th>Filled</th>
-        <th class="num">Fill@</th>
-        <th class="num" title="Lowest % from buy price post-fill">Btm%</th>
-        <th class="num" title="Highest % from buy price post-fill">Max%</th>
-        <th class="num" title="Live vol-1m / pre-signal baseline">V-Ratio</th>
-        <th>TP Hit</th>
-        <th class="num">TP min</th>
-        <th>Exited</th>
-        <th class="num">Exit$</th>
+        <th class="num">Offset %</th>
+        <th class="num">Buy 1 limit</th>
+        <th class="num">Buy 2 limit</th>
+        <th class="num">Low since</th>
+        <th class="num">High since</th>
+        <th class="num">$0.05</th>
+        <th class="num">$0.10</th>
+        <th class="num">$0.15</th>
+        <th>Status</th>
+        <th class="num">Now %</th>
         <th class="num">PnL $</th>
-        <th>Reason</th>
       </tr>
     </thead>
     <tbody></tbody>
@@ -118,177 +81,84 @@
 </div>
 
 <script>
-const $ = (sel) => document.querySelector(sel);
+const $ = (s) => document.querySelector(s);
 const dateInput = $('#dateInput');
 dateInput.value = new Date().toISOString().slice(0, 10);
 
-function fmt(n, d=2) {
-    if (n == null || isNaN(n)) return '—';
-    return Number(n).toFixed(d);
-}
-function fmtTs(ms) {
+function fmtTime(ms) {
     if (!ms) return '—';
-    return new Date(Number(ms)).toLocaleTimeString();
+    const d = new Date(Number(ms));
+    return d.toISOString().substr(11, 8);   // HH:MM:SS UTC
 }
-function pillFor(rule) {
-    const cls = rule === 'pump_24h' ? 'pump'
-              : rule === 'volatile_1h' ? 'vol'
-              : rule === 'overbought' ? 'over'
-              : rule === 'fast_drop_no_volume' ? 'fastdrop'
-              : 'pass';
-    return `<span class="pill ${cls}">${rule}</span>`;
+function fmtNum(v, decimals = 6) {
+    if (v == null || v === '' || isNaN(v)) return '—';
+    const n = Number(v);
+    // Smart precision: keep up to `decimals` significant figures
+    if (Math.abs(n) >= 100) return n.toFixed(2);
+    if (Math.abs(n) >= 1) return n.toFixed(4);
+    return n.toFixed(decimals);
 }
-
-async function jget(url) {
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
-    return r.json();
+function pctCell(v) {
+    if (v == null || isNaN(v)) return '<span class="mute">—</span>';
+    const n = Number(v);
+    const cls = n > 0 ? 'pos' : (n < 0 ? 'neg' : 'mute');
+    const sign = n > 0 ? '+' : '';
+    return `<span class="${cls}">${sign}${n.toFixed(2)}%</span>`;
 }
-
-function renderCards(daily) {
-    const seen = daily.signals_seen || 0;
-    const passed = daily.signals_passed || 0;
-    const skipped = daily.signals_skipped || 0;
-    const buys = daily.buys_placed || 0;
-    const fills = daily.fills || 0;
-    const tps = daily.tp_hits || 0;
-    const wins = daily.exits_win || 0;
-    const losses = daily.exits_loss || 0;
-    const pnl = daily.realized_pnl_usdt || 0;
-
-    const passRate = seen ? ((passed/seen)*100).toFixed(0) : 0;
-    const tpRate = fills ? ((tps/fills)*100).toFixed(0) : 0;
-
-    $('#cards').innerHTML = `
-        <div class="card"><h3>Signals seen</h3><div class="v">${seen}</div></div>
-        <div class="card"><h3>Passed filter</h3><div class="v">${passed}<span class="mute" style="font-size:14px"> (${passRate}%)</span></div></div>
-        <div class="card"><h3>Filtered out</h3><div class="v" style="color:var(--warn)">${skipped}</div></div>
-        <div class="card"><h3>Buys placed</h3><div class="v">${buys}</div></div>
-        <div class="card"><h3>Fills</h3><div class="v">${fills}</div></div>
-        <div class="card good"><h3>TP hits</h3><div class="v">${tps}<span class="mute" style="font-size:14px"> (${tpRate}%)</span></div></div>
-        <div class="card good"><h3>Wins</h3><div class="v">${wins}</div></div>
-        <div class="card bad"><h3>Losses</h3><div class="v">${losses}</div></div>
-        <div class="card ${pnl >= 0 ? 'good' : 'bad'}"><h3>Realized PnL</h3><div class="v">$${fmt(pnl, 4)}</div></div>
-    `;
-}
-
-function renderBreakdown(breakdown) {
-    const total = Object.values(breakdown || {}).reduce((a,b) => a + Number(b||0), 0);
-    const tbody = $('#breakdownTbl tbody');
-    if (!total) {
-        tbody.innerHTML = `<tr><td colspan="3" class="empty">No signals filtered yet today.</td></tr>`;
-        return;
-    }
-    const rows = Object.entries(breakdown).sort((a,b) => Number(b[1]) - Number(a[1])).map(([rule, count]) => {
-        const pct = total ? ((Number(count)/total)*100).toFixed(0) : 0;
-        return `<tr><td>${pillFor(rule)}</td><td class="num">${count}</td><td class="num">${pct}%</td></tr>`;
-    }).join('');
-    tbody.innerHTML = rows;
-}
-
-function renderSkips(items) {
-    const tbody = $('#skipsTbl tbody');
-    if (!items || !items.length) {
-        tbody.innerHTML = `<tr><td colspan="4" class="empty">No skips yet today.</td></tr>`;
-        return;
-    }
-    tbody.innerHTML = items.slice(0, 30).map(it => `
-        <tr>
-            <td class="mute">${fmtTs(it.ts)}</td>
-            <td>${it.symbol}</td>
-            <td>${pillFor(it.rule)}</td>
-            <td class="mute">${it.reason || ''}</td>
-        </tr>
-    `).join('');
-}
-
-function renderBuys(items) {
-    const tbody = $('#buysTbl tbody');
-    if (!items || !items.length) {
-        tbody.innerHTML = `<tr><td colspan="6" class="empty">No buys yet today.</td></tr>`;
-        return;
-    }
-    tbody.innerHTML = items.slice(0, 30).map(it => {
-        const f = it.features || {};
-        return `
-            <tr>
-                <td class="mute">${fmtTs(it.ts)}</td>
-                <td>${it.symbol}</td>
-                <td class="num">${fmt(it.price, 6)}</td>
-                <td class="num ${(f.change_24h_pct||0) >= 0 ? 'pos' : 'neg'}">${fmt(f.change_24h_pct, 2)}%</td>
-                <td class="num ${(f.change_1h_pct||0) >= 0 ? 'pos' : 'neg'}">${fmt(f.change_1h_pct, 2)}%</td>
-                <td class="num">${fmt(f.range_1h_pct, 2)}%</td>
-            </tr>
-        `;
-    }).join('');
-}
-
-function renderOutcomes(outcomes) {
-    const tbody = $('#outcomesTbl tbody');
-    if (!outcomes || !outcomes.length) {
-        tbody.innerHTML = `<tr><td colspan="14" class="empty">No outcomes recorded yet today.</td></tr>`;
-        return;
-    }
-    // Most recent buy first
-    outcomes.sort((a,b) => Number(b.buy_ts || 0) - Number(a.buy_ts || 0));
-    tbody.innerHTML = outcomes.map(o => {
-        const filled = Number(o.filled) === 1;
-        const tp = Number(o.tp_hit) === 1;
-        const exited = Number(o.exited) === 1;
+function statusPill(o) {
+    if (o.exited) {
         const pnl = Number(o.pnl_usdt || 0);
-        const btm = o.bottom_pct;
-        const max = o.max_pct;
-        const vratio = o.vol_ratio;
-        const btmCell = (btm !== undefined && btm !== null && !isNaN(btm))
-            ? `<span class="${Number(btm) < 0 ? 'neg' : 'mute'}">${fmt(btm, 2)}%</span>`
-            : '<span class="mute">—</span>';
-        const maxCell = (max !== undefined && max !== null && !isNaN(max))
-            ? `<span class="${Number(max) > 0 ? 'pos' : 'mute'}">${fmt(max, 2)}%</span>`
-            : '<span class="mute">—</span>';
-        const vrCell = (vratio !== undefined && vratio !== null && !isNaN(vratio))
-            ? `<span class="${Number(vratio) >= 2 ? 'pos' : 'mute'}">${fmt(vratio, 2)}x</span>`
-            : '<span class="mute">—</span>';
+        return `<span class="pill ${pnl >= 0 ? 'win' : 'loss'}">${pnl >= 0 ? 'WIN' : 'LOSS'}</span>`;
+    }
+    if (o.filled) return '<span class="pill open">OPEN</span>';
+    return '<span class="pill open">PENDING</span>';
+}
+
+async function loadAudit() {
+    const date = dateInput.value;
+    let r;
+    try {
+        r = await fetch(`/api/metrics/audit?date=${date}&limit=200`).then(x => x.json());
+    } catch (e) {
+        console.error('audit load failed', e);
+        return;
+    }
+    const items = (r.items || []).sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
+    const tbody = $('#auditTbl tbody');
+    if (!items.length) {
+        tbody.innerHTML = `<tr><td colspan="17" class="empty">No audit entries for ${date}.</td></tr>`;
+        return;
+    }
+    tbody.innerHTML = items.map(it => {
+        const past15 = (it.past_15min_low != null && it.past_15min_high != null)
+            ? `${fmtNum(it.past_15min_low)} / ${fmtNum(it.past_15min_high)}`
+            : '—';
         return `
-            <tr>
-                <td>${o.symbol || ''}</td>
-                <td class="num">${fmt(o.buy_price, 6)}</td>
-                <td class="num">${fmt(o.size_usdt, 2)}</td>
-                <td>${filled ? '<span class="pill pass">yes</span>' : '<span class="mute">—</span>'}</td>
-                <td class="num">${fmt(o.fill_price, 6)}</td>
-                <td class="num">${btmCell}</td>
-                <td class="num">${maxCell}</td>
-                <td class="num">${vrCell}</td>
-                <td>${tp ? '<span class="pill win">TP</span>' : '<span class="mute">—</span>'}</td>
-                <td class="num">${fmt(o.tp_latency_min, 1)}</td>
-                <td>${exited ? `<span class="pill ${pnl >= 0 ? 'win' : 'loss'}">${pnl >= 0 ? 'WIN' : 'LOSS'}</span>` : '<span class="mute">open</span>'}</td>
-                <td class="num">${fmt(o.exit_price, 6)}</td>
-                <td class="num ${pnl >= 0 ? 'pos' : 'neg'}">${fmt(pnl, 4)}</td>
-                <td class="mute">${o.exit_reason || ''}</td>
-            </tr>
+          <tr>
+            <td class="mute">${fmtTime(it.ts)}</td>
+            <td><strong>${it.symbol || '—'}</strong></td>
+            <td class="num">${fmtNum(it.pre_signal_price)}</td>
+            <td class="num">${fmtNum(it.signal_price)}</td>
+            <td class="num mute">${past15}</td>
+            <td class="num">${fmtNum(it.size_usdt, 2)}</td>
+            <td class="num">${it.offset_pct != null ? Number(it.offset_pct).toFixed(2) + '%' : '—'}</td>
+            <td class="num">${fmtNum(it.buy_1_limit_price)}</td>
+            <td class="num">${fmtNum(it.buy_2_limit_price)}</td>
+            <td class="num neg">${fmtNum(it.lowest_since_buy)}</td>
+            <td class="num pos">${fmtNum(it.highest_since_buy)}</td>
+            <td class="num pos">${fmtNum(it.target_sell_005)}</td>
+            <td class="num pos">${fmtNum(it.target_sell_010)}</td>
+            <td class="num pos">${fmtNum(it.target_sell_015)}</td>
+            <td>${statusPill(it)}</td>
+            <td class="num">${pctCell(it.now_pct)}</td>
+            <td class="num ${(Number(it.pnl_usdt || 0) >= 0) ? 'pos' : 'neg'}">${fmtNum(it.pnl_usdt, 4)}</td>
+          </tr>
         `;
     }).join('');
 }
 
-async function loadAll() {
-    const date = dateInput.value;
-    try {
-        const [sum, skips, buys] = await Promise.all([
-            jget(`/api/metrics/summary?date=${date}`),
-            jget(`/api/metrics/skips?date=${date}&limit=50`),
-            jget(`/api/metrics/buys?date=${date}&limit=50`),
-        ]);
-        renderCards(sum.daily || {});
-        renderBreakdown(sum.filterBreakdown || {});
-        renderOutcomes(sum.outcomes || []);
-        renderSkips(skips.items || []);
-        renderBuys(buys.items || []);
-    } catch (err) {
-        console.error('metrics load failed', err);
-    }
-}
-
-loadAll();
-setInterval(loadAll, 15000);
+loadAudit();
+setInterval(loadAudit, 15000);
 </script>
 
 </body>

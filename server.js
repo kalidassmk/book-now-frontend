@@ -604,7 +604,7 @@ async function tick() {
                 const pnlPct = (isExecuted && bp > 0 && currentPrice)
                     ? parseFloat(((currentPrice - bp) / bp * 100).toFixed(3))
                     : 0;
-                const buyUsdt = 30; // Standard bot buy is $30/leg (2026-05-11 iter 9 sizing)
+                const buyUsdt = 55; // Standard bot buy is $55/leg (2026-05-12 iter 11 sizing)
                 const curUsdt = (isExecuted && bp > 0 && currentPrice) ? (currentPrice / bp * buyUsdt) : 0;
                 const profitUsdt = isExecuted ? (curUsdt - buyUsdt) : 0;
 
@@ -747,8 +747,8 @@ async function tick() {
             totalPnL: parseFloat(totalPnL.toFixed(4)),
             usdtBalance: usdtAmount,
             autoEnabled: config.autoBuyEnabled, // Dynamic from Redis
-            buyAmount: config.buyAmountUsdt || 30,
-            profitPct: config.profitPct || 0.7,
+            buyAmount: config.buyAmountUsdt || 55,
+            profitPct: config.profitPct || 0.5,
             profitAmount: config.profitAmountUsdt || 0.15,
             simulation: autoConfig.simulationMode,
             redisOk: true,
@@ -946,8 +946,8 @@ const CONFIG_KEY = 'TRADING_CONFIG';
 // $0.06 stop. ≈$0.05 NET per win after Binance round-trip fees.
 const DEFAULT_TRADING_CONFIG = {
     autoBuyEnabled: false,
-    // 2026-05-11 iter 9: $12 → $30/leg sizing, 1 ladder concurrent.
-    buyAmountUsdt: 30.0,
+    // 2026-05-12 iter 11: $30 → $55/leg, 2-leg ladder (Buy 3 off).
+    buyAmountUsdt: 55.0,
     // 2026-05-11 iter 4: TP 1.0 → 0.6 % → net ~$0.05 per $12 leg.
     profitPct: 0.6,
     profitAmountUsdt: 0.0,
@@ -986,9 +986,9 @@ const DEFAULT_TRADING_CONFIG = {
     ladderedRecoveryEnabled: false,
     maxConcurrentLadders: 1,
     singleCoinModeEnabled: false,   // legacy; superseded by maxConcurrentLadders
-    ladderBuy1SizeUsdt: 30.0,
-    ladderBuy2SizeUsdt: 30.0,
-    ladderBuy3SizeUsdt: 30.0,
+    ladderBuy1SizeUsdt: 55.0,
+    ladderBuy2SizeUsdt: 55.0,
+    ladderBuy3SizeUsdt: 0.0,
     ladderBuy2OffsetPct: 0.5,
     ladderBuy3OffsetPct: 1.0,
     ladderTpFromAvgPct: 0.6,
@@ -997,7 +997,7 @@ const DEFAULT_TRADING_CONFIG = {
     ladderFeeRatePerSide: 0.00075,  // 0.075 % (BNB-fees ON); set to 0.001 if OFF
     ladderHardStopBelowBuy3Pct: 1.0,
     ladderBuy1UseMarketOrder: true,
-    ladderBuy1OffsetPct: 0.09,        // 0 = market; >0 = LIMIT at signal × (1-X%) — iter 10 default
+    ladderBuy1OffsetPct: 0.05,        // 0 = market; >0 = LIMIT at signal × (1-X%) — iter 11 default
     ladderCooldownSeconds: 14400,    // 4h per-coin cooldown after a ladder closes
     metricsEnabled: true,
 };
@@ -1116,6 +1116,46 @@ app.get('/api/metrics/buys', async (req, res) => {
         res.json({ date, count: items.length, items });
     } catch (err) {
         res.status(500).json({ error: 'Failed to fetch buys', detail: err.message });
+    }
+});
+
+// ─── Trade Audit API (2026-05-12) ─────────────────────────────────────────────
+// Returns per-trade full audit data: pre-signal, signal, limit, fill, target sells,
+// past 15min low/high, and live running lowest/highest since buy.
+app.get('/api/metrics/audit', async (req, res) => {
+    try {
+        const date = req.query.date || todayStr();
+        const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
+
+        // Pull the chronological AUDIT events
+        const audit = await _safeParseList(`METRICS:AUDIT:${date}`, limit);
+
+        // For each audit entry, augment with live OUTCOME state (lowest/highest since buy)
+        for (const ev of audit) {
+            try {
+                const sym = (ev.symbol || '').replace('/', '');
+                const outKey = `METRICS:OUTCOME:${date}:${sym}`;
+                const h = await redis.hgetall(outKey);
+                if (h) {
+                    const num = (v) => v === '' || v == null ? null : Number(v);
+                    ev.lowest_since_buy  = num(h.lowest_since_buy);
+                    ev.highest_since_buy = num(h.highest_since_buy);
+                    ev.now_price         = num(h.now_price);
+                    ev.now_pct           = num(h.now_pct);
+                    ev.bottom_pct        = num(h.bottom_pct);
+                    ev.max_pct           = num(h.max_pct);
+                    ev.filled            = Number(h.filled || 0) === 1;
+                    ev.exited            = Number(h.exited || 0) === 1;
+                    ev.exit_price        = num(h.exit_price);
+                    ev.exit_reason       = h.exit_reason || null;
+                    ev.pnl_usdt          = num(h.pnl_usdt);
+                }
+            } catch (_) {}
+        }
+
+        res.json({ date, count: audit.length, items: audit });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch audit', detail: err.message });
     }
 });
 
