@@ -604,7 +604,7 @@ async function tick() {
                 const pnlPct = (isExecuted && bp > 0 && currentPrice)
                     ? parseFloat(((currentPrice - bp) / bp * 100).toFixed(3))
                     : 0;
-                const buyUsdt = 55; // Standard bot buy is $55/leg (2026-05-12 iter 11 sizing)
+                const buyUsdt = 50; // Standard bot buy is $50/leg (2026-05-12 iter 12 sizing)
                 const curUsdt = (isExecuted && bp > 0 && currentPrice) ? (currentPrice / bp * buyUsdt) : 0;
                 const profitUsdt = isExecuted ? (curUsdt - buyUsdt) : 0;
 
@@ -747,7 +747,7 @@ async function tick() {
             totalPnL: parseFloat(totalPnL.toFixed(4)),
             usdtBalance: usdtAmount,
             autoEnabled: config.autoBuyEnabled, // Dynamic from Redis
-            buyAmount: config.buyAmountUsdt || 55,
+            buyAmount: config.buyAmountUsdt || 50,
             profitPct: config.profitPct || 0.5,
             profitAmount: config.profitAmountUsdt || 0.15,
             simulation: autoConfig.simulationMode,
@@ -946,8 +946,8 @@ const CONFIG_KEY = 'TRADING_CONFIG';
 // $0.06 stop. ≈$0.05 NET per win after Binance round-trip fees.
 const DEFAULT_TRADING_CONFIG = {
     autoBuyEnabled: false,
-    // 2026-05-12 iter 11: $30 → $55/leg, 2-leg ladder (Buy 3 off).
-    buyAmountUsdt: 55.0,
+    // 2026-05-12 iter 12: $50/leg, 2-leg ladder (Buy 3 off).
+    buyAmountUsdt: 50.0,
     // 2026-05-11 iter 4: TP 1.0 → 0.6 % → net ~$0.05 per $12 leg.
     profitPct: 0.6,
     profitAmountUsdt: 0.0,
@@ -986,8 +986,8 @@ const DEFAULT_TRADING_CONFIG = {
     ladderedRecoveryEnabled: false,
     maxConcurrentLadders: 1,
     singleCoinModeEnabled: false,   // legacy; superseded by maxConcurrentLadders
-    ladderBuy1SizeUsdt: 55.0,
-    ladderBuy2SizeUsdt: 55.0,
+    ladderBuy1SizeUsdt: 50.0,
+    ladderBuy2SizeUsdt: 50.0,
     ladderBuy3SizeUsdt: 0.0,
     ladderBuy2OffsetPct: 0.5,
     ladderBuy3OffsetPct: 1.0,
@@ -997,7 +997,7 @@ const DEFAULT_TRADING_CONFIG = {
     ladderFeeRatePerSide: 0.00075,  // 0.075 % (BNB-fees ON); set to 0.001 if OFF
     ladderHardStopBelowBuy3Pct: 1.0,
     ladderBuy1UseMarketOrder: true,
-    ladderBuy1OffsetPct: 0.05,        // 0 = market; >0 = LIMIT at signal × (1-X%) — iter 11 default
+    ladderBuy1OffsetPct: 0.15,        // 0 = market; >0 = LIMIT at signal × (1-X%) — iter 12 default
     ladderCooldownSeconds: 14400,    // 4h per-coin cooldown after a ladder closes
     metricsEnabled: true,
 };

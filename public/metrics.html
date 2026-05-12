@@ -48,8 +48,8 @@
   <table id="auditTbl">
     <thead>
       <tr class="group-hdr">
-        <th colspan="2"></th>
-        <th colspan="3">Price context</th>
+        <th colspan="3"></th>
+        <th colspan="4">Price context</th>
         <th colspan="2">Order config</th>
         <th colspan="2">Buy limits</th>
         <th colspan="2">Live extremes</th>
@@ -58,8 +58,10 @@
       </tr>
       <tr>
         <th>Time UTC</th>
+        <th>Scalper</th>
         <th>Symbol</th>
-        <th class="num">Pre-signal</th>
+        <th class="num">Pre-2 (10m)</th>
+        <th class="num">Pre-1 (5m)</th>
         <th class="num">Signal</th>
         <th class="num">Past15m L/H</th>
         <th class="num">Size $</th>
@@ -126,17 +128,22 @@ async function loadAudit() {
     const items = (r.items || []).sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0));
     const tbody = $('#auditTbl tbody');
     if (!items.length) {
-        tbody.innerHTML = `<tr><td colspan="17" class="empty">No audit entries for ${date}.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="19" class="empty">No audit entries for ${date}.</td></tr>`;
         return;
     }
     tbody.innerHTML = items.map(it => {
         const past15 = (it.past_15min_low != null && it.past_15min_high != null)
             ? `${fmtNum(it.past_15min_low)} / ${fmtNum(it.past_15min_high)}`
             : '—';
+        const scalperBadge = it.scalper_origin
+            ? `<span class="pill ${it.scalper_origin === 'FAST' ? 'win' : 'open'}">${it.scalper_origin}</span>`
+            : '<span class="mute">—</span>';
         return `
           <tr>
             <td class="mute">${fmtTime(it.ts)}</td>
+            <td>${scalperBadge}</td>
             <td><strong>${it.symbol || '—'}</strong></td>
+            <td class="num">${fmtNum(it.pre_signal_price_2)}</td>
             <td class="num">${fmtNum(it.pre_signal_price)}</td>
             <td class="num">${fmtNum(it.signal_price)}</td>
             <td class="num mute">${past15}</td>
