@@ -1000,7 +1000,8 @@ const DEFAULT_TRADING_CONFIG = {
     ladderBuy3OffsetPct: 1.0,
     ladderTpFromAvgPct: 0.6,
     // 2026-05-11 iter 8: dollar-target wins when set; TP auto-computed.
-    ladderTargetNetProfitUsdt: 0.15,
+    // 2026-05-13 iter 19: $0.15 → $0.20 (mirrors backend dataclass default).
+    ladderTargetNetProfitUsdt: 0.20,
     ladderFeeRatePerSide: 0.00075,  // 0.075 % (BNB-fees ON); set to 0.001 if OFF
     ladderHardStopBelowBuy3Pct: 1.0,
     ladderBuy1UseMarketOrder: true,
