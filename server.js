@@ -1172,6 +1172,72 @@ app.get('/api/metrics/audit', async (req, res) => {
     }
 });
 
+// ─── Monitor snapshot — single call powering /monitor.html ──────────────────
+// 2026-05-13 iter 20: aggregates everything the operator needs to glance at
+// the bot's live state into one response (saves four round-trips from the
+// page, and lets the dashboard auto-refresh every ~10s without slamming
+// individual Redis keys). Sourced entirely from Redis, no Binance REST.
+app.get('/api/monitor', async (req, res) => {
+    try {
+        const today = req.query.date || todayStr();
+        const [usdtRaw, fastLadders, virtualLadders, daily, breakdown,
+               openOrdersRaw, cooldownKeys] = await Promise.all([
+            redis.get('BINANCE:BALANCE:USDT'),
+            redis.hgetall('SCALPER:LADDER_STATES'),
+            redis.hgetall('VIRTUAL:LADDER_STATES'),
+            redis.hgetall(`METRICS:DAILY:${today}`),
+            redis.hgetall(`METRICS:FILTER_BREAKDOWN:${today}`),
+            redis.get('BINANCE:OPEN_ORDERS:ALL'),
+            redis.keys('SCALPER:LADDER_COOLDOWN:*'),
+        ]);
+
+        const usdt = usdtRaw ? safeParse(usdtRaw, {}) : {};
+        const openOrders = openOrdersRaw ? safeParse(openOrdersRaw, []) : [];
+
+        // Inflate ladder state JSON blobs into objects. Each Redis hash
+        // field is a JSON-serialised LadderState — parse all of them.
+        const parseLadders = (obj) =>
+            Object.entries(obj || {}).map(([k, v]) => {
+                try { return JSON.parse(v); } catch (_) { return null; }
+            }).filter(Boolean);
+
+        // Coerce DAILY hash strings to numbers where they look numeric.
+        const numericDaily = Object.fromEntries(
+            Object.entries(daily || {}).map(([k, v]) => [k, isNaN(Number(v)) ? v : Number(v)])
+        );
+        const numericBreakdown = Object.fromEntries(
+            Object.entries(breakdown || {}).map(([k, v]) => [k, Number(v)])
+        );
+
+        res.json({
+            ts: Date.now(),
+            date: today,
+            wallet: {
+                usdt_free: parseFloat(usdt.free || 0),
+                usdt_locked: parseFloat(usdt.locked || 0),
+            },
+            ladders: {
+                fast: parseLadders(fastLadders),
+                virtual: parseLadders(virtualLadders),
+            },
+            daily: numericDaily,
+            filterBreakdown: numericBreakdown,
+            openOrders: openOrders,
+            cooldowns: cooldownKeys.map(k => k.replace('SCALPER:LADDER_COOLDOWN:', '')),
+        });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch monitor snapshot', detail: err.message });
+    }
+});
+
+// Small JSON parse helper — tolerant of malformed strings.
+function safeParse(raw, fallback) {
+    try { return JSON.parse(raw); } catch (_) { return fallback; }
+}
+
+// Convenience route so operators can browse to /monitor without .html
+app.get('/monitor', (req, res) => res.sendFile(path.join(__dirname, 'public', 'monitor.html')));
+
 // ─── REST API ─────────────────────────────────────────────────────────────────
 // ─── Binance Account APIs (Node-native) ───────────────────────────────────────
 // 1. Get Open Orders
