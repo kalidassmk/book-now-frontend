@@ -1246,6 +1246,65 @@ function safeParse(raw, fallback) {
 // Convenience route so operators can browse to /monitor without .html
 app.get('/monitor', (req, res) => res.sendFile(path.join(__dirname, 'public', 'monitor.html')));
 
+// ─── Spot movers ─────────────────────────────────────────────────────────────
+// 2026-05-13 iter 26: proxy Binance ticker data through the backend so the
+// /spot.html page works for operators whose browsers/ISPs block direct
+// WebSocket connections to stream.binance.com (a common issue in India).
+//
+//   ?window=24h → returns the cache populated by binance-worker's
+//                 !miniTicker@arr WebSocket (always fresh, ~1s lag).
+//   ?window=1h  → fetches /api/v3/ticker?windowSize=1h from Binance.
+//   ?window=4h  → fetches /api/v3/ticker?windowSize=4h from Binance.
+//
+// Response shape: { window, ts, tickers: [{symbol, price, change, high, low, volume}] }
+// Sorted client-side; the endpoint just returns the raw set.
+app.get('/api/spot-tickers', async (req, res) => {
+    const window = (req.query.window || '24h').toLowerCase();
+    try {
+        if (window === '24h') {
+            // Pull from binance-worker's WebSocket cache (no Binance REST call).
+            const cached = binanceWorker.getAllTickers24h();
+            const tickers = cached
+                .filter(t => t.symbol && t.symbol.endsWith('USDT'))
+                .map(t => {
+                    const open = parseFloat(t.openPrice);
+                    const last = parseFloat(t.lastPrice);
+                    const changePct = (open > 0) ? ((last - open) / open) * 100 : 0;
+                    return {
+                        symbol: t.symbol,
+                        price:  last,
+                        change: changePct,
+                        high:   parseFloat(t.highPrice),
+                        low:    parseFloat(t.lowPrice),
+                        volume: parseFloat(t.quoteVolume),
+                    };
+                });
+            return res.json({ window, ts: Date.now(), tickers });
+        }
+        if (window === '1h' || window === '4h') {
+            // Binance rolling-window endpoint — one call returns ALL symbols.
+            const data = await binanceWorker.binanceFetch(
+                '/api/v3/ticker', 'GET', { windowSize: window }
+            );
+            const tickers = (Array.isArray(data) ? data : [])
+                .filter(t => t.symbol && t.symbol.endsWith('USDT'))
+                .map(t => ({
+                    symbol: t.symbol,
+                    price:  parseFloat(t.lastPrice),
+                    change: parseFloat(t.priceChangePercent),
+                    high:   parseFloat(t.highPrice),
+                    low:    parseFloat(t.lowPrice),
+                    volume: parseFloat(t.quoteVolume),
+                }));
+            return res.json({ window, ts: Date.now(), tickers });
+        }
+        return res.status(400).json({ error: `Unsupported window: ${window}` });
+    } catch (err) {
+        console.error('[/api/spot-tickers]', err.message);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
 // ─── REST API ─────────────────────────────────────────────────────────────────
 // ─── Binance Account APIs (Node-native) ───────────────────────────────────────
 // 1. Get Open Orders

@@ -642,6 +642,20 @@ function getTicker24h(symbol) {
     return tickerCache.get(symbol.toUpperCase()) || null;
 }
 
+/**
+ * Returns the entire 24h ticker cache as an array. Each entry includes
+ * the symbol plus the cached fields. Used by /api/spot-tickers to avoid
+ * having the browser open its own WebSocket to Binance (which is blocked
+ * in some regions / by some ISPs — iter 26 fix).
+ */
+function getAllTickers24h() {
+    const out = [];
+    for (const [symbol, t] of tickerCache.entries()) {
+        out.push({ symbol, ...t });
+    }
+    return out;
+}
+
 async function start(socketIo, onExecution = null) {
     io = socketIo;
     executionCallback = onExecution;
@@ -681,6 +695,7 @@ async function start(socketIo, onExecution = null) {
 module.exports = {
     start,
     getTicker24h,
+    getAllTickers24h,
     binanceFetch,           // signed REST — used by dust-transfer, cancel-order, etc.
     refreshAllSnapshots,    // exposed so server.js can force a refresh after a manual order
 };
