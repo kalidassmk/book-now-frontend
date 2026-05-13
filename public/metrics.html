@@ -114,11 +114,18 @@ function statusPill(o) {
     if (o.exited) {
         const reason = String(o.exit_reason || '').toLowerCase();
         const pnl = Number(o.pnl_usdt || 0);
-        // 2026-05-12 iter 15: split exit reasons properly. manual_cancel
-        // (operator-initiated) was being rendered as WIN because pnl=0
-        // passed the `pnl >= 0` test — misleading the operator into
-        // thinking a cancellation was a win.
-        if (reason.includes('cancel')) {
+        // 2026-05-13 iter 17: split manual_cancel into three states so
+        // the dashboard tells the truth instead of always showing $0.
+        //   manual_cancel           → CANCELLED (true $0, no fill)
+        //   manual_cancel_holding   → MANUAL HOLD (filled but no sell yet)
+        //   manual_cancel_resolved  → MANUAL ±$X (filled + sold, real P&L)
+        if (reason === 'manual_cancel_resolved') {
+            return `<span class="pill ${pnl > 0 ? 'win' : 'loss'}">MANUAL ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span>`;
+        }
+        if (reason === 'manual_cancel_holding') {
+            return '<span class="pill open">MANUAL HOLD</span>';
+        }
+        if (reason === 'manual_cancel' || reason.includes('cancel')) {
             return '<span class="pill cancel">CANCELLED</span>';
         }
         if (reason === 'trailing_tp') {

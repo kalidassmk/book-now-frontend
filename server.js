@@ -1861,6 +1861,48 @@ app.post('/api/redis/flush', async (req, res) => {
     }
 });
 
+// ─── Admin: patch one METRICS:OUTCOME entry ────────────────────────────────
+// 2026-05-13 iter 17: small backfill endpoint so we can retroactively fix
+// historic manual_cancel entries whose P&L was wrongly recorded as $0 (the
+// bug fixed in backend iter17 _handle_external_cancel). Body fields:
+//   symbol      (e.g. "NEAR/USDT")          required
+//   date        (YYYY-MM-DD)                optional, defaults to today
+//   exit_price  number                      optional
+//   pnl_usdt    number                      optional
+//   exit_reason string                      optional
+app.post('/api/admin/patch-outcome', async (req, res) => {
+    const { symbol, date, exit_price, pnl_usdt, exit_reason } = req.body || {};
+    if (!symbol) return res.status(400).json({ error: 'symbol required' });
+    const d = date || new Date().toISOString().slice(0, 10);
+    const key = `METRICS:OUTCOME:${d}:${String(symbol).replace('/', '')}`;
+    try {
+        const existing = await redis.hgetall(key);
+        if (!existing || Object.keys(existing).length === 0) {
+            return res.status(404).json({ error: `no OUTCOME row at ${key}` });
+        }
+        const oldPnl = Number(existing.pnl_usdt || 0);
+        const patch = {};
+        if (exit_price != null) patch.exit_price = String(exit_price);
+        if (pnl_usdt   != null) patch.pnl_usdt   = String(pnl_usdt);
+        if (exit_reason != null) patch.exit_reason = String(exit_reason);
+        if (Object.keys(patch).length === 0) {
+            return res.status(400).json({ error: 'nothing to patch' });
+        }
+        await redis.hset(key, patch);
+        // Adjust DAILY:realized_pnl_usdt by the delta
+        if (pnl_usdt != null) {
+            const delta = Number(pnl_usdt) - oldPnl;
+            try {
+                await redis.hincrbyfloat(`METRICS:DAILY:${d}`, 'realized_pnl_usdt', delta);
+            } catch (_) {}
+        }
+        console.log(`[Admin] Patched ${key}: oldPnl=${oldPnl} newPnl=${pnl_usdt} delta=${(Number(pnl_usdt) - oldPnl).toFixed(4)}`);
+        return res.json({ ok: true, key, oldPnl, newPnl: pnl_usdt, patch });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+});
+
 // ─── Engine Service Control ──────────────────────────────────────────────────
 // Frontend route names kept as /api/service/{status,stop,start} for
 // drop-in compatibility — the only thing that changes is what we spawn.
