@@ -1282,11 +1282,24 @@ app.get('/api/spot-tickers', async (req, res) => {
             return res.json({ window, ts: Date.now(), tickers });
         }
         if (window === '1h' || window === '4h') {
-            // Binance rolling-window endpoint — one call returns ALL symbols.
-            // PUBLIC endpoint: pass signed:false so binanceFetch doesn't add
-            // timestamp+signature (which Binance rejects for public paths).
+            // Binance's /api/v3/ticker?windowSize=… REQUIRES a `symbols`
+            // list (error -1128 if omitted). Cap is 100 symbols per call.
+            // Strategy: take the top 100 USDT pairs by 24h volume — these
+            // are the ones the operator actually cares about, and the
+            // long tail is mostly illiquid micro-caps anyway.
+            const cached = binanceWorker.getAllTickers24h() || [];
+            const top = cached
+                .filter(t => t.symbol && t.symbol.endsWith('USDT'))
+                .sort((a, b) => parseFloat(b.quoteVolume || 0) - parseFloat(a.quoteVolume || 0))
+                .slice(0, 100)
+                .map(t => t.symbol);
+            if (top.length === 0) {
+                return res.json({ window, ts: Date.now(), tickers: [] });
+            }
             const data = await binanceWorker.binanceFetch(
-                '/api/v3/ticker', 'GET', { windowSize: window }, { signed: false }
+                '/api/v3/ticker', 'GET',
+                { windowSize: window, symbols: JSON.stringify(top) },
+                { signed: false }
             );
             const tickers = (Array.isArray(data) ? data : [])
                 .filter(t => t.symbol && t.symbol.endsWith('USDT'))
