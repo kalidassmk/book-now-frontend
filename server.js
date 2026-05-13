@@ -71,6 +71,14 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 app.use(express.json());
+
+// iter 24 (2026-05-13): '/' now serves the bot-monitor page (operational
+// at-a-glance status). The old scanner UI is preserved at '/scanner' and
+// '/index.html'. Register these BEFORE the static middleware so the
+// custom '/' route wins over public/index.html.
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'monitor.html')));
+app.get('/scanner', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+
 // Disable browser caching for HTML so dashboard updates land immediately
 // after a deploy. Static assets (JS/CSS bundles, images) get sane defaults.
 app.use(express.static(path.join(__dirname, 'public'), {
@@ -1740,84 +1748,10 @@ app.get('/api/debug/redis', async (req, res) => {
 
 app.get('/api/trades', (req, res) => res.json({ trades: tradeLog, totalPnL }));
 
-/**
- * GET /api/virtual-scalper
- * One-shot snapshot of the Virtual Scalper subprocess's open positions
- * and trade history. The page calls this on first load; live updates
- * piggy-back on the regular `update` Socket.io event.
- *
- * Returns:
- *   { open: [...], history: [...], summary: { ... }, prices: {symbol → price} }
- */
-app.get('/api/virtual-scalper', async (req, res) => {
-    try {
-        // Open positions (hash, symbol → JSON).
-        const openMap = await redis.hgetall(VIRTUAL_POSITIONS);
-        const open = Object.values(openMap).map(j => {
-            try { return JSON.parse(j); } catch { return null; }
-        }).filter(Boolean);
-
-        // History (list, JSON, newest first).
-        const histRaw = await redis.lrange(VIRTUAL_HISTORY, 0, -1);
-        const history = histRaw.map(j => {
-            try { return JSON.parse(j); } catch { return null; }
-        }).filter(Boolean);
-
-        // Live prices for open positions so the UI can show unrealised PnL
-        // without round-tripping back to the server. Match the same key
-        // shape the scanner uses (CURRENT_PRICE hash, JSON value w/ price).
-        const priceRaw = await redis.hgetall(CURRENT_PRICE);
-        const prices = {};
-        for (const [sym, j] of Object.entries(priceRaw || {})) {
-            try {
-                const cp = JSON.parse(j);
-                if (cp && cp.price != null) prices[sym] = parseFloat(cp.price);
-            } catch { /* ignore unparseable rows */ }
-        }
-
-        // Summary stats from history.
-        const closed = history.length;
-        const wins   = history.filter(h => (h.pnl_usdt || 0) > 0).length;
-        const losses = history.filter(h => (h.pnl_usdt || 0) < 0).length;
-        const totalPnl = history.reduce((s, h) => s + (h.pnl_usdt || 0), 0);
-        const totalFees = history.reduce((s, h) => s + (h.fees_paid || 0), 0);
-        const best  = history.reduce((b, h) => (h.pnl_usdt > (b?.pnl_usdt ?? -Infinity)) ? h : b, null);
-        const worst = history.reduce((w, h) => (h.pnl_usdt < (w?.pnl_usdt ??  Infinity)) ? h : w, null);
-        const avgHold = closed
-            ? history.reduce((s, h) => s + (h.hold_duration || 0), 0) / closed
-            : 0;
-
-        // Reason breakdown: how many times each exit fired.
-        const reasons = {};
-        for (const h of history) {
-            const r = h.reason || 'UNKNOWN';
-            reasons[r] = (reasons[r] || 0) + 1;
-        }
-
-        res.json({
-            open,
-            history,
-            prices,
-            summary: {
-                openCount: open.length,
-                closedCount: closed,
-                wins,
-                losses,
-                winRate: closed ? wins / closed : 0,
-                totalPnl,
-                totalFees,
-                avgPnl: closed ? totalPnl / closed : 0,
-                avgHoldSeconds: avgHold,
-                best,
-                worst,
-                reasons,
-            },
-        });
-    } catch (err) {
-        console.error('[/api/virtual-scalper]', err.message);
-        res.status(500).json({ error: err.message });
-    }
-});
+// iter 24: /api/virtual-scalper endpoint deleted along with the dedicated
+// virtual_scalper.html page. The /monitor page now shows both Fast and
+// Virtual ladder activity from a unified /api/monitor snapshot, so the
+// per-engine dashboard isn't needed anymore.
 
 
 
