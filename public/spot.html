@@ -79,6 +79,52 @@
   .change-cell { font-weight: 600; }
   .empty { padding: 32px; text-align: center; color: var(--muted); }
   .scroll { overflow-x: auto; }
+
+  /* Layout: table + analysis panel side by side */
+  .layout { display: flex; gap: 14px; align-items: flex-start; }
+  .layout > .scroll { flex: 0 0 auto; }
+  .layout > #analysisPanel { flex: 1 1 auto; min-width: 0; }
+
+  /* Analyse button in each row */
+  .analyse-btn {
+    background: var(--panel); color: var(--muted);
+    border: 1px solid var(--line); border-radius: 4px;
+    padding: 3px 10px; font-size: 11px; font-weight: 600;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .analyse-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .analyse-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* Analysis panel — slide-out on the right */
+  #analysisPanel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    padding: 16px; display: none;
+    max-height: calc(100vh - 60px); overflow-y: auto;
+  }
+  #analysisPanel.open { display: block; }
+  #analysisPanel header.ap-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+  #analysisPanel .ap-title { font-size: 18px; font-weight: 700; }
+  #analysisPanel .ap-subtitle { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  #analysisPanel .ap-close { background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 14px; }
+  #analysisPanel .ap-close:hover { color: var(--text); border-color: var(--muted); }
+  #analysisPanel section { margin-bottom: 16px; }
+  #analysisPanel h3 { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; }
+  #analysisPanel .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+  #analysisPanel .stat { background: #1a232e; border-radius: 4px; padding: 8px 10px; }
+  #analysisPanel .stat .k { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
+  #analysisPanel .stat .v { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  #analysisPanel .chart { background: #1a232e; border-radius: 4px; padding: 8px; }
+  #analysisPanel .chart svg { width: 100%; height: 120px; display: block; }
+  #analysisPanel .filter-row { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 12px; }
+  #analysisPanel .filter-row:last-child { border-bottom: none; }
+  #analysisPanel .filter-row .icon { font-size: 14px; line-height: 1; }
+  #analysisPanel .filter-row .rule { flex: 0 0 180px; font-weight: 600; }
+  #analysisPanel .filter-row .detail { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #analysisPanel .verdict { padding: 10px 12px; border-radius: 4px; font-weight: 600; font-size: 13px; }
+  #analysisPanel .verdict.pass { background: rgba(46,204,113,.12); color: var(--good); border-left: 3px solid var(--good); }
+  #analysisPanel .verdict.blocked { background: rgba(231,76,60,.12); color: var(--bad); border-left: 3px solid var(--bad); }
+  #analysisPanel .event-row { font-size: 11px; padding: 3px 0; color: var(--muted); }
+  #analysisPanel .event-row .ev-time { color: var(--text); font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -120,20 +166,55 @@
   <input id="filter" type="text" placeholder="e.g. BTC, BNB" style="width:120px" />
 </div>
 
-<div class="scroll">
-  <table>
-    <thead>
-      <tr>
-        <th data-sort="symbol">Symbol</th>
-        <th class="num" data-sort="price">Price (USDT)</th>
-        <th class="num sorted" data-sort="change">Change %</th>
-        <th class="num" data-sort="high">High (24h)</th>
-        <th class="num" data-sort="low">Low (24h)</th>
-        <th class="num" data-sort="volume">Volume (24h)</th>
-      </tr>
-    </thead>
-    <tbody id="rows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
-  </table>
+<div class="layout">
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr>
+          <th data-sort="symbol">Symbol</th>
+          <th class="num" data-sort="price">Price (USDT)</th>
+          <th class="num sorted" data-sort="change">Change %</th>
+          <th class="num" data-sort="high">High (24h)</th>
+          <th class="num" data-sort="low">Low (24h)</th>
+          <th class="num" data-sort="volume">Volume (24h)</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- Analysis panel — populated when an Analyse button is clicked. -->
+  <aside id="analysisPanel">
+    <header class="ap-head">
+      <div>
+        <div class="ap-title" id="apTitle">—</div>
+        <div class="ap-subtitle" id="apSubtitle">—</div>
+      </div>
+      <button class="ap-close" onclick="closeAnalysis()" aria-label="Close">×</button>
+    </header>
+
+    <section>
+      <h3>Last 24h price (1h candles)</h3>
+      <div class="chart" id="apChart"></div>
+    </section>
+
+    <section>
+      <h3>Key stats</h3>
+      <div class="stat-grid" id="apStats"></div>
+    </section>
+
+    <section>
+      <h3>Bot's filter verdict (live config)</h3>
+      <div id="apVerdict"></div>
+      <div id="apFilters" style="margin-top: 6px;"></div>
+    </section>
+
+    <section>
+      <h3>Bot's view today</h3>
+      <div id="apBotHistory" class="event-row">—</div>
+    </section>
+  </aside>
 </div>
 
 <script>
@@ -147,6 +228,7 @@ let sortAsc   = false;
 let tickers   = [];     // last snapshot from backend
 let pollTimer = null;
 let lastSuccessTs = 0;
+let selectedSymbol = null;   // currently-open analyse panel symbol
 
 function setStatus(state, label) {
     const dot = document.getElementById("liveDot");
@@ -241,6 +323,7 @@ function render() {
             const change = t.change;
             const changeClass = change == null ? "mute" : (change >= 0 ? "pos" : "neg");
             const base = t.symbol.replace("USDT", "");
+            const activeCls = (selectedSymbol === t.symbol) ? " active" : "";
             return `<tr>
                 <td class="symbol">
                   <span class="ticker">${base}</span>
@@ -251,6 +334,7 @@ function render() {
                 <td class="num mute">${fmtPrice(t.high)}</td>
                 <td class="num mute">${fmtPrice(t.low)}</td>
                 <td class="num mute">${fmtVolume(t.volume)}</td>
+                <td><button class="analyse-btn${activeCls}" onclick="openAnalysis('${t.symbol}')">Analyse</button></td>
             </tr>`;
         }).join("");
     }
@@ -288,6 +372,144 @@ document.querySelectorAll("th[data-sort]").forEach(th => {
         render();
     });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Analyse panel — fetches deep-dive data and renders a chart + stats +
+// filter simulation.
+async function openAnalysis(symbol) {
+    selectedSymbol = symbol;
+    const panel = document.getElementById("analysisPanel");
+    panel.classList.add("open");
+    document.getElementById("apTitle").textContent = symbol.replace("USDT", "/USDT");
+    document.getElementById("apSubtitle").textContent = "Loading…";
+    document.getElementById("apStats").innerHTML = "";
+    document.getElementById("apChart").innerHTML = "";
+    document.getElementById("apFilters").innerHTML = "";
+    document.getElementById("apVerdict").innerHTML = "";
+    document.getElementById("apBotHistory").innerHTML = "—";
+    // Re-render the table so the active-button highlight updates.
+    render();
+
+    try {
+        const resp = await fetch(`/api/coin-analysis?symbol=${encodeURIComponent(symbol)}`);
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const data = await resp.json();
+        renderAnalysis(data);
+    } catch (e) {
+        document.getElementById("apSubtitle").textContent = `Load failed: ${e.message}`;
+    }
+}
+
+function closeAnalysis() {
+    selectedSymbol = null;
+    document.getElementById("analysisPanel").classList.remove("open");
+    render();
+}
+
+function renderAnalysis(d) {
+    const s = d.stats || {};
+    const subtitle = `${fmtPrice(s.price)} · ${fmtPct(s.change24h_pct)} · vol $${fmtVolume(s.vol24h)}`;
+    document.getElementById("apSubtitle").textContent = subtitle;
+
+    // Stats grid
+    const stats = [
+        ["Now",                 fmtPrice(s.price)],
+        ["24h Change",          fmtPct(s.change24h_pct), s.change24h_pct >= 0 ? "pos" : "neg"],
+        ["24h High",            fmtPrice(s.high24h)],
+        ["24h Low",             fmtPrice(s.low24h)],
+        ["7d baseline (pre)",   fmtPrice(s.baseline7d)],
+        ["Pump vs baseline",    fmtPct(s.pump_pct_vs_baseline), s.pump_pct_vs_baseline >= 30 ? "pos" : "mute"],
+        ["14d peak",            fmtPrice(s.peak14d)],
+        ["Days since peak",     s.days_since_peak != null ? `${s.days_since_peak}d` : "—"],
+        ["Off-peak",            fmtPct(-Math.abs(s.off_peak_pct))],
+        ["24h volume",          "$" + fmtVolume(s.vol24h)],
+        ["Vol surge (vs 6d avg)", s.vol_surge_ratio ? s.vol_surge_ratio.toFixed(2) + "×" : "—", s.vol_surge_ratio >= 2 ? "pos" : "mute"],
+        ["Pump started",        s.pump_start_hours_ago != null ? `${s.pump_start_hours_ago}h ago` : "—"],
+    ];
+    document.getElementById("apStats").innerHTML = stats.map(([k, v, cls]) =>
+        `<div class="stat"><div class="k">${k}</div><div class="v ${cls || ''}">${v}</div></div>`
+    ).join("");
+
+    // Chart — last 24h of 1h candles, simple SVG line + area + high/low markers
+    const k1h = (d.klines_1h || []).slice(-48); // 48h gives a richer chart
+    drawSparkline("apChart", k1h);
+
+    // Filter simulation
+    const filters = d.filters || [];
+    document.getElementById("apFilters").innerHTML = filters.map(f =>
+        `<div class="filter-row">
+            <span class="icon ${f.ok ? 'pos' : 'neg'}">${f.ok ? '✓' : '✗'}</span>
+            <span class="rule">${f.rule}</span>
+            <span class="detail">${f.detail}</span>
+        </div>`
+    ).join("");
+    const verdict = d.verdict || {};
+    document.getElementById("apVerdict").innerHTML =
+        `<div class="verdict ${verdict.state === 'pass_filters' ? 'pass' : 'blocked'}">
+            ${verdict.text || '—'}
+        </div>`;
+
+    // Bot history
+    const bot = d.bot_today || {};
+    const sigCount = bot.signals || 0;
+    const skipCount = bot.skips || 0;
+    let history = `<div>Signals today: <strong>${sigCount}</strong> · Filter skips: <strong>${skipCount}</strong></div>`;
+    if (skipCount > 0 && bot.skip_events) {
+        const top3 = bot.skip_events.slice(0, 3);
+        history += top3.map(s => {
+            const t = s.ts ? new Date(s.ts).toISOString().substr(11, 8) : "—";
+            return `<div class="event-row"><span class="ev-time">${t} UTC</span> · skipped (${s.rule || '?'}): ${s.reason || ''}</div>`;
+        }).join("");
+    }
+    if (sigCount === 0 && skipCount === 0) {
+        history += `<div class="event-row" style="margin-top: 6px;">No signals or skips today for this coin — the bot's signal generator never saw it cross its momentum gates.</div>`;
+    }
+    document.getElementById("apBotHistory").innerHTML = history;
+}
+
+function drawSparkline(containerId, klines) {
+    const el = document.getElementById(containerId);
+    if (!klines || klines.length === 0) {
+        el.innerHTML = '<div style="color:var(--muted);text-align:center;padding:30px;">No data</div>';
+        return;
+    }
+    const closes = klines.map(k => k[4]);
+    const min = Math.min(...closes);
+    const max = Math.max(...closes);
+    const range = max - min || 1;
+    const W = 600, H = 120, PAD = 4;
+    const innerW = W - PAD * 2, innerH = H - PAD * 2;
+
+    const points = closes.map((c, i) => {
+        const x = PAD + (i / (closes.length - 1 || 1)) * innerW;
+        const y = PAD + innerH - ((c - min) / range) * innerH;
+        return [x, y];
+    });
+    const path = points.map(([x, y], i) => (i === 0 ? `M ${x},${y}` : `L ${x},${y}`)).join(" ");
+    const areaPath = path + ` L ${PAD + innerW},${PAD + innerH} L ${PAD},${PAD + innerH} Z`;
+    const lastClose = closes[closes.length - 1];
+    const firstClose = closes[0];
+    const isUp = lastClose >= firstClose;
+    const colour = isUp ? "#2ecc71" : "#e74c3c";
+
+    el.innerHTML = `
+        <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="gradient-${containerId}" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%"   stop-color="${colour}" stop-opacity="0.30"/>
+              <stop offset="100%" stop-color="${colour}" stop-opacity="0.00"/>
+            </linearGradient>
+          </defs>
+          <path d="${areaPath}" fill="url(#gradient-${containerId})"/>
+          <path d="${path}" fill="none" stroke="${colour}" stroke-width="1.5"/>
+          <circle cx="${points[points.length-1][0]}" cy="${points[points.length-1][1]}" r="3" fill="${colour}"/>
+        </svg>
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;margin-top:4px;">
+          <span>Low ${fmtPrice(min)}</span>
+          <span>High ${fmtPrice(max)}</span>
+        </div>
+    `;
+}
 
 startPolling();
 </script>

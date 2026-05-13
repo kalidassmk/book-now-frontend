@@ -1320,6 +1320,218 @@ app.get('/api/spot-tickers', async (req, res) => {
     }
 });
 
+// ─── Per-coin pump analysis ──────────────────────────────────────────────────
+// 2026-05-13 iter 30: deep-dive view for "why did this coin pump and why
+// didn't our bot catch it?". Used by the slide-out panel on /spot.html.
+//
+// Aggregates:
+//   - Klines 1h × 168 (7 days), 1d × 30  →  chart + pump-start detection
+//   - Today's METRICS:SIGNAL entries for the symbol → did we see signals?
+//   - Today's METRICS:SKIP entries for the symbol → did our filters block?
+//   - Computed stats:
+//       price now, 24h high, 24h low
+//       7-day pre-pump baseline (mean close of days -14..-7)
+//       pump_pct_vs_baseline
+//       peak_within_last_7d, days_since_peak
+//       vol_24h_vs_7d_avg ratio (surge indicator)
+//       pump_started_hours_ago (when the 1h close first exceeded baseline×1.05)
+//   - Filter simulation: dry-run each gate against current data, return
+//       { name, passed, reason } so the UI can show why we wouldn't trade
+//       this coin RIGHT NOW.
+app.get('/api/coin-analysis', async (req, res) => {
+    const symbol = String(req.query.symbol || '').toUpperCase().replace('/', '');
+    if (!symbol || !symbol.endsWith('USDT')) {
+        return res.status(400).json({ error: 'symbol must be a USDT pair, e.g. COSUSDT' });
+    }
+
+    try {
+        // 1. Klines — public endpoint, no signing.
+        const [k1h, k1d] = await Promise.all([
+            binanceWorker.binanceFetch(
+                '/api/v3/klines', 'GET',
+                { symbol, interval: '1h', limit: 168 },
+                { signed: false }
+            ),
+            binanceWorker.binanceFetch(
+                '/api/v3/klines', 'GET',
+                { symbol, interval: '1d', limit: 30 },
+                { signed: false }
+            ),
+        ]);
+
+        // 2. Bot's view today — pull from Redis lists.
+        const today = todayStr();
+        const symbolSlash = symbol.slice(0, -4) + '/USDT';
+        const symbolFlat  = symbol;
+        const matchSymbol = (s) => {
+            const v = (s && s.symbol) || '';
+            return v === symbolSlash || v === symbolFlat || v.replace('/', '') === symbolFlat;
+        };
+        const [allSignals, allSkips] = await Promise.all([
+            _safeParseList(`METRICS:SIGNAL:${today}`, 500),
+            _safeParseList(`METRICS:SKIP:${today}`, 500),
+        ]);
+        const ourSignals = allSignals.filter(matchSymbol);
+        const ourSkips   = allSkips.filter(matchSymbol);
+
+        // 3. Live config so we can dry-run the filter gates.
+        const configRaw = await redis.get(CONFIG_KEY);
+        const cfg = configRaw ? JSON.parse(configRaw) : {};
+
+        // 4. Compute stats from klines.
+        const closes1d = k1d.map(k => parseFloat(k[4]));
+        const closes1h = k1h.map(k => parseFloat(k[4]));
+        const highs1h  = k1h.map(k => parseFloat(k[2]));
+        const lows1h   = k1h.map(k => parseFloat(k[3]));
+        const vols1h   = k1h.map(k => parseFloat(k[7]));   // quote volume (USDT)
+        const nowPrice = closes1h.length ? closes1h[closes1h.length - 1] : 0;
+
+        const last24h = closes1h.slice(-24);
+        const high24h = Math.max(...highs1h.slice(-24));
+        const low24h  = Math.min(...lows1h.slice(-24));
+        const open24h = last24h[0] || nowPrice;
+        const change24hPct = open24h > 0 ? ((nowPrice - open24h) / open24h * 100) : 0;
+
+        // 7-day baseline = mean close of days -14 to -7 (pre-pump window).
+        const baselineSlice = closes1d.slice(-14, -7);
+        const baseline7d = baselineSlice.length
+            ? baselineSlice.reduce((a, b) => a + b, 0) / baselineSlice.length
+            : 0;
+        const pumpPctVsBaseline = baseline7d > 0
+            ? ((nowPrice - baseline7d) / baseline7d * 100)
+            : 0;
+
+        // Peak in the last 14 days
+        const last14dHighs = k1d.slice(-14).map(k => parseFloat(k[2]));
+        const peak14d = last14dHighs.length ? Math.max(...last14dHighs) : 0;
+        const peakIdx = last14dHighs.lastIndexOf(peak14d);
+        const daysSincePeak = peak14d > 0 ? (last14dHighs.length - 1 - peakIdx) : 0;
+        const offPeakPct = peak14d > 0 ? ((peak14d - nowPrice) / peak14d * 100) : 0;
+
+        // Volume surge: 24h vol vs prior 6-day average daily quote vol.
+        const vols1d = k1d.map(k => parseFloat(k[7]));
+        const vol24h = vols1d.length ? vols1d[vols1d.length - 1] : 0;
+        const priorVols = vols1d.slice(-7, -1);
+        const avgVolPrior = priorVols.length
+            ? priorVols.reduce((a, b) => a + b, 0) / priorVols.length
+            : 0;
+        const volSurgeRatio = avgVolPrior > 0 ? (vol24h / avgVolPrior) : 0;
+
+        // When did the pump start? Walk 1h closes backwards from now; the
+        // first hour where the close was within 2% of the 7d baseline is
+        // a reasonable "pump-start" marker.
+        let pumpStartHoursAgo = null;
+        if (baseline7d > 0) {
+            for (let i = closes1h.length - 1; i >= 0; i--) {
+                if (closes1h[i] <= baseline7d * 1.02) {
+                    pumpStartHoursAgo = closes1h.length - 1 - i;
+                    break;
+                }
+            }
+        }
+
+        // 5. Filter simulation — does our current config want to buy this
+        // coin RIGHT NOW? Each entry: { rule, ok, detail }.
+        const fkMaxChange  = Number(cfg.maxChange24hPct || 12);
+        const fkMaxRange1h = Number(cfg.maxRange1hPct || 6);
+        const fkOver60m    = Number(cfg.overbought60mPct || 2.5);
+        const minVolUsdt   = Number(cfg.minVol24hUsd || 2_000_000);
+        const ppThreshold  = Number(cfg.postPumpThresholdPct || 30);
+        const ppOffPeakMin = Number(cfg.postPumpOffPeakMinPct || 10);
+        const ppMinDays    = Number(cfg.postPumpMinDaysSincePeak || 2);
+        const ppLookback   = Number(cfg.postPumpLookbackDays || 15);
+        const ppBaselineD  = Number(cfg.postPumpBaselineDays || 10);
+
+        // 1h range
+        const last1hHighs = highs1h.slice(-1);
+        const last1hLows  = lows1h.slice(-1);
+        const range1hPct = (last1hHighs[0] && last1hLows[0])
+            ? ((last1hHighs[0] - last1hLows[0]) / last1hLows[0] * 100) : 0;
+        // 60m change (last hour close vs previous close)
+        const change60mPct = closes1h.length >= 2
+            ? ((closes1h[closes1h.length - 1] - closes1h[closes1h.length - 2])
+                / closes1h[closes1h.length - 2] * 100)
+            : 0;
+
+        // Post-pump gate using configured lookback
+        const ppLookbackSlice = k1d.slice(-(ppLookback + 1), -1).map(k => parseFloat(k[2]));
+        const ppBaselineSlice = k1d.slice(-(ppLookback + 1 + ppBaselineD), -(ppLookback + 1))
+            .map(k => parseFloat(k[4]));
+        const ppPeak = ppLookbackSlice.length ? Math.max(...ppLookbackSlice) : 0;
+        const ppPeakIdx = ppLookbackSlice.lastIndexOf(ppPeak);
+        const ppDaysSincePeak = ppPeak > 0 ? (ppLookbackSlice.length - 1 - ppPeakIdx) : 0;
+        const ppBaseline = ppBaselineSlice.length
+            ? ppBaselineSlice.reduce((a, b) => a + b, 0) / ppBaselineSlice.length
+            : 0;
+        const ppPumpPct = ppBaseline > 0 ? ((ppPeak - ppBaseline) / ppBaseline * 100) : 0;
+        const ppOffPct  = ppPeak > 0 ? ((ppPeak - nowPrice) / ppPeak * 100) : 0;
+
+        const filters = [
+            {
+                rule: 'min 24h volume',
+                ok: vol24h >= minVolUsdt,
+                detail: `vol24h $${(vol24h / 1e6).toFixed(2)}M  vs threshold $${(minVolUsdt / 1e6).toFixed(2)}M`,
+            },
+            {
+                rule: 'max 24h pump',
+                ok: change24hPct <= fkMaxChange,
+                detail: `change24h ${change24hPct >= 0 ? '+' : ''}${change24hPct.toFixed(2)}%  vs cap +${fkMaxChange.toFixed(1)}%`,
+            },
+            {
+                rule: 'max 1h range',
+                ok: range1hPct <= fkMaxRange1h,
+                detail: `range1h ${range1hPct.toFixed(2)}%  vs cap ${fkMaxRange1h.toFixed(1)}%`,
+            },
+            {
+                rule: 'overbought combo (24h>0 AND 60m>X)',
+                ok: !(change24hPct > 0 && change60mPct > fkOver60m),
+                detail: `24h ${change24hPct >= 0 ? '+' : ''}${change24hPct.toFixed(2)}% / 60m ${change60mPct >= 0 ? '+' : ''}${change60mPct.toFixed(2)}%  (skip if 24h>0 AND 60m>${fkOver60m}%)`,
+            },
+            {
+                rule: 'post-pump bleed',
+                ok: !(ppPumpPct >= ppThreshold && ppOffPct >= ppOffPeakMin && ppDaysSincePeak >= ppMinDays),
+                detail: `pump +${ppPumpPct.toFixed(0)}% / off-peak ${ppOffPct.toFixed(1)}% / days-since-peak ${ppDaysSincePeak}  (block if all 3 ≥ thresholds ${ppThreshold}/${ppOffPeakMin}/${ppMinDays})`,
+            },
+        ];
+        const blockedBy = filters.filter(f => !f.ok).map(f => f.rule);
+        const verdict = blockedBy.length === 0
+            ? { state: 'pass_filters', text: 'All filters pass. A signal from process_symbol would lead to a buy.' }
+            : { state: 'blocked', text: `Blocked by: ${blockedBy.join(', ')}` };
+
+        // Trim klines payload — only keep [openTime, open, high, low, close, vol]
+        const trim = (k) => [parseInt(k[0]), parseFloat(k[1]), parseFloat(k[2]),
+                              parseFloat(k[3]), parseFloat(k[4]), parseFloat(k[5])];
+
+        res.json({
+            symbol: symbolSlash,
+            ts: Date.now(),
+            stats: {
+                price: nowPrice,
+                change24h_pct: change24hPct,
+                high24h, low24h,
+                baseline7d,
+                pump_pct_vs_baseline: pumpPctVsBaseline,
+                peak14d, days_since_peak: daysSincePeak, off_peak_pct: offPeakPct,
+                vol24h, avgVolPrior, vol_surge_ratio: volSurgeRatio,
+                pump_start_hours_ago: pumpStartHoursAgo,
+            },
+            klines_1h: k1h.map(trim),
+            klines_1d: k1d.map(trim),
+            bot_today: {
+                signals: ourSignals.length,
+                skips: ourSkips.length,
+                signal_events: ourSignals.slice(0, 10),
+                skip_events:   ourSkips.slice(0, 10),
+            },
+            filters,
+            verdict,
+        });
+    } catch (err) {
+        console.error('[/api/coin-analysis]', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ─── REST API ─────────────────────────────────────────────────────────────────
 // ─── Binance Account APIs (Node-native) ───────────────────────────────────────
 // 1. Get Open Orders
