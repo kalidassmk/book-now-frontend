@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+  public/spot.html
+  ──────────────────────────────────────────────────────────────────────────
+  Binance Spot Movers — operator-facing market scanner.
+
+  Lists every USDT spot pair sorted by % change (greatest gainers first by
+  default). Timeframe dropdown switches between 24h / 1h / 4h:
+    - 24h: live updates via Binance WebSocket  !ticker@arr  (1s cadence)
+    - 1h / 4h: rolling-window REST poll every 30s via /api/v3/ticker?windowSize=
+
+  Pure browser implementation — talks directly to Binance public endpoints,
+  no proxy through our backend. No auth needed for these streams.
+-->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Spot Movers — Book-Now</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 18px; }
+  h1 { margin: 0 0 6px; font-size: 22px; }
+  .sub { color: var(--muted); margin-bottom: 18px; font-size: 13px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); animation: pulse 1.4s ease-in-out infinite; }
+  .live-dot.off { background: var(--bad); animation: none; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:.4;transform:scale(.85);} }
+  /* nav strip — matches monitor.html / metrics.html */
+  .topnav { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .topnav a { display: inline-block; padding: 6px 14px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 600; }
+  .topnav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .topnav a:not(.active):hover { color: var(--text); border-color: var(--muted); }
+  /* controls */
+  .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+  .controls label { color: var(--muted); font-size: 12px; }
+  .controls select, .controls input {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 4px; padding: 6px 12px; font-family: inherit; font-size: 13px;
+  }
+  .controls select { cursor: pointer; }
+  .counter { color: var(--muted); font-size: 11px; margin-left: auto; font-variant-numeric: tabular-nums; }
+  /* table */
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--line); font-size: 13px; white-space: nowrap; }
+  th { background: #1a232e; color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.4px; position: sticky; top: 0; z-index: 1; user-select: none; cursor: pointer; }
+  th:hover { color: var(--text); }
+  th.sorted::after { content: " ↓"; color: var(--accent); }
+  th.sorted.asc::after { content: " ↑"; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(41,182,246,0.04); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.symbol { font-weight: 600; }
+  td.symbol .ticker { color: var(--text); }
+  td.symbol .quote { color: var(--muted); font-size: 11px; font-weight: 400; }
+  .pos { color: var(--good); }
+  .neg { color: var(--bad); }
+  .mute { color: var(--muted); }
+  .change-cell { font-weight: 600; }
+  .empty { padding: 32px; text-align: center; color: var(--muted); }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 10px; font-weight: 600; background: rgba(41,182,246,0.18); color: var(--accent); }
+  .scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/">📊 Monitor</a>
+  <a href="/scanner">🏠 Scanner</a>
+  <a href="/metrics.html">📈 Metrics</a>
+  <a href="/spot.html" class="active">📋 Spot</a>
+</nav>
+
+<h1>Spot Movers</h1>
+<div class="sub">
+  <span class="live-dot" id="liveDot"></span>
+  <span id="liveLabel">Connecting to Binance…</span>
+  <span class="counter" id="counter">—</span>
+</div>
+
+<div class="controls">
+  <label>Timeframe</label>
+  <select id="timeframe">
+    <option value="24h" selected>24h</option>
+    <option value="1h">1h</option>
+    <option value="4h">4h</option>
+  </select>
+
+  <label>Min 24h volume (M USDT)</label>
+  <input id="minVol" type="number" min="0" step="0.5" value="2" style="width:80px" />
+
+  <label>Show</label>
+  <select id="topN">
+    <option value="50">Top 50</option>
+    <option value="100" selected>Top 100</option>
+    <option value="200">Top 200</option>
+    <option value="0">All</option>
+  </select>
+
+  <label>Filter</label>
+  <input id="filter" type="text" placeholder="e.g. BTC, BNB" style="width:120px" />
+</div>
+
+<div class="scroll">
+  <table>
+    <thead>
+      <tr>
+        <th data-sort="symbol">Symbol</th>
+        <th class="num" data-sort="price">Price (USDT)</th>
+        <th class="num sorted" data-sort="change">Change %</th>
+        <th class="num" data-sort="high">High (24h)</th>
+        <th class="num" data-sort="low">Low (24h)</th>
+        <th class="num" data-sort="volume">Volume (24h)</th>
+      </tr>
+    </thead>
+    <tbody id="rows"><tr><td colspan="6" class="empty">Waiting for first tick from Binance…</td></tr></tbody>
+  </table>
+</div>
+
+<script>
+const BINANCE_WS  = "wss://stream.binance.com:9443/ws/!ticker@arr";
+const BINANCE_API = "https://api.binance.com/api/v3";
+
+// State held entirely in memory; each tick updates the symbol's row.
+// {symbol: {price, change24h, change1h, change4h, high24h, low24h, volume24h}}
+const tickers = {};
+
+// UI state
+let timeframe = "24h";    // "24h" | "1h" | "4h"
+let topN      = 100;
+let minVolMUsdt = 2;
+let filterTerm  = "";
+let sortKey   = "change";  // change | symbol | price | high | low | volume
+let sortAsc   = false;     // false = descending (greatest first)
+
+let rollingPollTimer = null;
+let ws = null;
+let lastRender = 0;
+
+// ──────────────────────────────────────────────────────────────────────────
+// WebSocket: live 24h tickers for every symbol Binance lists.
+// !ticker@arr emits an array of all 24h tickers ~once per second.
+function connectWS() {
+    setStatus("connecting", "Connecting to Binance…");
+    ws = new WebSocket(BINANCE_WS);
+    ws.onopen = () => setStatus("ok", "Live · 24h tickers streaming");
+    ws.onmessage = (ev) => {
+        let arr;
+        try { arr = JSON.parse(ev.data); } catch (_) { return; }
+        if (!Array.isArray(arr)) return;
+        for (const t of arr) {
+            // Only USDT spot pairs
+            if (!t.s || !t.s.endsWith("USDT")) continue;
+            // Exclude leveraged tokens (UP/DOWN/BULL/BEAR) and weird symbols
+            if (/UP$|DOWN$|BULL$|BEAR$|3L$|3S$/.test(t.s.replace("USDT",""))) continue;
+            const existing = tickers[t.s] || {};
+            tickers[t.s] = {
+                ...existing,
+                symbol:    t.s,
+                price:     parseFloat(t.c),
+                change24h: parseFloat(t.P),
+                high24h:   parseFloat(t.h),
+                low24h:    parseFloat(t.l),
+                volume24h: parseFloat(t.q),   // quote volume in USDT
+                lastTick:  Date.now(),
+            };
+        }
+        scheduleRender();
+    };
+    ws.onerror = () => setStatus("err", "WebSocket error — reconnecting…");
+    ws.onclose = () => {
+        setStatus("err", "Disconnected — reconnecting in 3 s…");
+        setTimeout(connectWS, 3000);
+    };
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// REST: rolling window ticker for 1h or 4h. One call returns ALL symbols
+// (no symbols param). Weight 400 per call; refreshed every 30s.
+async function fetchRolling(windowSize) {
+    try {
+        const url = `${BINANCE_API}/ticker?windowSize=${windowSize}`;
+        const resp = await fetch(url);
+        if (!resp.ok) {
+            console.warn("rolling fetch failed:", resp.status);
+            return;
+        }
+        const data = await resp.json();
+        const key = `change${windowSize}`;
+        for (const t of data) {
+            if (!t.symbol || !t.symbol.endsWith("USDT")) continue;
+            if (!tickers[t.symbol]) tickers[t.symbol] = { symbol: t.symbol };
+            tickers[t.symbol][key] = parseFloat(t.priceChangePercent);
+        }
+        scheduleRender();
+    } catch (e) {
+        console.warn("rolling fetch error:", e);
+    }
+}
+
+function startRollingPoll(windowSize) {
+    stopRollingPoll();
+    fetchRolling(windowSize);
+    rollingPollTimer = setInterval(() => fetchRolling(windowSize), 30000);
+}
+
+function stopRollingPoll() {
+    if (rollingPollTimer) {
+        clearInterval(rollingPollTimer);
+        rollingPollTimer = null;
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Rendering — throttled to ~5 fps so a flood of WS updates doesn't pin CPU.
+function scheduleRender() {
+    const now = Date.now();
+    if (now - lastRender < 200) return;
+    lastRender = now;
+    render();
+}
+
+function fmtPrice(p) {
+    if (p == null || isNaN(p)) return "—";
+    if (p >= 100)    return p.toFixed(2);
+    if (p >= 1)      return p.toFixed(4);
+    if (p >= 0.01)   return p.toFixed(6);
+    return p.toPrecision(4);
+}
+
+function fmtPct(v) {
+    if (v == null || isNaN(v)) return "—";
+    const sign = v >= 0 ? "+" : "";
+    return `${sign}${v.toFixed(2)}%`;
+}
+
+function fmtVolume(v) {
+    if (v == null || isNaN(v)) return "—";
+    if (v >= 1e9) return `${(v/1e9).toFixed(2)}B`;
+    if (v >= 1e6) return `${(v/1e6).toFixed(2)}M`;
+    if (v >= 1e3) return `${(v/1e3).toFixed(1)}K`;
+    return v.toFixed(0);
+}
+
+function render() {
+    const minVolUsdt = minVolMUsdt * 1e6;
+    const filter = filterTerm.trim().toUpperCase();
+    const changeKey = `change${timeframe}`;
+
+    // Filter
+    let rows = Object.values(tickers).filter(t => {
+        if (t.volume24h == null || t.volume24h < minVolUsdt) return false;
+        if (filter && !t.symbol.includes(filter)) return false;
+        // Need at least the change for current timeframe to be useful
+        return true;
+    });
+
+    // Sort
+    rows.sort((a, b) => {
+        let av, bv;
+        if (sortKey === "symbol") { av = a.symbol; bv = b.symbol; }
+        else if (sortKey === "price") { av = a.price; bv = b.price; }
+        else if (sortKey === "change") { av = a[changeKey]; bv = b[changeKey]; }
+        else if (sortKey === "high") { av = a.high24h; bv = b.high24h; }
+        else if (sortKey === "low") { av = a.low24h; bv = b.low24h; }
+        else if (sortKey === "volume") { av = a.volume24h; bv = b.volume24h; }
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        if (typeof av === "string") return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+        return sortAsc ? av - bv : bv - av;
+    });
+
+    // Top N
+    if (topN > 0) rows = rows.slice(0, topN);
+
+    const tbody = document.getElementById("rows");
+    if (rows.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="empty">No symbols match (waiting for ${timeframe} data?)</td></tr>`;
+    } else {
+        tbody.innerHTML = rows.map(t => {
+            const change = t[changeKey];
+            const changeClass = change == null ? "mute" : (change >= 0 ? "pos" : "neg");
+            const base = t.symbol.replace("USDT", "");
+            return `<tr>
+                <td class="symbol">
+                  <span class="ticker">${base}</span>
+                  <span class="quote">/USDT</span>
+                </td>
+                <td class="num">${fmtPrice(t.price)}</td>
+                <td class="num change-cell ${changeClass}">${fmtPct(change)}</td>
+                <td class="num mute">${fmtPrice(t.high24h)}</td>
+                <td class="num mute">${fmtPrice(t.low24h)}</td>
+                <td class="num mute">${fmtVolume(t.volume24h)}</td>
+            </tr>`;
+        }).join("");
+    }
+    document.getElementById("counter").textContent =
+        `${rows.length} / ${Object.keys(tickers).length} symbols · ${timeframe}`;
+}
+
+function setStatus(state, label) {
+    const dot = document.getElementById("liveDot");
+    dot.classList.toggle("off", state !== "ok");
+    document.getElementById("liveLabel").textContent = label;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Wire up controls.
+document.getElementById("timeframe").addEventListener("change", (e) => {
+    timeframe = e.target.value;
+    if (timeframe === "24h") {
+        stopRollingPoll();   // WebSocket already provides 24h
+    } else {
+        startRollingPoll(timeframe);
+    }
+    render();
+});
+
+document.getElementById("topN").addEventListener("change", (e) => {
+    topN = parseInt(e.target.value, 10);
+    render();
+});
+document.getElementById("minVol").addEventListener("input", (e) => {
+    minVolMUsdt = parseFloat(e.target.value) || 0;
+    render();
+});
+document.getElementById("filter").addEventListener("input", (e) => {
+    filterTerm = e.target.value;
+    render();
+});
+
+// Column-header sorting
+document.querySelectorAll("th[data-sort]").forEach(th => {
+    th.addEventListener("click", () => {
+        const key = th.getAttribute("data-sort");
+        if (sortKey === key) sortAsc = !sortAsc;
+        else { sortKey = key; sortAsc = false; }
+        // Update visual indicator
+        document.querySelectorAll("th[data-sort]").forEach(h => {
+            h.classList.remove("sorted", "asc");
+        });
+        th.classList.add("sorted");
+        if (sortAsc) th.classList.add("asc");
+        render();
+    });
+});
+
+// Boot
+connectWS();
+</script>
+
+</body>
+</html>
