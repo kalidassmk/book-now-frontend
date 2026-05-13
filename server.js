@@ -1283,8 +1283,10 @@ app.get('/api/spot-tickers', async (req, res) => {
         }
         if (window === '1h' || window === '4h') {
             // Binance rolling-window endpoint — one call returns ALL symbols.
+            // PUBLIC endpoint: pass signed:false so binanceFetch doesn't add
+            // timestamp+signature (which Binance rejects for public paths).
             const data = await binanceWorker.binanceFetch(
-                '/api/v3/ticker', 'GET', { windowSize: window }
+                '/api/v3/ticker', 'GET', { windowSize: window }, { signed: false }
             );
             const tickers = (Array.isArray(data) ? data : [])
                 .filter(t => t.symbol && t.symbol.endsWith('USDT'))

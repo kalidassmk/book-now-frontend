@@ -65,12 +65,23 @@ async function loadCredentials() {
 // this for cancel-order, dust-transfer, and (now) the periodic
 // snapshot fetches. Throws on any non-2xx reply with Binance's own
 // error message intact.
-function binanceFetch(path, method = 'GET', params = {}) {
+//
+// iter 26: signed defaults to true for account endpoints, but the caller
+// can pass `signed: false` for public endpoints (e.g. /api/v3/ticker,
+// /api/v3/klines). Signing a public endpoint causes Binance to reject
+// the request — that's why /spot 1h/4h was 500-ing before this fix.
+function binanceFetch(path, method = 'GET', params = {}, opts = {}) {
+    const { signed = null } = opts;
     return new Promise((resolve, reject) => {
-        if (!API_KEY || !SECRET_KEY) {
+        // Public endpoints don't need keys; only require API_KEY/SECRET
+        // when signing is on.
+        const inferSigned = (signed !== null)
+            ? signed
+            : (path.startsWith('/api/v3/') || path.startsWith('/sapi/'));
+        if (inferSigned && (!API_KEY || !SECRET_KEY)) {
             return reject(new Error('Binance API keys not loaded'));
         }
-        const requiresSig = path.startsWith('/api/v3/') || path.startsWith('/sapi/');
+        const requiresSig = inferSigned;
         let qs = '';
         if (requiresSig) {
             const merged = { ...params, timestamp: Date.now(), recvWindow: 5000 };
