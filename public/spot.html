@@ -46,8 +46,20 @@
   }
   .controls select { cursor: pointer; }
   .counter { color: var(--muted); font-size: 11px; margin-left: auto; font-variant-numeric: tabular-nums; }
-  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--line); font-size: 13px; white-space: nowrap; }
+  /* iter 29: table sizes to its content (was width:100% which spread 6
+     columns across the full viewport and left huge empty gaps). The
+     wrapping .scroll div still allows horizontal scroll on narrow
+     screens. Padding tightened slightly so rows are denser. */
+  table {
+    width: max-content;
+    max-width: 100%;
+    border-collapse: collapse;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  th, td { padding: 7px 18px; text-align: left; border-bottom: 1px solid var(--line); font-size: 13px; white-space: nowrap; }
   th { background: #1a232e; color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.4px; position: sticky; top: 0; z-index: 1; user-select: none; cursor: pointer; }
   th:hover { color: var(--text); }
   th.sorted::after { content: " ↓"; color: var(--accent); }
