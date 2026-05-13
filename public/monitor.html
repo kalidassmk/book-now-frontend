@@ -33,7 +33,9 @@
   th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--line); font-size: 12px; white-space: nowrap; }
   th { background: #1a232e; color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.4px; }
   tr:last-child td { border-bottom: none; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  /* iter 28: was td.num only — headers stayed left-aligned and didn't
+     line up with the right-aligned numeric cells below. */
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
   .pill { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 600; }
   .pill.win  { background: rgba(46,204,113,.18); color: var(--good); }
   .pill.loss { background: rgba(231,76,60,.18); color: var(--bad); }
