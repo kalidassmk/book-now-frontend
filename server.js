@@ -2158,7 +2158,8 @@ app.post('/api/redis/flush', async (req, res) => {
 //   pnl_usdt    number                      optional
 //   exit_reason string                      optional
 app.post('/api/admin/patch-outcome', async (req, res) => {
-    const { symbol, date, exit_price, pnl_usdt, exit_reason } = req.body || {};
+    const { symbol, date, exit_price, pnl_usdt, exit_reason,
+            filled, exited, fill_price, qty } = req.body || {};
     if (!symbol) return res.status(400).json({ error: 'symbol required' });
     const d = date || new Date().toISOString().slice(0, 10);
     const key = `METRICS:OUTCOME:${d}:${String(symbol).replace('/', '')}`;
@@ -2169,9 +2170,19 @@ app.post('/api/admin/patch-outcome', async (req, res) => {
         }
         const oldPnl = Number(existing.pnl_usdt || 0);
         const patch = {};
-        if (exit_price != null) patch.exit_price = String(exit_price);
-        if (pnl_usdt   != null) patch.pnl_usdt   = String(pnl_usdt);
+        if (exit_price  != null) patch.exit_price  = String(exit_price);
+        if (pnl_usdt    != null) patch.pnl_usdt    = String(pnl_usdt);
         if (exit_reason != null) patch.exit_reason = String(exit_reason);
+        // iter 34: allow flipping filled/exited + fill_price/qty so a
+        // human or a cleanup script can reconcile a stuck PENDING entry
+        // to its real status (CANCELLED / WIN / LOSS / FLAT).
+        if (filled      != null) patch.filled      = String(filled ? 1 : 0);
+        if (exited      != null) patch.exited      = String(exited ? 1 : 0);
+        if (fill_price  != null) patch.fill_price  = String(fill_price);
+        if (qty         != null) patch.qty         = String(qty);
+        // Stamp exit_ts when transitioning to exited so the dashboard
+        // shows a real timestamp instead of a missing field.
+        if (exited && !existing.exit_ts) patch.exit_ts = String(Date.now());
         if (Object.keys(patch).length === 0) {
             return res.status(400).json({ error: 'nothing to patch' });
         }
@@ -2183,7 +2194,7 @@ app.post('/api/admin/patch-outcome', async (req, res) => {
                 await redis.hincrbyfloat(`METRICS:DAILY:${d}`, 'realized_pnl_usdt', delta);
             } catch (_) {}
         }
-        console.log(`[Admin] Patched ${key}: oldPnl=${oldPnl} newPnl=${pnl_usdt} delta=${(Number(pnl_usdt) - oldPnl).toFixed(4)}`);
+        console.log(`[Admin] Patched ${key}: oldPnl=${oldPnl} newPnl=${pnl_usdt} fields=${Object.keys(patch).join(',')}`);
         return res.json({ ok: true, key, oldPnl, newPnl: pnl_usdt, patch });
     } catch (err) {
         return res.status(500).json({ error: err.message });
