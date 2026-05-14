@@ -535,6 +535,34 @@ function connectWS() {
                 await redis.set('BINANCE:LAST_ORDER_UPDATE', JSON.stringify(msg));
                 if (io) io.emit('order-execution', executionData);
                 if (executionCallback) executionCallback(executionData);
+
+                // iter 33 (2026-05-14): push EVERY order fill / cancel into
+                // a Redis list so the Python bot can react instantly via
+                // WebSocket push instead of REST polling. Latency drops
+                // from "next ladder_tick" (~1.2s after iter32, was 1-8min
+                // before iter32) to "next Redis read" (~few ms).
+                // The bot drains this list at the start of each tick.
+                if (msg.X === 'FILLED' || msg.X === 'CANCELED' || msg.X === 'EXPIRED') {
+                    const fillEvent = {
+                        ts:          Date.now(),
+                        symbol:      msg.s,
+                        orderId:     String(msg.i),
+                        side:        msg.S,
+                        type:        msg.o,
+                        status:      msg.X,
+                        fillPrice:   msg.L || msg.p,  // last fill price (FILLED only)
+                        fillQty:     msg.l || msg.z,  // last fill qty
+                        cumQty:      msg.z,
+                        cumQuoteQty: msg.Z,
+                    };
+                    try {
+                        await redis.lpush('BINANCE:FILL_EVENTS', JSON.stringify(fillEvent));
+                        await redis.ltrim('BINANCE:FILL_EVENTS', 0, 199);  // keep last 200
+                        await redis.expire('BINANCE:FILL_EVENTS', 3600);   // 1h TTL
+                    } catch (e) {
+                        console.warn('[FILL_EVENTS] redis push failed:', e.message);
+                    }
+                }
             }
 
             // 🔥 OCO list status updates. Fires when an OCO is placed
