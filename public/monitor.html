@@ -215,6 +215,10 @@ function statusPill(reason, pnl) {
     }
     if (r === 'manual_cancel_holding') return '<span class="pill open">MANUAL HOLD</span>';
     // iter5 fe: iter39 liquidity-death tiers (smart adaptive hard stop)
+    // iter46: Market Stress Exit (3 sub-reasons)
+    if (r.startsWith('market_stress:btc_weakness'))      return '<span class="pill stop">⚡ BTC WEAKNESS</span>';
+    if (r.startsWith('market_stress:vol_capitulation'))  return '<span class="pill stop">⚡ VOL CAPITULATION</span>';
+    if (r.startsWith('market_stress:red_velocity'))      return '<span class="pill stop">⚡ RED VELOCITY</span>';
     if (r.startsWith('liquidity_death:catastrophic')) return '<span class="pill death">💀 CATASTROPHIC</span>';
     if (r.startsWith('liquidity_death:stagnation'))   return '<span class="pill stale">🪦 STAGNATION</span>';
     if (r.startsWith('liquidity_death:score'))        return '<span class="pill death">💀 LIQUIDITY DEATH</span>';
@@ -266,6 +270,16 @@ function explainReason(reason) {
     }
     if (r.startsWith('liquidity_death:score')) {
         return 'iter39 multi-factor scorer fired: volume collapsed, never recovered, lower-lows building. Smart exit.';
+    }
+    // iter46 explanations
+    if (r.startsWith('market_stress:btc_weakness')) {
+        return 'iter46: BTC dropped > 0.5% in last 30min while this ladder was underwater. Broad market sell-off — exit early before iter39 catastrophic.';
+    }
+    if (r.startsWith('market_stress:vol_capitulation')) {
+        return 'iter46: 1m volume spiked > 5× pre-signal baseline on a RED candle. Distribution / panic selling — exit before deeper loss.';
+    }
+    if (r.startsWith('market_stress:red_velocity')) {
+        return 'iter46: 7+ of last 10 1m candles were red. Sustained selling pressure — exit before iter39 catastrophic.';
     }
     if (r === 'hard_stop_from_avg') {
         return 'iter37 fixed hard-stop floor (price ≤ avg × (1 - ladderHardStopFromAvgPct/100)). Fallback safety net.';
@@ -337,6 +351,10 @@ async function loadSafetyStack() {
                 'Fires FIRST when state=ACTIVE_2 (double exposure). Grace→quick-profit→tight-breakeven→no-recovery→hard-stop.',
                 !!c.active2MonitorEnabled,
                 `grace=${c.active2GracePeriodMinutes}m · quickProfit=+${c.active2QuickProfitPct}% · tightBE=+${c.active2TightBreakevenBufferPct}% · patience=${c.active2PatienceMinutes}m · stop=${c.active2HardStopPct}%`),
+            buildSafetyRow('EXIT 0', '⚡ Market Stress Exit (iter 46)',
+                'Earlier than iter39: exits when BTC weakness, volume capitulation, or red velocity confirms drop.',
+                !!c.marketStressExitEnabled,
+                `held≥${c.marketStressMinHoldMin}m · drop≥${c.marketStressMinDropPct}% · BTC<−${c.marketStressBtcWeaknessPct}%/${c.marketStressBtcLookbackMin}m · vol>${c.marketStressVolSpikeMult}× · red≥${(c.marketStressRedShareThreshold*100).toFixed(0)}%`),
             buildSafetyRow('EXIT 1', '💀 Liquidity-death adaptive exit (iter 39)',
                 'Multi-factor: vol_ratio, never_recovered, lower-lows, drop, red-share. Score ≥ N → exit.',
                 !!c.liquidityDeathExitEnabled,
