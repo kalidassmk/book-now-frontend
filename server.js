@@ -124,6 +124,18 @@ function handleExecution(event) {
 
 const redis = new Redis({ host: REDIS_HOST, port: REDIS_PORT, lazyConnect: true });
 const subRedis = new Redis({ host: REDIS_HOST, port: REDIS_PORT });
+// iter 15 fe (2026-05-15): connection to analyse DB for pattern storage.
+// `booknow-redis-analyse` already holds PATTERNS:V2:SYM:* + vp_history:*
+// — we store EARLY_PUMP:* detections here to build a pattern library.
+const REDIS_ANALYSE_HOST = process.env.REDIS_ANALYSE_HOST || 'booknow-redis-analyse';
+const REDIS_ANALYSE_PORT = parseInt(process.env.REDIS_ANALYSE_PORT || '6379', 10);
+const redisAnalyse = new Redis({
+    host: REDIS_ANALYSE_HOST,
+    port: REDIS_ANALYSE_PORT,
+    lazyConnect: true,
+    retryStrategy: (times) => Math.min(times * 100, 3000),
+});
+redisAnalyse.on('error', e => console.error('[Server] Analyse-Redis Error:', e.message));
 
 redis.on('error', e => console.error('[Server] Redis Error:', e.message));
 subRedis.on('error', e => console.error('[Server] Sub-Redis Error:', e.message));
@@ -1500,6 +1512,186 @@ app.get('/api/bounce-detections', async (req, res) => {
         const raw = await redis.lrange(`BOUNCE:DETECTIONS:${date}`, 0, limit - 1);
         const events = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
         res.json({ date, total: events.length, events });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// iter 15 fe (2026-05-15): Early Pump Detector
+// Catches coins JUST STARTING to move up (24h change between 0% and 1%)
+// before they explode to +5%. Different from bounce-watch (which tracks
+// oversold coins waiting for reversal) — this is for coins in stealth
+// accumulation phase.
+//
+// Score 0-100 from 5 factors. Detections stored to booknow-redis-analyse
+// (the pattern DB) as EARLY_PUMP:DETECTIONS:<date> for future pattern
+// matching. Target TP per detection: +$0.15 (matches bot's iter42 target).
+function computeEarlyPumpScore(klines) {
+    if (!klines || klines.length < 20) return null;
+    const opens = klines.map(k => parseFloat(k[1]));
+    const highs = klines.map(k => parseFloat(k[2]));
+    const lows  = klines.map(k => parseFloat(k[3]));
+    const closes= klines.map(k => parseFloat(k[4]));
+    const vols  = klines.map(k => parseFloat(k[5]) * parseFloat(k[4]));
+    const trades= klines.map(k => parseInt(k[8] || 0, 10));
+    const tbQuote = klines.map(k => parseFloat(k[10] || 0));
+    const n = klines.length;
+
+    // F1: Persistent positive drift — green candle share in last 10
+    const last10open = opens.slice(-10);
+    const last10close = closes.slice(-10);
+    const greenCount = last10open.reduce((s, o, i) => s + (last10close[i] > o ? 1 : 0), 0);
+    let f1 = 0;
+    if (greenCount >= 7) f1 = 25;
+    else if (greenCount >= 6) f1 = 18;
+    else if (greenCount >= 5) f1 = 10;
+
+    // F2: Volume building — last 5min vs prior 25min (gentler than bounce)
+    const vol5 = vols.slice(-5).reduce((s, v) => s + v, 0) / 5;
+    const vol25arr = vols.slice(-30, -5);
+    const vol25 = vol25arr.length ? vol25arr.reduce((s, v) => s + v, 0) / vol25arr.length : 0;
+    const vol_ratio = vol25 > 0 ? vol5 / vol25 : 0;
+    let f2 = 0;
+    if (vol_ratio >= 2.5) f2 = 25;
+    else if (vol_ratio >= 2.0) f2 = 20;
+    else if (vol_ratio >= 1.5) f2 = 12;
+    else if (vol_ratio >= 1.2) f2 = 6;
+
+    // F3: Higher highs AND higher lows in last 10
+    const recent10highs = highs.slice(-10);
+    const recent10lows = lows.slice(-10);
+    let hh_count = 0, hl_count = 0;
+    for (let i = 1; i < 10; i++) {
+        if (recent10highs[i] > recent10highs[i-1]) hh_count++;
+        if (recent10lows[i] > recent10lows[i-1]) hl_count++;
+    }
+    let f3 = 0;
+    if (hh_count >= 6 && hl_count >= 6) f3 = 20;
+    else if (hh_count >= 5 && hl_count >= 5) f3 = 14;
+    else if (hh_count + hl_count >= 9) f3 = 7;
+
+    // F4: Trade frequency surge — last 5min avg trades vs prior 25min avg
+    const tr5 = trades.slice(-5).reduce((s, t) => s + t, 0) / 5;
+    const tr25arr = trades.slice(-30, -5);
+    const tr25 = tr25arr.length ? tr25arr.reduce((s, t) => s + t, 0) / tr25arr.length : 0;
+    const tr_ratio = tr25 > 0 ? tr5 / tr25 : 0;
+    let f4 = 0;
+    if (tr_ratio >= 2.0) f4 = 15;
+    else if (tr_ratio >= 1.5) f4 = 10;
+    else if (tr_ratio >= 1.2) f4 = 5;
+
+    // F5: Buy pressure
+    const tb5 = tbQuote.slice(-5).reduce((s, v) => s + v, 0);
+    const tv5 = vols.slice(-5).reduce((s, v) => s + v, 0);
+    const buy_ratio = tv5 > 0 ? (tb5 / tv5) : 0.5;
+    const buy_ratio_pct = buy_ratio * 100;
+    let f5 = 0;
+    if (buy_ratio_pct >= 65) f5 = 15;
+    else if (buy_ratio_pct >= 60) f5 = 12;
+    else if (buy_ratio_pct >= 55) f5 = 8;
+
+    const score = f1 + f2 + f3 + f4 + f5;
+    return {
+        score,
+        factors: {
+            green_candles_10: greenCount,
+            green_pts: f1,
+            vol_surge_ratio: +vol_ratio.toFixed(2),
+            vol_surge_pts: f2,
+            higher_highs_9: hh_count,
+            higher_lows_9: hl_count,
+            structure_pts: f3,
+            trade_freq_ratio: +tr_ratio.toFixed(2),
+            trade_freq_pts: f4,
+            taker_buy_ratio_pct: +buy_ratio_pct.toFixed(1),
+            buy_pressure_pts: f5,
+        },
+        last_close: closes[n-1],
+        avg_trades_per_min: Math.round(tr5),
+        avg_vol_per_min_usdt: Math.round(vol5),
+    };
+}
+
+app.get('/api/early-pump-watch', async (req, res) => {
+    try {
+        const minChg     = parseFloat(req.query.min_chg     || '0');
+        const maxChg     = parseFloat(req.query.max_chg     || '1');
+        const minVolUsdM = parseFloat(req.query.min_vol_m   || '2');
+        const limit      = parseInt(req.query.limit         || '30', 10);
+        const scoreTh    = parseInt(req.query.score_threshold || '60', 10);
+
+        const tickersRes = await fetch('https://api.binance.com/api/v3/ticker/24hr');
+        if (!tickersRes.ok) return res.status(502).json({ error: 'Binance fetch failed' });
+        const tickers = await tickersRes.json();
+
+        // Filter: USDT pairs, 24h change between minChg and maxChg, vol >= minVolM
+        const candidates = tickers
+            .filter(t => t.symbol.endsWith('USDT'))
+            .filter(t => !t.symbol.includes('UPUSDT') && !t.symbol.includes('DOWNUSDT'))
+            .map(t => ({
+                symbol: t.symbol,
+                last_price: parseFloat(t.lastPrice),
+                change_24h_pct: parseFloat(t.priceChangePercent),
+                quote_volume_24h_usd: parseFloat(t.quoteVolume),
+            }))
+            .filter(t => t.change_24h_pct >= minChg
+                       && t.change_24h_pct <= maxChg
+                       && t.quote_volume_24h_usd >= minVolUsdM * 1e6)
+            .sort((a, b) => b.quote_volume_24h_usd - a.quote_volume_24h_usd);  // highest volume first
+
+        const top = candidates.slice(0, limit);
+        const scored = await Promise.all(top.map(async (m) => {
+            const klines = await fetchKlines1m(m.symbol, 30);
+            const ep = computeEarlyPumpScore(klines);
+            return { ...m, early_pump: ep };
+        }));
+        const ranked = scored.filter(s => s.early_pump !== null)
+                             .sort((a, b) => b.early_pump.score - a.early_pump.score);
+        const hot = ranked.filter(s => s.early_pump.score >= scoreTh);
+
+        // Log to analyse Redis — pattern DB
+        const date = new Date().toISOString().slice(0, 10);
+        for (const c of hot) {
+            const event = {
+                ts: Date.now(),
+                symbol: c.symbol,
+                score: c.early_pump.score,
+                change_24h_pct: c.change_24h_pct,
+                last_price: c.last_price,
+                factors: c.early_pump.factors,
+                target_tp_usdt: 0.15,  // matches bot's iter42 target
+            };
+            try {
+                await redisAnalyse.lpush(`EARLY_PUMP:DETECTIONS:${date}`, JSON.stringify(event));
+                await redisAnalyse.ltrim(`EARLY_PUMP:DETECTIONS:${date}`, 0, 999);
+                await redisAnalyse.expire(`EARLY_PUMP:DETECTIONS:${date}`, 7 * 24 * 60 * 60);
+                // Also store a per-symbol latest detection for quick lookup
+                await redisAnalyse.hset('EARLY_PUMP:LATEST', c.symbol, JSON.stringify(event));
+            } catch (e) {
+                console.error('[early-pump] Redis analyse write failed:', e.message);
+            }
+        }
+
+        res.json({
+            timestamp: new Date().toISOString(),
+            params: { minChg, maxChg, minVolUsdM, limit, scoreTh },
+            total_candidates: candidates.length,
+            scored: ranked.length,
+            high_score: hot.length,
+            ranked,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/early-pump-detections', async (req, res) => {
+    try {
+        const date = req.query.date || new Date().toISOString().slice(0, 10);
+        const limit = parseInt(req.query.limit || '50', 10);
+        const raw = await redisAnalyse.lrange(`EARLY_PUMP:DETECTIONS:${date}`, 0, limit - 1);
+        const events = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+        res.json({ date, total: events.length, events, storage: 'booknow-redis-analyse' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
