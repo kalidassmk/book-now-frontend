@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Book-Now — Backtest Report</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --panel-2: #1a232e; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --neutral: #8b949e;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
+  h1 { margin: 0 0 4px; font-size: 24px; letter-spacing: -0.3px; }
+  .sub { color: var(--muted); margin-bottom: 18px; font-size: 13px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .topnav { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .topnav a { display: inline-block; padding: 6px 14px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 600; }
+  .topnav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .topnav a:not(.active):hover { color: var(--text); border-color: var(--muted); }
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:.4;transform:scale(.85);} }
+
+  /* Summary cards */
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  .card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 600; margin-bottom: 6px; }
+  .card .big { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .card .delta { font-size: 12px; margin-top: 4px; }
+  .pos { color: var(--good); } .neg { color: var(--bad); }
+
+  /* Strategy tiers */
+  .tiers { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 18px; }
+  .tiers h2 { margin: 0 0 12px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 600; }
+  .tier-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+  .tier { padding: 12px; border-radius: 8px; background: var(--panel-2); border-left: 3px solid var(--accent); }
+  .tier .name { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+  .tier .name.CALM { color: var(--good); }
+  .tier .name.NORMAL { color: var(--accent); }
+  .tier .name.VOLATILE { color: var(--warn); }
+  .tier .name.X_VOLATILE { color: var(--bad); }
+  .tier .row { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); padding: 2px 0; font-variant-numeric: tabular-nums; }
+  .tier .row b { color: var(--text); }
+
+  /* Trade rows */
+  .results { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 18px; }
+  .results h2 { margin: 0 0 14px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 600; }
+  .date-header { font-weight: 700; font-size: 14px; padding: 10px 0 8px; color: var(--text); border-bottom: 1px solid var(--line); margin-top: 16px; }
+  .date-header:first-child { margin-top: 0; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); font-size: 12px; white-space: nowrap; }
+  th { background: var(--panel-2); color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .4px; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: none; }
+  tr.win-improve td:nth-child(6), tr.win-improve td:nth-child(7) { color: var(--good); font-weight: 600; }
+  tr.lose-worse td:nth-child(7) { color: var(--bad); font-weight: 600; }
+  tr.blocked td { background: rgba(241,196,15,.05); }
+  .strategy-pill { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; }
+  .strategy-pill.CALM { background: rgba(46,204,113,.2); color: var(--good); }
+  .strategy-pill.NORMAL { background: rgba(41,182,246,.2); color: var(--accent); }
+  .strategy-pill.VOLATILE { background: rgba(241,196,15,.2); color: var(--warn); }
+  .strategy-pill.X_VOLATILE { background: rgba(231,76,60,.2); color: var(--bad); }
+  .strategy-pill.BLOCKED_i38, .strategy-pill.BLOCKED_i44 { background: rgba(139,148,158,.25); color: var(--neutral); font-weight: 700; }
+  .strategy-pill.UNKNOWN { background: rgba(139,148,158,.15); color: var(--muted); }
+  .note { color: var(--muted); font-size: 11px; }
+  .empty { padding: 40px; text-align: center; color: var(--muted); font-style: italic; }
+
+  /* Disclaimer */
+  .disclaimer { background: rgba(241,196,15,.08); border-left: 3px solid var(--warn); padding: 12px 16px; border-radius: 6px; font-size: 12px; color: var(--muted); margin-bottom: 18px; }
+  .disclaimer strong { color: var(--warn); }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/">📊 Monitor</a>
+  <a href="/metrics.html">📈 Metrics</a>
+  <a href="/spot.html">📋 Spot</a>
+  <a href="/backtest.html" class="active">🔬 Backtest</a>
+</nav>
+
+<h1>Backtest Report</h1>
+<div class="sub">
+  <span class="live-dot"></span>
+  <span>iter 38 + iter 43 + iter 44 + iter 39 simulated against actual trades · <span id="genAt">—</span></span>
+  <button onclick="loadReport()" style="background:var(--accent);border:0;color:#fff;padding:6px 14px;border-radius:4px;cursor:pointer;font-weight:600;">Refresh</button>
+</div>
+
+<div class="disclaimer">
+  <strong>Note:</strong> This is a directional backtest using real Binance 1m klines. It assumes (a) infinite parallel ladder slots, (b) perfect limit fills, (c) clean exit on first TP touch. In production the bot has max 1 concurrent ladder, so actual realised gain is typically 60-70% of what's shown here. Use this report to validate the algorithm's <em>direction</em>, not the absolute $ figures.
+</div>
+
+<div id="reportRoot">
+  <div class="empty">Loading report…</div>
+</div>
+
+<script>
+async function loadReport() {
+  try {
+    const res = await fetch('/api/backtest-report');
+    if (!res.ok) {
+      document.getElementById('reportRoot').innerHTML =
+        '<div class="empty">No report yet. Run the build_report script first.</div>';
+      return;
+    }
+    const r = await res.json();
+    document.getElementById('genAt').textContent = 'generated ' + r.generated_at;
+    document.getElementById('reportRoot').innerHTML = renderReport(r);
+  } catch (e) {
+    document.getElementById('reportRoot').innerHTML =
+      `<div class="empty">Load failed: ${e.message}</div>`;
+  }
+}
+
+function fmtMoney(v, dp=4) {
+  if (v == null || isNaN(v)) return '—';
+  const n = Number(v);
+  const sign = n >= 0 ? '+' : '−';
+  return sign + '$' + Math.abs(n).toFixed(dp);
+}
+function pnlClass(v) {
+  const n = Number(v||0);
+  if (n > 0.005) return 'pos';
+  if (n < -0.005) return 'neg';
+  return '';
+}
+
+function renderReport(r) {
+  const t = r.totals;
+  const improvement = t.sim - t.actual;
+  const improvementPct = t.actual !== 0 ? (improvement / Math.abs(t.actual) * 100) : 0;
+
+  // Summary cards
+  const summary = `
+    <div class="summary">
+      <div class="card">
+        <div class="label">Actual P&L</div>
+        <div class="big ${pnlClass(t.actual)}">${fmtMoney(t.actual, 2)}</div>
+        <div class="delta">${t.wins_act} wins · ${t.loses_act} losses</div>
+      </div>
+      <div class="card">
+        <div class="label">Simulated (iter43+38+44)</div>
+        <div class="big ${pnlClass(t.sim)}">${fmtMoney(t.sim, 2)}</div>
+        <div class="delta">${t.wins_sim} wins · ${t.loses_sim} losses</div>
+      </div>
+      <div class="card">
+        <div class="label">Delta vs actual</div>
+        <div class="big ${improvement >= 0 ? 'pos' : 'neg'}">${fmtMoney(improvement, 2)}</div>
+        <div class="delta">${improvementPct >= 0 ? '+' : ''}${improvementPct.toFixed(0)}% improvement</div>
+      </div>
+      <div class="card">
+        <div class="label">iter38 (near-top pump)</div>
+        <div class="big mute">${t.i38}</div>
+        <div class="delta">trades blocked by pre-buy filter</div>
+      </div>
+      <div class="card">
+        <div class="label">iter44 (macro-top exhaustion)</div>
+        <div class="big mute">${t.i44}</div>
+        <div class="delta">PENDLE-style entries blocked</div>
+      </div>
+      <div class="card">
+        <div class="label">Total trades analysed</div>
+        <div class="big">${t.count}</div>
+        <div class="delta">across ${Object.keys(r.by_date).length} day(s)</div>
+      </div>
+    </div>`;
+
+  // Strategy tiers
+  const tiers = `
+    <div class="tiers">
+      <h2>iter 43 — Volatility-Adaptive Entry Strategy Tiers</h2>
+      <div class="tier-grid">
+        ${r.thresholds.iter43.tiers.map(t => `
+          <div class="tier">
+            <div class="name ${t.name}">${t.name}</div>
+            <div class="row"><span>1h range</span><b>&lt; ${t.range_max}%</b></div>
+            <div class="row"><span>Buy 1 offset</span><b>−${t.buy1_off}%</b></div>
+            <div class="row"><span>Buy 2 offset</span><b>−${t.buy2_off}%</b></div>
+            <div class="row"><span>TP target</span><b>$${t.tp.toFixed(2)}</b></div>
+          </div>
+        `).join('')}
+      </div>
+    </div>`;
+
+  // Per-trade rows grouped by date
+  const dates = Object.keys(r.by_date).sort();
+  const tradeRows = dates.map(date => {
+    const rows = r.by_date[date].slice().sort((a, b) =>
+      Number(b.buy_ts) - Number(a.buy_ts));
+    const dailyActual = rows.reduce((s, x) => s + (x.pnl_actual || 0), 0);
+    const dailySim    = rows.reduce((s, x) => s + (x.sim_pnl || 0), 0);
+    return `
+      <div class="date-header">${date}
+        <span style="font-weight:400;font-size:12px;color:var(--muted);margin-left:14px;">
+          actual ${fmtMoney(dailyActual, 2)} · sim ${fmtMoney(dailySim, 2)} ·
+          delta ${fmtMoney(dailySim - dailyActual, 2)}
+        </span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Origin</th>
+            <th>Strategy</th>
+            <th class="num">1h range</th>
+            <th class="num">Old Buy</th>
+            <th class="num">New Buy</th>
+            <th class="num">Actual $</th>
+            <th class="num">Sim $</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(row => {
+            const isBlocked = (row.strategy || '').startsWith('BLOCKED_');
+            const isWinImprove = !isBlocked && (row.sim_pnl || 0) > (row.pnl_actual || 0) + 0.005;
+            const isLoseWorse  = !isBlocked && (row.sim_pnl || 0) < (row.pnl_actual || 0) - 0.005;
+            const trClass = isBlocked ? 'blocked' : (isWinImprove ? 'win-improve' : (isLoseWorse ? 'lose-worse' : ''));
+            return `
+              <tr class="${trClass}">
+                <td><strong>${row.symbol}</strong></td>
+                <td>${row.origin}</td>
+                <td><span class="strategy-pill ${row.strategy}">${row.strategy || '—'}</span></td>
+                <td class="num mute">${row.r1h >= 0 ? row.r1h.toFixed(2) + '%' : '—'}</td>
+                <td class="num mute">${row.old_buy1 ? row.old_buy1.toFixed(6) : '—'}</td>
+                <td class="num mute">${row.new_buy1 ? row.new_buy1.toFixed(6) : '—'}</td>
+                <td class="num ${pnlClass(row.pnl_actual)}">${row.pnl_actual != null ? fmtMoney(row.pnl_actual) : '—'}</td>
+                <td class="num ${pnlClass(row.sim_pnl)}">${row.sim_pnl != null ? fmtMoney(row.sim_pnl) : '—'}</td>
+                <td class="note">${row.note || ''}</td>
+              </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
+  }).join('');
+
+  const results = `
+    <div class="results">
+      <h2>Per-Trade Results — actual vs simulated</h2>
+      ${tradeRows || '<div class="empty">No trades in report.</div>'}
+      <div style="margin-top:14px;padding:10px;background:var(--panel-2);border-radius:6px;font-size:11px;color:var(--muted);">
+        <strong style="color:var(--text);">Row colour coding:</strong>
+        <span class="pos">green text</span> = iter43 simulation beats actual ·
+        <span class="neg">red text</span> = simulation worse than actual ·
+        <em>yellow background</em> = blocked by iter38/iter44 (no trade)
+      </div>
+    </div>`;
+
+  return summary + tiers + results;
+}
+
+loadReport();
+setInterval(loadReport, 60000);  // refresh every minute
+</script>
+
+</body>
+</html>

@@ -82,6 +82,7 @@
   <a href="/scanner">🏠 Scanner</a>
   <a href="/metrics.html">📈 Metrics</a>
   <a href="/spot.html">📋 Spot</a>
+  <a href="/backtest.html">🔬 Backtest</a>
 </nav>
 
 <h1>Bot Monitor</h1>
@@ -219,6 +220,8 @@ function statusPill(reason, pnl) {
     if (r.startsWith('liquidity_death:score'))        return '<span class="pill death">💀 LIQUIDITY DEATH</span>';
     // iter5 fe: iter37 fixed hard-stop fallback
     if (r === 'hard_stop_from_avg')   return '<span class="pill stop">🛡️ HARD STOP</span>';
+    // iter44: macro-top exhaustion pre-buy skip (only seen on SKIP events, not outcomes)
+    if (r === 'macro_top')            return '<span class="pill stale">🪦 MACRO TOP</span>';
     // iter41 (2026-05-15): Post-Buy-2 careful monitor exits
     if (r.startsWith('active2_quick_profit'))    return `<span class="pill trail">💰 A2 QUICK PROFIT +$${Number(pnl||0).toFixed(2)}</span>`;
     if (r.startsWith('active2_tight_breakeven')) return '<span class="pill flat">⚖️ A2 BREAK-EVEN</span>';
@@ -316,6 +319,10 @@ async function loadSafetyStack() {
                 'Block coins that pumped ≥ X% in last N days and are bleeding off the peak.',
                 !!c.postPumpFilterEnabled,
                 `pump≥${c.postPumpThresholdPct}% · offPeak≥${c.postPumpOffPeakMinPct}% · lookback=${c.postPumpLookbackDays}d`),
+            buildSafetyRow('GATE 4', '🪦 Macro-Top Exhaustion Filter (iter 44)',
+                'Block when coin has rallied massively, is near top of rally, AND showing distribution (red days).',
+                !!c.macroTopFilterEnabled,
+                `30d return≥${c.macroTopMinReturnPct}% · within ${100-c.macroTopWithinHighPct}% of high · ≥${c.macroTopMinRedDaysIn7} red days/7`),
             buildSafetyRow('ENTRY', '🎚️ Volatility-Adaptive Entry + TP (iter 43)',
                 'At signal time pick deeper Buy 1 offset + higher TP for volatile coins. 4 tiers based on range_1h_pct.',
                 !!c.adaptiveEntryEnabled,

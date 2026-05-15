@@ -1031,6 +1031,19 @@ app.get('/api/v1/config', async (req, res) => {
     }
 });
 
+// iter 44 (2026-05-15): Backtest report endpoint.
+// Returns the latest backtest comparison (actual vs iter43+iter38+iter44+iter39
+// simulated) for the dashboard /backtest.html page.
+app.get('/api/backtest-report', async (req, res) => {
+    try {
+        const raw = await redis.get('REPORTS:BACKTEST:LATEST');
+        if (!raw) return res.status(404).json({ error: 'No report stored — run the build_report script first.' });
+        res.json(JSON.parse(raw));
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to load report: ' + err.message });
+    }
+});
+
 app.post('/api/v1/config', async (req, res) => {
     try {
         const newConfig = req.body || {};
