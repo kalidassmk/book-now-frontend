@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Book-Now — Adaptive Eligibility Gate</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --panel-2: #1a232e; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --neutral: #8b949e;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  .sub { color: var(--muted); margin-bottom: 18px; font-size: 13px; }
+  .topnav { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .topnav a { display: inline-block; padding: 6px 14px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 600; }
+  .topnav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .topnav a:not(.active):hover { color: var(--text); border-color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 14px; }
+  .card h2 { margin: 0 0 14px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 600; }
+
+  .search { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .search input { flex: 1; min-width: 220px; padding: 10px 14px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 6px; font: 14px monospace; }
+  .search button { padding: 10px 20px; background: var(--accent); color: #fff; border: 0; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; }
+  .search button.alt { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+  .chip { display: inline-block; padding: 4px 10px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); border-radius: 4px; cursor: pointer; font-size: 11px; margin: 2px; }
+  .chip:hover { color: var(--text); border-color: var(--accent); }
+
+  .verdict { padding: 18px 22px; border-radius: 10px; margin-bottom: 14px; border: 2px solid; display: flex; align-items: center; gap: 18px; }
+  .verdict.GREEN  { background: rgba(46,204,113,.10); border-color: var(--good); }
+  .verdict.YELLOW { background: rgba(241,196,15,.10); border-color: var(--warn); }
+  .verdict.RED    { background: rgba(231,76,60,.10); border-color: var(--bad); }
+  .verdict .dot { width: 52px; height: 52px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 800; color: #fff; }
+  .verdict.GREEN  .dot { background: var(--good); }
+  .verdict.YELLOW .dot { background: var(--warn); color: #0c1116; }
+  .verdict.RED    .dot { background: var(--bad); }
+  .verdict .text { flex: 1; }
+  .verdict .label { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin-bottom: 4px; }
+  .verdict .reco { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+  .verdict.GREEN  .reco { color: var(--good); }
+  .verdict.YELLOW .reco { color: var(--warn); }
+  .verdict.RED    .reco { color: var(--bad); }
+  .verdict .headline { font-size: 13px; color: var(--text); }
+
+  /* Gate list */
+  .gate { display: grid; grid-template-columns: 28px 1fr auto; gap: 12px; align-items: center; padding: 10px 12px; background: var(--panel-2); border-radius: 6px; margin-bottom: 6px; border-left: 3px solid var(--line); }
+  .gate.pass { border-left-color: var(--good); }
+  .gate.fail { border-left-color: var(--bad); }
+  .gate .icon { font-size: 18px; text-align: center; }
+  .gate .name { font-weight: 600; }
+  .gate .detail { color: var(--muted); font-size: 11px; margin-top: 2px; font-family: 'SF Mono', monospace; }
+  .gate .reason { color: var(--bad); font-size: 11px; margin-top: 2px; }
+  .gate .badge { font-size: 11px; padding: 4px 10px; border-radius: 4px; font-weight: 600; }
+  .gate.pass .badge { background: rgba(46,204,113,.15); color: var(--good); }
+  .gate.fail .badge { background: rgba(231,76,60,.15); color: var(--bad); }
+
+  /* Compare */
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+  .compare-box { padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .compare-box.static { border-left: 4px solid var(--neutral); }
+  .compare-box.adaptive { border-left: 4px solid var(--accent); }
+  .compare-box .header { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 8px; }
+  .compare-box .title { font-size: 16px; font-weight: 700; margin-bottom: 12px; }
+  .compare-box .row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed var(--line); }
+  .compare-box .row:last-child { border-bottom: none; }
+  .compare-box .row .k { font-size: 11px; color: var(--muted); }
+  .compare-box .row .v { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .pos { color: var(--good); } .neg { color: var(--bad); } .mute { color: var(--muted); } .warn { color: var(--warn); }
+
+  /* Replay summary tiles */
+  .tile-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+  .tile { padding: 12px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); }
+  .tile.static { border-left: 3px solid var(--neutral); }
+  .tile.adaptive { border-left: 3px solid var(--accent); }
+  .tile.selective { border-left: 3px solid var(--good); }
+  .tile .label { font-size: 10px; color: var(--muted); text-transform: uppercase; }
+  .tile .value { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 4px; }
+  .tile .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* Replay table */
+  table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+  thead th { text-align: left; padding: 8px 10px; background: var(--panel-2); color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .4px; border-bottom: 1px solid var(--line); }
+  tbody td { padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  tbody tr:hover { background: var(--panel-2); }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+  .pill.GREEN  { background: rgba(46,204,113,.18); color: var(--good); }
+  .pill.YELLOW { background: rgba(241,196,15,.15); color: var(--warn); }
+  .pill.RED    { background: rgba(231,76,60,.15); color: var(--bad); }
+  .pill.tp_hit    { background: rgba(46,204,113,.18); color: var(--good); }
+  .pill.stop_loss { background: rgba(231,76,60,.18); color: var(--bad); }
+  .pill.timeout   { background: rgba(241,196,15,.18); color: var(--warn); }
+  .pill.unfilled  { background: var(--panel-2); color: var(--muted); }
+
+  .error { padding: 14px; background: rgba(231,76,60,.10); color: var(--bad); border-radius: 6px; }
+  .empty { padding: 30px; text-align: center; color: var(--muted); font-style: italic; }
+  .hint { color: var(--muted); font-size: 11px; margin-top: 10px; }
+  .hide { display: none; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/">📊 Monitor</a>
+  <a href="/metrics.html">📈 Metrics</a>
+  <a href="/spot.html">📋 Spot</a>
+  <a href="/backtest.html">🔬 Backtest</a>
+  <a href="/decision-trace.html">🔍 Decision Trace</a>
+  <a href="/bounce-watch.html">⤴️ Bounce Watch</a>
+  <a href="/early-pump.html">🚀 Early Pump</a>
+  <a href="/pattern-backtest.html">📊 Pattern Backtest</a>
+  <a href="/pattern-bot.html">🤖 Pattern Bot</a>
+  <a href="/adaptive-offset.html">🎯 Adaptive Offset</a>
+  <a href="/adaptive-eligibility.html" class="active">✅ Adaptive Gate</a>
+  <a href="/limit-buy-replay.html">🔄 Limit Replay</a>
+  <a href="/filter-candidate.html">🧪 Filter Tester</a>
+  <a href="/scanner">🏠 Scanner</a>
+</nav>
+
+<h1>Adaptive Offset Eligibility Gate</h1>
+<div class="sub">
+  Blanket Adaptive Offset was loss-making (–$1.70 over 4 days). This gate decides <strong>per coin</strong> whether
+  Adaptive is safe to use. <span style="color: var(--good);">GREEN</span> → use adaptive,
+  <span style="color: var(--warn);">YELLOW</span> → keep static (adaptive won't help),
+  <span style="color: var(--bad);">RED</span> → blocked by safety filters (don't enter at all).
+  The replay below proves the gain on historical trades.
+</div>
+
+<!-- Single-coin check -->
+<div class="card">
+  <h2>Check a coin</h2>
+  <div class="search">
+    <input id="symInput" placeholder="e.g. BTCUSDT  |  ETH/USDT  |  CHZ" />
+    <button onclick="checkCoin()">Check Eligibility</button>
+  </div>
+  <div style="margin-top: 10px;">
+    <span class="chip" onclick="setSym('BTCUSDT')">BTC</span>
+    <span class="chip" onclick="setSym('ETHUSDT')">ETH</span>
+    <span class="chip" onclick="setSym('CHZUSDT')">CHZ</span>
+    <span class="chip" onclick="setSym('MLNUSDT')">MLN (lost)</span>
+    <span class="chip" onclick="setSym('LINKUSDT')">LINK (lost)</span>
+    <span class="chip" onclick="setSym('PENDLEUSDT')">PENDLE</span>
+    <span class="chip" onclick="setSym('SAPIENUSDT')">SAPIEN</span>
+    <span class="chip" onclick="setSym('VTHOUSDT')">VTHO</span>
+  </div>
+  <div id="singleResult" style="margin-top: 14px;"></div>
+</div>
+
+<!-- Historical replay -->
+<div class="card">
+  <h2>Historical replay — selective vs blanket adaptive</h2>
+  <div class="search">
+    <input id="dateInput" type="date" />
+    <button onclick="runReplay()">Run Replay</button>
+    <button class="alt" onclick="runReplay(true)">Run Multi-day (last 4 days)</button>
+  </div>
+  <div class="hint">Replays unfilled trades through the gate. If a date had no unfilled trades, the table will be empty.</div>
+  <div id="replayResult" style="margin-top: 14px;"></div>
+</div>
+
+<script>
+function setSym(s) { document.getElementById('symInput').value = s; checkCoin(); }
+function fmt(n, d=4) { return n == null || isNaN(n) ? '—' : Number(n).toFixed(d); }
+function pnlClass(v) { return v > 0 ? 'pos' : v < 0 ? 'neg' : 'mute'; }
+function pnlStr(v) { if (v == null) return '—'; const s = v >= 0 ? '+' : ''; return s + '$' + Number(v).toFixed(4); }
+
+// --- single-coin check
+async function checkCoin() {
+  const sym = document.getElementById('symInput').value.trim();
+  if (!sym) return;
+  const out = document.getElementById('singleResult');
+  out.innerHTML = '<div class="empty">Checking…</div>';
+  try {
+    const r = await fetch('/api/adaptive-eligibility?symbol=' + encodeURIComponent(sym));
+    const j = await r.json();
+    if (j.error) { out.innerHTML = '<div class="error">' + j.error + '</div>'; return; }
+    out.innerHTML = renderSingle(j);
+  } catch (e) {
+    out.innerHTML = '<div class="error">' + e.message + '</div>';
+  }
+}
+
+function renderSingle(j) {
+  const e = j.eligibility;
+  const m = j.market;
+  const a = j.adaptive;
+  const dot = e.level === 'GREEN' ? '✓' : e.level === 'YELLOW' ? '!' : '✗';
+  const recoLabel = e.recommendation.replace(/_/g, ' ');
+  const staticBuy = (m.last_price * (1 - e.static_offset_pct / 100));
+  const adaptiveBuy = a.recommended.buy_price;
+
+  const gatesHtml = e.gates.map(g => {
+    const cls = g.pass ? 'pass' : 'fail';
+    const ic  = g.pass ? '✓' : '✗';
+    return `
+      <div class="gate ${cls}">
+        <div class="icon">${ic}</div>
+        <div>
+          <div class="name">${g.name}</div>
+          <div class="detail">${g.detail}</div>
+          ${!g.pass ? `<div class="reason">${g.reason}</div>` : ''}
+        </div>
+        <div class="badge">${g.pass ? 'PASS' : 'FAIL'}</div>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="verdict ${e.level}">
+      <div class="dot">${dot}</div>
+      <div class="text">
+        <div class="label">${j.symbol} · ${e.tier} tier · 24h ${m.change_24h_pct>=0?'+':''}${m.change_24h_pct}% · last $${fmt(m.last_price, 6)}</div>
+        <div class="reco">${recoLabel}</div>
+        <div class="headline">${e.headline}</div>
+      </div>
+    </div>
+
+    <div class="compare">
+      <div class="compare-box static">
+        <div class="header">Static (iter43 ${e.tier})</div>
+        <div class="title">−${e.static_offset_pct}% offset</div>
+        <div class="row"><span class="k">Buy 1 price</span><span class="v">$${fmt(staticBuy, 6)}</span></div>
+        <div class="row"><span class="k">Hist. fill prob</span><span class="v">${e.static_fill_prob != null ? (e.static_fill_prob*100).toFixed(0)+'%' : '—'}</span></div>
+        <div class="row"><span class="k">Used when</span><span class="v ${e.level==='GREEN'?'mute':'pos'}">YELLOW / RED gate</span></div>
+      </div>
+      <div class="compare-box adaptive">
+        <div class="header">Adaptive (p25 / p50 / p75)</div>
+        <div class="title">−${a.recommended.offset_pct}% offset</div>
+        <div class="row"><span class="k">Buy 1 price</span><span class="v">$${fmt(adaptiveBuy, 6)}</span></div>
+        <div class="row"><span class="k">Hist. fill prob</span><span class="v">${(a.recommended.expected_fill_prob*100).toFixed(0)}%</span></div>
+        <div class="row"><span class="k">Used when</span><span class="v ${e.level==='GREEN'?'pos':'mute'}">GREEN gate only</span></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin: 0;">
+      <h2>Gate breakdown</h2>
+      ${gatesHtml}
+    </div>
+  `;
+}
+
+// --- replay
+function todayISO() { return new Date().toISOString().slice(0, 10); }
+function dateNDaysAgo(n) { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); }
+document.getElementById('dateInput').value = todayISO();
+
+async function runReplay(multi=false) {
+  const out = document.getElementById('replayResult');
+  out.innerHTML = '<div class="empty">Running replay…</div>';
+  try {
+    if (multi) {
+      const dates = [0,1,2,3].map(dateNDaysAgo);
+      const results = await Promise.all(dates.map(d =>
+        fetch('/api/adaptive-eligibility-replay?date=' + d).then(r => r.json()).catch(() => null)
+      ));
+      out.innerHTML = renderMultiReplay(dates, results);
+    } else {
+      const d = document.getElementById('dateInput').value || todayISO();
+      const r = await fetch('/api/adaptive-eligibility-replay?date=' + d);
+      const j = await r.json();
+      if (j.error) { out.innerHTML = '<div class="error">' + j.error + '</div>'; return; }
+      out.innerHTML = renderReplay(j);
+    }
+  } catch (e) {
+    out.innerHTML = '<div class="error">' + e.message + '</div>';
+  }
+}
+
+function renderSummary(s, label) {
+  const sel = s.selective_total_pnl;
+  const sta = s.static_total_pnl;
+  const ada = s.adaptive_total_pnl;
+  return `
+    <div class="tile-grid" style="margin-bottom: 12px;">
+      <div class="tile static">
+        <div class="label">Static (baseline)</div>
+        <div class="value ${pnlClass(sta)}">${pnlStr(sta)}</div>
+        <div class="sub">${s.static_filled} fills · ${s.static_tp}W ${s.static_sl}L ${s.static_to}TO</div>
+      </div>
+      <div class="tile adaptive">
+        <div class="label">Adaptive (blanket)</div>
+        <div class="value ${pnlClass(ada)}">${pnlStr(ada)}</div>
+        <div class="sub">${s.adaptive_filled} fills · ${s.adaptive_tp}W ${s.adaptive_sl}L ${s.adaptive_to}TO</div>
+      </div>
+      <div class="tile selective">
+        <div class="label">Selective ★</div>
+        <div class="value ${pnlClass(sel)}">${pnlStr(sel)}</div>
+        <div class="sub">${s.selective_filled} fills · ${s.selective_tp}W ${s.selective_sl}L ${s.selective_to}TO</div>
+      </div>
+      <div class="tile">
+        <div class="label">Gate counts</div>
+        <div class="value" style="font-size: 14px;">
+          <span class="pos">${s.level_counts.green}G</span> ·
+          <span class="warn">${s.level_counts.yellow}Y</span> ·
+          <span class="neg">${s.level_counts.red}R</span>
+        </div>
+        <div class="sub">${s.total_unfilled} unfilled · ${label||''}</div>
+      </div>
+      <div class="tile">
+        <div class="label">Selective vs blanket-adaptive</div>
+        <div class="value ${pnlClass(s.selective_vs_adaptive_gain)}">${pnlStr(s.selective_vs_adaptive_gain)}</div>
+        <div class="sub">gain from skipping bad coins</div>
+      </div>
+      <div class="tile">
+        <div class="label">Selective vs static</div>
+        <div class="value ${pnlClass(s.selective_vs_static_gain)}">${pnlStr(s.selective_vs_static_gain)}</div>
+        <div class="sub">gain from adaptive on GREEN coins</div>
+      </div>
+    </div>
+  `;
+}
+
+function tradeRow(t) {
+  const lvl = t.eligibility_level || '—';
+  const selTrade = t.selective_trade;
+  const selOut = selTrade ? selTrade.outcome : 'unfilled';
+  const pnl = selTrade ? selTrade.net_pnl : null;
+  const blk = t.blocking_gate || '';
+  const staP = t.static_trade ? t.static_trade.net_pnl : null;
+  const adaP = t.adaptive_trade ? t.adaptive_trade.net_pnl : null;
+  return `
+    <tr>
+      <td><strong>${t.symbol || ''}</strong></td>
+      <td><span class="pill ${lvl}">${lvl}</span></td>
+      <td>${t.selective_strategy || '—'}</td>
+      <td>−${t.static_offset_pct ?? '—'}% / −${t.adaptive_offset_pct ?? '—'}%</td>
+      <td><span class="pill ${selOut}">${selOut}</span></td>
+      <td class="${pnlClass(pnl)}">${pnlStr(pnl)}</td>
+      <td class="${pnlClass(staP)}">${pnlStr(staP)}</td>
+      <td class="${pnlClass(adaP)}">${pnlStr(adaP)}</td>
+      <td style="color: var(--muted); font-size: 11px;">${blk}</td>
+    </tr>
+  `;
+}
+
+function renderReplay(j) {
+  if (!j.trades || j.trades.length === 0) {
+    return `<div class="empty">No unfilled trades on ${j.date}.</div>`;
+  }
+  const rows = j.trades.map(tradeRow).join('');
+  return `
+    ${renderSummary(j.summary, j.date)}
+    <div style="overflow-x: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Gate</th>
+            <th>Selective uses</th>
+            <th>Static / Adaptive off</th>
+            <th>Selective outcome</th>
+            <th>Selective P&amp;L</th>
+            <th>Static P&amp;L</th>
+            <th>Adaptive P&amp;L</th>
+            <th>Blocking gate</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderMultiReplay(dates, jArr) {
+  // Aggregate
+  const agg = {
+    total_unfilled: 0, errors: 0,
+    level_counts: { green: 0, yellow: 0, red: 0 },
+    static_filled: 0, static_total_pnl: 0, static_tp: 0, static_sl: 0, static_to: 0,
+    adaptive_filled: 0, adaptive_total_pnl: 0, adaptive_tp: 0, adaptive_sl: 0, adaptive_to: 0,
+    selective_filled: 0, selective_total_pnl: 0, selective_tp: 0, selective_sl: 0, selective_to: 0,
+  };
+  const allRows = [];
+  jArr.forEach((j, i) => {
+    if (!j || j.error) return;
+    const s = j.summary;
+    agg.total_unfilled += s.total_unfilled;
+    agg.errors += s.errors;
+    agg.level_counts.green += s.level_counts.green;
+    agg.level_counts.yellow += s.level_counts.yellow;
+    agg.level_counts.red += s.level_counts.red;
+    ['static','adaptive','selective'].forEach(k => {
+      agg[`${k}_filled`]    += s[`${k}_filled`];
+      agg[`${k}_total_pnl`] += s[`${k}_total_pnl`];
+      agg[`${k}_tp`]        += s[`${k}_tp`];
+      agg[`${k}_sl`]        += s[`${k}_sl`];
+      agg[`${k}_to`]        += s[`${k}_to`];
+    });
+    (j.trades || []).forEach(t => allRows.push({ ...t, _date: dates[i] }));
+  });
+  ['static','adaptive','selective'].forEach(k => {
+    agg[`${k}_total_pnl`] = +agg[`${k}_total_pnl`].toFixed(4);
+  });
+  agg.selective_vs_static_gain   = +(agg.selective_total_pnl - agg.static_total_pnl).toFixed(4);
+  agg.selective_vs_adaptive_gain = +(agg.selective_total_pnl - agg.adaptive_total_pnl).toFixed(4);
+
+  const rows = allRows.map(t => `
+    <tr>
+      <td>${t._date}</td>
+      <td><strong>${t.symbol || ''}</strong></td>
+      <td><span class="pill ${t.eligibility_level||''}">${t.eligibility_level||'—'}</span></td>
+      <td>${t.selective_strategy || '—'}</td>
+      <td><span class="pill ${t.selective_trade?t.selective_trade.outcome:'unfilled'}">${t.selective_trade?t.selective_trade.outcome:'unfilled'}</span></td>
+      <td class="${pnlClass(t.selective_trade?.net_pnl)}">${pnlStr(t.selective_trade?.net_pnl)}</td>
+      <td class="${pnlClass(t.static_trade?.net_pnl)}">${pnlStr(t.static_trade?.net_pnl)}</td>
+      <td class="${pnlClass(t.adaptive_trade?.net_pnl)}">${pnlStr(t.adaptive_trade?.net_pnl)}</td>
+    </tr>
+  `).join('');
+
+  return `
+    <div style="font-weight: 600; margin-bottom: 8px;">Aggregated across ${dates.join(', ')}</div>
+    ${renderSummary(agg, 'last 4 days')}
+    <div style="overflow-x: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th><th>Symbol</th><th>Gate</th><th>Selective uses</th>
+            <th>Outcome</th><th>Selective</th><th>Static</th><th>Adaptive</th>
+          </tr>
+        </thead>
+        <tbody>${rows || '<tr><td colspan="8" class="empty">no trades</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+}
+</script>
+
+</body>
+</html>

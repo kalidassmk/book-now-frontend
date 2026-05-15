@@ -2392,6 +2392,375 @@ app.get('/api/adaptive-offset', async (req, res) => {
     }
 });
 
+// iter 21 fe (2026-05-16): Adaptive Offset Eligibility Filter
+// User asked: "if we will find the exact pattern we can apply [adaptive],
+// otherwise we dont want use adaptive off set limit order price we can use
+// the previous limit order offset price."
+//
+// 4-day replay showed Adaptive alone is LOSS-MAKING (-$1.70). The losers
+// (MLN -$1.27, LINK -$1.27) share signatures we can detect BEFORE pulling
+// the trigger. This endpoint gates each coin GREEN / YELLOW / RED:
+//   GREEN  → safe to use adaptive offset (passes all gates)
+//   YELLOW → either static fills fine, or adaptive offset is impractical
+//   RED    → coin fails a safety filter; do NOT use adaptive (or static)
+//
+// Gates applied (ALL must pass for GREEN):
+//   G1  iter38 near-top pump        — block QNT-style entries
+//   G2  iter44 macro-top exhaustion — block PENDLE-style entries
+//   G3  iter45 vol regime           — block MLN/LINK-style chaos
+//   G4  iter46 not in extreme down  — recent 5m momentum > -0.8%
+//   G5  static fill prob low        — only adapt when static would miss
+//   G6  recommended offset modest   — adaptive ≤ 1.0% (deeper = risk)
+//   G7  spread is sane              — 5m spread < 1.5%
+function evaluateAdaptiveEligibility({ cfg, ticker, dailyKl, hourlyKl, oneMinKl, adaptive }) {
+    const lastPrice = parseFloat(ticker.lastPrice);
+    const chg24Pct  = parseFloat(ticker.priceChangePercent);
+    const high24    = parseFloat(ticker.highPrice);
+    const fromHigh24Pct = (lastPrice / high24 - 1) * 100;
+
+    // 1h range
+    let range1hPct = 0;
+    if (Array.isArray(hourlyKl) && hourlyKl.length) {
+        const k = hourlyKl[hourlyKl.length - 1];
+        const h = parseFloat(k[2]); const l = parseFloat(k[3]);
+        range1hPct = l > 0 ? (h - l) / l * 100 : 0;
+    }
+
+    // iter43 tier → static offset
+    let tier, staticOffset;
+    if (range1hPct < cfg.adaptiveTierCalmMaxPct)         { tier = 'CALM';        staticOffset = cfg.adaptiveBuy1OffsetCalm; }
+    else if (range1hPct < cfg.adaptiveTierNormalMaxPct)  { tier = 'NORMAL';      staticOffset = cfg.adaptiveBuy1OffsetNormal; }
+    else if (range1hPct < cfg.adaptiveTierVolatileMaxPct){ tier = 'VOLATILE';    staticOffset = cfg.adaptiveBuy1OffsetVolatile; }
+    else                                                 { tier = 'X_VOLATILE';  staticOffset = cfg.adaptiveBuy1OffsetXVolatile; }
+    const staticFillProb = adaptive.fill_probabilities[String(staticOffset)] ?? null;
+
+    // Daily klines processing (drop today's partial)
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const dayStart = now - (now % dayMs);
+    const dailyDone = (Array.isArray(dailyKl) ? dailyKl : []).filter(k => k[0] < dayStart);
+    const last30d = dailyDone.slice(-30);
+    const last5d  = dailyDone.slice(-5);
+
+    const gates = [];
+
+    // G1: iter38 near-top pump
+    const g1Block = cfg.nearTopPumpFilterEnabled &&
+                    chg24Pct >= cfg.nearTopPumpMin24hChangePct &&
+                    fromHigh24Pct >= -cfg.nearTopPumpMaxFromHighPct;
+    gates.push({
+        id: 'g1_near_top_pump', name: 'iter38 — Near-top pump', pass: !g1Block, blocking: !!g1Block,
+        detail: `24h +${chg24Pct.toFixed(2)}% / from high ${fromHigh24Pct.toFixed(2)}%`,
+        reason: g1Block ? `pumped +${chg24Pct.toFixed(2)}% AND within ${(-fromHigh24Pct).toFixed(2)}% of 24h high — likely top-buy` : 'ok',
+    });
+
+    // G2: iter44 macro-top exhaustion
+    let g2Block = false, g2Detail = 'insufficient data';
+    if (last30d.length >= 8) {
+        const closes = last30d.map(k => parseFloat(k[4]));
+        const opens  = last30d.map(k => parseFloat(k[1]));
+        const highs  = last30d.map(k => parseFloat(k[2]));
+        const lastC = closes[closes.length - 1];
+        const ret30 = (lastC / closes[0] - 1) * 100;
+        const h30 = Math.max(...highs);
+        const withinHi = h30 > 0 ? (lastC / h30) * 100 : 0;
+        const last7 = closes.slice(-7);
+        const open7 = opens.slice(-7);
+        const red7 = last7.reduce((s, c, i) => s + (c < open7[i] ? 1 : 0), 0);
+        g2Block = cfg.macroTopFilterEnabled &&
+                  ret30 >= cfg.macroTopMinReturnPct &&
+                  withinHi >= cfg.macroTopWithinHighPct &&
+                  red7 >= cfg.macroTopMinRedDaysIn7;
+        g2Detail = `30d +${ret30.toFixed(1)}% / within ${withinHi.toFixed(1)}% of high / red ${red7}/7`;
+    }
+    gates.push({
+        id: 'g2_macro_top', name: 'iter44 — Macro-top exhaustion', pass: !g2Block, blocking: !!g2Block,
+        detail: g2Detail,
+        reason: g2Block ? 'pumped high + near top + already bleeding → expect more pain' : 'ok',
+    });
+
+    // G3: iter45 vol regime
+    let g3Block = false, g3Detail = 'insufficient data';
+    if (last5d.length >= 3) {
+        const ranges = last5d.map(k => {
+            const h = parseFloat(k[2]), l = parseFloat(k[3]);
+            return l > 0 ? (h - l) / l * 100 : 0;
+        });
+        const dailyChgs = last5d.map(k => {
+            const o = parseFloat(k[1]), c = parseFloat(k[4]);
+            return o > 0 ? (c - o) / o * 100 : 0;
+        });
+        const maxR = Math.max(...ranges);
+        const worst = Math.min(...dailyChgs);
+        g3Block = cfg.volRegimeFilterEnabled &&
+                  ((maxR > cfg.volRegimeMaxDailyRangePct) || (worst <= -cfg.volRegimeBigCrashPct));
+        g3Detail = `max 5d range ${maxR.toFixed(1)}% / worst day ${worst.toFixed(1)}%`;
+    }
+    gates.push({
+        id: 'g3_vol_regime', name: 'iter45 — Vol regime chaos', pass: !g3Block, blocking: !!g3Block,
+        detail: g3Detail,
+        reason: g3Block ? 'recent days have wild ranges or big crashes → chaos regime' : 'ok',
+    });
+
+    // G4: recent momentum not in freefall
+    const momentum5 = adaptive.momentum_5m_pct;
+    const g4Block = momentum5 <= -0.8;
+    gates.push({
+        id: 'g4_momentum', name: 'Recent 5m momentum not in freefall', pass: !g4Block, blocking: !!g4Block,
+        detail: `5m drift ${momentum5.toFixed(2)}%`,
+        reason: g4Block ? `falling ${momentum5.toFixed(2)}% in last 5m — catching a falling knife` : 'ok',
+    });
+
+    // G5: static fill probability LOW (only useful when static would miss)
+    const g5Block = staticFillProb !== null && staticFillProb >= 0.30;
+    gates.push({
+        id: 'g5_static_too_likely', name: 'Static fill prob low (< 30%)',
+        pass: !g5Block, blocking: !!g5Block,
+        detail: `static -${staticOffset}% fill prob = ${staticFillProb !== null ? (staticFillProb*100).toFixed(0) + '%' : 'n/a'}`,
+        reason: g5Block ? 'static already likely to fill — no benefit from adaptive, just risk' : 'ok',
+    });
+
+    // G6: recommended adaptive offset modest (don't go too deep)
+    const recOff = adaptive.recommended.offset_pct;
+    const g6Block = recOff > 1.0;
+    gates.push({
+        id: 'g6_offset_modest', name: 'Adaptive offset ≤ 1.0%', pass: !g6Block, blocking: !!g6Block,
+        detail: `recommended -${recOff}%`,
+        reason: g6Block ? `adaptive wants -${recOff}% which is too deep — coin is in a dump` : 'ok',
+    });
+
+    // G7: spread sanity
+    const spread5m = adaptive.spread_5m_pct ?? 0;
+    const g7Block = spread5m > 1.5;
+    gates.push({
+        id: 'g7_spread_sane', name: '5m spread < 1.5%', pass: !g7Block, blocking: !!g7Block,
+        detail: `5m spread ${spread5m.toFixed(2)}%`,
+        reason: g7Block ? 'wide spread implies thin book — adaptive limit may sit forever' : 'ok',
+    });
+
+    // Verdict
+    const safetyFail = gates.slice(0, 3).find(g => g.blocking);  // G1-G3: hard safety
+    const utilityFail = gates.slice(3).find(g => g.blocking);    // G4-G7: adaptive usefulness
+    let level, recommendation, headline;
+    if (safetyFail) {
+        level = 'RED';
+        recommendation = 'BLOCK';
+        headline = `Coin fails safety gate: ${safetyFail.name}. Do not use adaptive (and bot likely won’t enter at all).`;
+    } else if (utilityFail) {
+        level = 'YELLOW';
+        recommendation = 'KEEP_STATIC';
+        headline = `Safety OK but adaptive is not the right tool here: ${utilityFail.name}. Use iter43 static -${staticOffset}%.`;
+    } else {
+        level = 'GREEN';
+        recommendation = 'USE_ADAPTIVE';
+        headline = `All gates pass. Adaptive -${recOff}% is preferred over static -${staticOffset}% (static fill prob only ${staticFillProb !== null ? (staticFillProb*100).toFixed(0) + '%' : 'n/a'}).`;
+    }
+
+    return {
+        level, recommendation, headline,
+        tier, static_offset_pct: staticOffset, static_fill_prob: staticFillProb,
+        adaptive_offset_pct: recOff, adaptive_fill_prob: adaptive.recommended.expected_fill_prob,
+        gates,
+    };
+}
+
+app.get('/api/adaptive-eligibility', async (req, res) => {
+    const sym = (req.query.symbol || '').toUpperCase().trim();
+    if (!sym) return res.status(400).json({ error: 'symbol query param required' });
+    const binanceSym = sym.includes('/') ? sym.replace('/', '') : sym;
+    const ccxtSym = sym.includes('/') ? sym : (sym.endsWith('USDT') ? sym.slice(0, -4) + '/USDT' : sym);
+
+    try {
+        const cfgRaw = await redis.get(CONFIG_KEY);
+        const cfg = { ...DEFAULT_TRADING_CONFIG, ...(cfgRaw ? JSON.parse(cfgRaw) : {}) };
+
+        const [tickerRes, klinesRes, hourlyRes, dailyRes] = await Promise.all([
+            fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${binanceSym}`).then(r => r.json()),
+            fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1m&limit=30`).then(r => r.json()),
+            fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1h&limit=2`).then(r => r.json()),
+            fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1d&limit=31`).then(r => r.json()),
+        ]);
+        if (tickerRes.code) return res.status(404).json({ error: tickerRes.msg || 'binance error' });
+        if (!Array.isArray(klinesRes)) return res.status(502).json({ error: 'klines fetch failed' });
+
+        const lastPrice = parseFloat(tickerRes.lastPrice);
+        const adaptive = computeAdaptiveOffset(klinesRes, lastPrice);
+        if (!adaptive) return res.status(500).json({ error: 'insufficient klines' });
+
+        const eligibility = evaluateAdaptiveEligibility({
+            cfg, ticker: tickerRes, dailyKl: dailyRes, hourlyKl: hourlyRes, oneMinKl: klinesRes, adaptive,
+        });
+
+        res.json({
+            symbol: ccxtSym,
+            timestamp: new Date().toISOString(),
+            market: {
+                last_price: lastPrice,
+                change_24h_pct: +parseFloat(tickerRes.priceChangePercent).toFixed(2),
+                from_24h_high_pct: +((lastPrice / parseFloat(tickerRes.highPrice) - 1) * 100).toFixed(2),
+            },
+            eligibility,
+            adaptive,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message, stack: err.stack });
+    }
+});
+
+// iter 21 fe: Historical eligibility replay — for each unfilled trade on the
+// given date, decide what the eligibility gate WOULD HAVE said, then simulate
+// the chosen strategy (GREEN → adaptive, anything else → static) and aggregate
+// P&L. This is the proof that selective adaptive beats blanket adaptive.
+app.get('/api/adaptive-eligibility-replay', async (req, res) => {
+    try {
+        const date = req.query.date || new Date().toISOString().slice(0, 10);
+        const lookbackMin = parseInt(req.query.lookback_min || '30', 10);
+        const checkMin = parseInt(req.query.check_min || '60', 10);
+        const TRADE_HORIZON_MIN = 240;
+
+        const cfgRaw = await redis.get(CONFIG_KEY);
+        const cfg = { ...DEFAULT_TRADING_CONFIG, ...(cfgRaw ? JSON.parse(cfgRaw) : {}) };
+
+        // Scan OUTCOME records for the date — unfilled trades only
+        const pattern = `METRICS:OUTCOME:${date}:*`;
+        const stream = redis.scanStream({ match: pattern, count: 100 });
+        const keys = [];
+        stream.on('data', (batch) => keys.push(...batch));
+        await new Promise((resolve) => stream.on('end', resolve));
+
+        const trades = [];
+        for (const k of keys) {
+            const h = await redis.hgetall(k);
+            if (!h || !h.symbol || !h.buy_ts) continue;
+            if (parseInt(h.filled || '0', 10) !== 0) continue;
+            const buy_ts = parseInt(h.buy_ts, 10);
+            const buy_1_limit_price = parseFloat(h.buy_1_limit_price);
+            let signal_price = parseFloat((h.signal_price || '').replace(/np\.float64\(/, '').replace(/\)$/, ''));
+            if (isNaN(signal_price) || isNaN(buy_1_limit_price)) continue;
+            trades.push({ symbol: h.symbol, buy_ts, signal_price, static_buy_price: buy_1_limit_price });
+        }
+        trades.sort((a, b) => b.buy_ts - a.buy_ts);
+        const seen = new Set();
+        const uniq = trades.filter(t => { if (seen.has(t.symbol)) return false; seen.add(t.symbol); return true; });
+
+        const results = [];
+        for (let i = 0; i < uniq.length; i += 3) {
+            const batch = uniq.slice(i, i + 3);
+            const br = await Promise.all(batch.map(async (t) => {
+                const binanceSym = t.symbol.replace('/', '');
+                const preStart = t.buy_ts - lookbackMin * 60 * 1000;
+                const preEnd   = t.buy_ts;
+                const postStart= t.buy_ts;
+                const postEnd  = t.buy_ts + (checkMin + TRADE_HORIZON_MIN) * 60 * 1000;
+                // Snapshot pre-signal market state (ticker/daily/hourly closest to signal)
+                const [preKl, postKl, dailyRes, hourlyRes, tickerRes] = await Promise.all([
+                    fetchKlinesRange(binanceSym, preStart, preEnd),
+                    fetchKlinesRange(binanceSym, postStart, postEnd),
+                    fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1d&limit=31&endTime=${t.buy_ts}`).then(r => r.json()).catch(() => null),
+                    fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1h&limit=2&endTime=${t.buy_ts}`).then(r => r.json()).catch(() => null),
+                    fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${binanceSym}`).then(r => r.json()).catch(() => null),
+                ]);
+                if (!preKl || preKl.length < 10) return { ...t, error: 'insufficient pre klines' };
+
+                const adaptive = computeAdaptiveOffset(preKl, t.signal_price);
+                if (!adaptive) return { ...t, error: 'adaptive compute failed' };
+
+                // Build synthetic ticker from snapshot (use buy_ts as anchor)
+                // We use real ticker as best-effort (24h window slides) — good enough for gates.
+                const synthTicker = tickerRes && !tickerRes.code ? tickerRes : {
+                    lastPrice: t.signal_price.toString(),
+                    priceChangePercent: '0',
+                    highPrice: t.signal_price.toString(),
+                };
+
+                const eligibility = evaluateAdaptiveEligibility({
+                    cfg, ticker: synthTicker, dailyKl: dailyRes, hourlyKl: hourlyRes,
+                    oneMinKl: preKl, adaptive,
+                });
+
+                // Simulate STATIC trade (always)
+                const staticFill = checkFill(postKl, t.static_buy_price);
+                const staticTrade = staticFill.filled ? simulateExit(postKl, staticFill.time_min - 1, t.static_buy_price) : null;
+
+                // Simulate ADAPTIVE trade
+                const adaptivePrice = adaptive.recommended.buy_price;
+                const adaptiveFill = checkFill(postKl, adaptivePrice);
+                const adaptiveTrade = adaptiveFill.filled ? simulateExit(postKl, adaptiveFill.time_min - 1, adaptivePrice) : null;
+
+                // SELECTIVE: use adaptive only if GREEN, else fall back to static
+                const useAdaptive = eligibility.level === 'GREEN';
+                const selectiveTrade = useAdaptive ? adaptiveTrade : staticTrade;
+                const selectiveFilled = useAdaptive ? adaptiveFill.filled : staticFill.filled;
+                const selectiveStrategy = useAdaptive ? 'adaptive' : 'static';
+
+                return {
+                    ...t,
+                    eligibility_level: eligibility.level,
+                    eligibility_reco: eligibility.recommendation,
+                    eligibility_headline: eligibility.headline,
+                    blocking_gate: eligibility.gates.find(g => g.blocking)?.name || null,
+                    static_offset_pct: +(((1 - t.static_buy_price / t.signal_price) * 100).toFixed(3)),
+                    adaptive_offset_pct: adaptive.recommended.offset_pct,
+                    adaptive_buy_price: adaptivePrice,
+                    static_filled: staticFill.filled,
+                    adaptive_filled: adaptiveFill.filled,
+                    static_trade: staticTrade,
+                    adaptive_trade: adaptiveTrade,
+                    selective_strategy: selectiveStrategy,
+                    selective_filled: selectiveFilled,
+                    selective_trade: selectiveTrade,
+                };
+            }));
+            results.push(...br);
+        }
+
+        // Aggregate
+        const sumPnl = arr => +arr.reduce((s, r) => s + (r.net_pnl || 0), 0).toFixed(4);
+        const staticTrades   = results.filter(r => r.static_trade).map(r => r.static_trade);
+        const adaptiveTrades = results.filter(r => r.adaptive_trade).map(r => r.adaptive_trade);
+        const selectiveTrades= results.filter(r => r.selective_trade).map(r => r.selective_trade);
+
+        const greenTrades  = results.filter(r => r.eligibility_level === 'GREEN');
+        const yellowTrades = results.filter(r => r.eligibility_level === 'YELLOW');
+        const redTrades    = results.filter(r => r.eligibility_level === 'RED');
+
+        const summary = {
+            total_unfilled: results.length,
+            errors: results.filter(r => r.error).length,
+            level_counts: {
+                green: greenTrades.length, yellow: yellowTrades.length, red: redTrades.length,
+            },
+
+            // Pure-static (baseline)
+            static_filled: results.filter(r => r.static_filled).length,
+            static_total_pnl: sumPnl(staticTrades),
+            static_tp: staticTrades.filter(t => t.outcome === 'tp_hit').length,
+            static_sl: staticTrades.filter(t => t.outcome === 'stop_loss').length,
+            static_to: staticTrades.filter(t => t.outcome === 'timeout').length,
+
+            // Pure-adaptive (what we proved was loss-making)
+            adaptive_filled: results.filter(r => r.adaptive_filled).length,
+            adaptive_total_pnl: sumPnl(adaptiveTrades),
+            adaptive_tp: adaptiveTrades.filter(t => t.outcome === 'tp_hit').length,
+            adaptive_sl: adaptiveTrades.filter(t => t.outcome === 'stop_loss').length,
+            adaptive_to: adaptiveTrades.filter(t => t.outcome === 'timeout').length,
+
+            // Selective (adaptive ONLY for GREEN, static otherwise)
+            selective_filled: results.filter(r => r.selective_filled).length,
+            selective_total_pnl: sumPnl(selectiveTrades),
+            selective_tp: selectiveTrades.filter(t => t.outcome === 'tp_hit').length,
+            selective_sl: selectiveTrades.filter(t => t.outcome === 'stop_loss').length,
+            selective_to: selectiveTrades.filter(t => t.outcome === 'timeout').length,
+        };
+        summary.selective_vs_static_gain   = +(summary.selective_total_pnl - summary.static_total_pnl).toFixed(4);
+        summary.selective_vs_adaptive_gain = +(summary.selective_total_pnl - summary.adaptive_total_pnl).toFixed(4);
+
+        res.json({ date, params: { lookback_min: lookbackMin, check_min: checkMin }, summary, trades: results });
+    } catch (err) {
+        res.status(500).json({ error: err.message, stack: err.stack });
+    }
+});
+
 // iter 17 fe: Pattern Bot endpoints
 app.get('/api/pattern-bot/status', async (req, res) => {
     try {
