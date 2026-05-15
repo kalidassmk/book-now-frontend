@@ -73,17 +73,26 @@
   .factor-chip.warn { background: rgba(241,196,15,.15); color: var(--warn); }
   tr.recent-tr.expandable { cursor: pointer; }
   tr.recent-tr.expandable:hover td { background: rgba(255,255,255,.02); }
+  /* iter12 fe: Quick Hub on home page */
+  .quickhub { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .hubtile { display: block; padding: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; text-decoration: none; color: var(--text); transition: transform 0.15s, border-color 0.15s, background 0.15s; }
+  .hubtile:hover { transform: translateY(-2px); border-color: var(--accent); background: var(--panel-2, #1a232e); }
+  .hubtile .icon { font-size: 28px; line-height: 1; margin-bottom: 8px; }
+  .hubtile .title { font-size: 14px; font-weight: 700; margin-bottom: 4px; color: var(--text); }
+  .hubtile .desc { font-size: 11px; color: var(--muted); line-height: 1.4; }
+  .hubtile.primary { border-color: var(--accent); background: linear-gradient(135deg, rgba(41,182,246,.08) 0%, var(--panel) 100%); }
+  .hubtile.primary .title { color: var(--accent); }
 </style>
 </head>
 <body>
 
 <nav class="topnav">
   <a href="/" class="active">📊 Monitor</a>
-  <a href="/scanner">🏠 Scanner</a>
   <a href="/metrics.html">📈 Metrics</a>
   <a href="/spot.html">📋 Spot</a>
   <a href="/backtest.html">🔬 Backtest</a>
   <a href="/decision-trace.html">🔍 Decision Trace</a>
+  <a href="/scanner">🏠 Scanner</a>
 </nav>
 
 <h1>Bot Monitor</h1>
@@ -91,6 +100,40 @@
   <span class="live-dot"></span>
   <span>Auto-refresh every 10s · last update <span id="lastUpdate">never</span></span>
   <button onclick="loadMonitor()">Refresh now</button>
+</div>
+
+<!-- Quick Hub: one-click navigation to every section. -->
+<div class="quickhub">
+  <a href="/" class="hubtile primary">
+    <div class="icon">📊</div>
+    <div class="title">Monitor (you are here)</div>
+    <div class="desc">Live P&amp;L, balance, ladders, safety stack, recent trades.</div>
+  </a>
+  <a href="/decision-trace.html" class="hubtile">
+    <div class="icon">🔍</div>
+    <div class="title">Decision Trace</div>
+    <div class="desc">Live what-if checker: see why any coin is blocked or which strategy + TP it'd use.</div>
+  </a>
+  <a href="/backtest.html" class="hubtile">
+    <div class="icon">🔬</div>
+    <div class="title">Backtest Report</div>
+    <div class="desc">All recent trades replayed against the current filter stack — actual vs simulated P&amp;L.</div>
+  </a>
+  <a href="/metrics.html" class="hubtile">
+    <div class="icon">📈</div>
+    <div class="title">Metrics Audit</div>
+    <div class="desc">Full audit table of every signal, fill, and outcome the bot logged.</div>
+  </a>
+  <a href="/spot.html" class="hubtile">
+    <div class="icon">📋</div>
+    <div class="title">Spot Movers</div>
+    <div class="desc">Live Binance top movers with per-coin analysis side-panel.</div>
+  </a>
+  <a href="/scanner" class="hubtile">
+    <div class="icon">🏠</div>
+    <div class="title">Market Scanner</div>
+    <div class="desc">Legacy top-200 scanner UI (kept for reference).</div>
+  </a>
 </div>
 
 <!-- Section 1: Right now (this moment) -->
