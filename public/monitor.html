@@ -53,6 +53,26 @@
   button { background: var(--accent); border: 0; color: #fff; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-weight: 600; }
   button:hover { filter: brightness(1.1); }
   .ladder-detail { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  /* iter5 frontend (2026-05-15): Safety Stack panel + exit-reason details */
+  .safety-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px dashed var(--line); gap: 10px; }
+  .safety-row:last-child { border-bottom: none; }
+  .safety-iter { font-size: 10px; color: var(--muted); font-weight: 700; min-width: 38px; }
+  .safety-label { flex: 1; }
+  .safety-label .name { font-weight: 600; font-size: 12px; }
+  .safety-label .desc { color: var(--muted); font-size: 11px; }
+  .safety-status { font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; min-width: 90px; }
+  .safety-on { color: var(--good); font-weight: 700; }
+  .safety-off { color: var(--bad); font-weight: 700; }
+  .pill.death  { background: rgba(231,76,60,.30); color: #ff8a7d; font-weight: 700; }
+  .pill.stop   { background: rgba(241,196,15,.25); color: var(--warn); font-weight: 700; }
+  .pill.stale  { background: rgba(139,148,158,.30); color: var(--muted); font-weight: 700; }
+  .reason-detail-row td { padding: 0 8px 8px; background: rgba(20,27,36,.5); font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--line); }
+  .reason-detail-row code { font-family: 'SF Mono', Menlo, Consolas, monospace; color: var(--text); background: rgba(0,0,0,.3); padding: 2px 6px; border-radius: 3px; }
+  .factor-chip { display: inline-block; background: rgba(41,182,246,.15); color: var(--accent); padding: 2px 6px; border-radius: 4px; margin: 2px; font-size: 10px; font-variant-numeric: tabular-nums; }
+  .factor-chip.bad { background: rgba(231,76,60,.15); color: var(--bad); }
+  .factor-chip.warn { background: rgba(241,196,15,.15); color: var(--warn); }
+  tr.recent-tr.expandable { cursor: pointer; }
+  tr.recent-tr.expandable:hover td { background: rgba(255,255,255,.02); }
 </style>
 </head>
 <body>
@@ -116,6 +136,14 @@
     <h2>Filter breakdown (today's skips)</h2>
     <div id="filterBreakdown">—</div>
   </div>
+</div>
+
+<!-- Section 3b (iter5 fe, 2026-05-15): Safety Stack — live config the bot is using.
+     Each row = one safety net we added; shows on/off + current threshold so the
+     operator can answer "why did this coin exit?" by reading the iter#. -->
+<div class="card">
+  <h2>Safety stack <span class="mute" style="font-size:11px;text-transform:none;font-weight:400;">— live config from Redis (hot-reloaded every cycle)</span></h2>
+  <div id="safetyStack">Loading…</div>
 </div>
 
 <!-- Section 4: Recent 10 completed trades -->
@@ -185,12 +213,133 @@ function statusPill(reason, pnl) {
         return `<span class="pill ${p>0?'win':'loss'}">MANUAL ${p>=0?'+':''}$${p.toFixed(2)}</span>`;
     }
     if (r === 'manual_cancel_holding') return '<span class="pill open">MANUAL HOLD</span>';
+    // iter5 fe: iter39 liquidity-death tiers (smart adaptive hard stop)
+    if (r.startsWith('liquidity_death:catastrophic')) return '<span class="pill death">💀 CATASTROPHIC</span>';
+    if (r.startsWith('liquidity_death:stagnation'))   return '<span class="pill stale">🪦 STAGNATION</span>';
+    if (r.startsWith('liquidity_death:score'))        return '<span class="pill death">💀 LIQUIDITY DEATH</span>';
+    // iter5 fe: iter37 fixed hard-stop fallback
+    if (r === 'hard_stop_from_avg')   return '<span class="pill stop">🛡️ HARD STOP</span>';
     if (r.includes('cancel'))         return '<span class="pill cancel">CANCELLED</span>';
     if (r === 'trailing_tp')          return `<span class="pill trail">TRAIL +$${Number(pnl||0).toFixed(2)}</span>`;
     if (r.includes('breakeven'))      return '<span class="pill flat">BREAK-EVEN</span>';
     if (r === 'time_exit')            return `<span class="pill ${pnl>0?'win':'loss'}">TIMEOUT</span>`;
     if (Math.abs(Number(pnl||0)) < 0.005) return '<span class="pill flat">FLAT</span>';
     return `<span class="pill ${pnl>0?'win':'loss'}">${pnl>0?'WIN':'LOSS'}</span>`;
+}
+
+// iter5 fe (2026-05-15): parse exit_reason strings like
+// "liquidity_death:score=8 vol=0.35x never_recovered ll=67% red=70% drop=0.48% held=23m"
+// into a friendly chip array.
+function parseExitReasonFactors(reason) {
+    if (!reason) return [];
+    const out = [];
+    const r = String(reason);
+    // Match key=value pairs (val may be num, num%, numx, etc.)
+    const re = /(\w+)=([\w%\.\-]+)/g;
+    let m;
+    while ((m = re.exec(r)) !== null) {
+        out.push({ key: m[1], val: m[2] });
+    }
+    // Boolean-like markers
+    if (/never_recovered/.test(r)) out.push({ key: 'recovered', val: 'never', flag: 'bad' });
+    if (/vol_extreme/.test(r))      out.push({ key: 'vol', val: 'extreme', flag: 'bad' });
+    if (/no_tp_approach/.test(r))   out.push({ key: 'tp', val: 'no approach', flag: 'warn' });
+    return out;
+}
+function explainReason(reason) {
+    const r = String(reason || '').toLowerCase();
+    if (r.startsWith('liquidity_death:catastrophic')) {
+        return 'Catastrophic price drop (≥ liquidityDeathCatastrophicDropPct from avg) — instant exit to cap loss.';
+    }
+    if (r.startsWith('liquidity_death:stagnation')) {
+        return 'Stagnation tier: held > 60min with collapsed volume and no approach to TP. Freed capital.';
+    }
+    if (r.startsWith('liquidity_death:score')) {
+        return 'iter39 multi-factor scorer fired: volume collapsed, never recovered, lower-lows building. Smart exit.';
+    }
+    if (r === 'hard_stop_from_avg') {
+        return 'iter37 fixed hard-stop floor (price ≤ avg × (1 - ladderHardStopFromAvgPct/100)). Fallback safety net.';
+    }
+    if (r === 'time_exit') return 'iter14 max-hold reached (ladderMaxHoldSeconds). Force-sold regardless of P&L.';
+    if (r.includes('breakeven')) return 'iter14 break-even recovery: ladder went underwater then returned to avg+buffer. Locked in ~$0.';
+    if (r === 'trailing_tp') return 'iter15 trailing TP: static TP reached, peak trailed, retraced by trailing %.';
+    return '';
+}
+
+// iter5 fe: build the Safety Stack panel from /api/v1/config
+function buildSafetyRow(iterTag, name, desc, enabled, threshold) {
+    return `<div class="safety-row">
+      <span class="safety-iter">${iterTag}</span>
+      <span class="safety-label">
+        <div class="name">${name}</div>
+        <div class="desc">${desc}</div>
+      </span>
+      <span class="safety-status">
+        <span class="${enabled ? 'safety-on' : 'safety-off'}">${enabled ? '● ON' : '○ OFF'}</span>
+        ${threshold ? `<div class="mute" style="font-size:10px;">${threshold}</div>` : ''}
+      </span>
+    </div>`;
+}
+async function loadSafetyStack() {
+    try {
+        const r = await fetch('/api/v1/config');
+        if (!r.ok) throw new Error('config fetch failed');
+        const c = await r.json();
+        const html = [
+            buildSafetyRow('GATE 1', 'Falling-knife filter (24h pump / range / vol / overbought)',
+                'Block too-volatile or too-pumped 24h coins.',
+                !!c.fallingKnifeFilterEnabled,
+                `maxΔ24h=${c.maxChange24hPct}% · max1hRange=${c.maxRange1hPct}% · vol≥$${(c.minVol24hUsd||0)/1e6}M`),
+            buildSafetyRow('GATE 2', 'Near-top pump (iter 38)',
+                'SKIP if 24h is up ≥ min% AND within max% of 24h high (QNT pattern).',
+                !!c.nearTopPumpFilterEnabled,
+                `min24h=${c.nearTopPumpMin24hChangePct}% · within=${c.nearTopPumpMaxFromHighPct}% of high`),
+            buildSafetyRow('GATE 3', 'Post-pump bleed (multi-day)',
+                'Block coins that pumped ≥ X% in last N days and are bleeding off the peak.',
+                !!c.postPumpFilterEnabled,
+                `pump≥${c.postPumpThresholdPct}% · offPeak≥${c.postPumpOffPeakMinPct}% · lookback=${c.postPumpLookbackDays}d`),
+            buildSafetyRow('EXIT 1', '💀 Liquidity-death adaptive exit (iter 39)',
+                'Multi-factor: vol_ratio, never_recovered, lower-lows, drop, red-share. Score ≥ N → exit.',
+                !!c.liquidityDeathExitEnabled,
+                `catastrophic=${c.liquidityDeathCatastrophicDropPct}% · score≥${c.liquidityDeathExitScoreThreshold} · vol<${c.liquidityDeathVolCollapseThreshold}× · stagnation≥${c.liquidityDeathStagnationHoldMin}m`),
+            buildSafetyRow('EXIT 2', '🛡️ Fixed hard-stop fallback (iter 37)',
+                'Price-only floor; engages if smart exit is disabled or kline data missing.',
+                !!c.ladderHardStopFromAvgEnabled,
+                `drop ≥ ${c.ladderHardStopFromAvgPct}% from avg`),
+            buildSafetyRow('EXIT 3', '⚖️ Break-even recovery (iter 14)',
+                'Ladder went underwater then returned to avg + buffer → exit at flat.',
+                !!c.ladderBreakevenExitEnabled,
+                `buffer=${c.ladderBreakevenBufferPct}% (covers fees+slippage)`),
+            buildSafetyRow('EXIT 4', '⏱️ Time exit (iter 14)',
+                'Force-sell after N seconds regardless of P&L. Caps max hold.',
+                !!c.ladderTimeExitEnabled,
+                `max hold=${Math.round((c.ladderMaxHoldSeconds||0)/3600)}h`),
+            buildSafetyRow('EXIT 5', '📈 Trailing TP (iter 15)',
+                'Once static TP is reached, trail peak; exit on retrace.',
+                !!c.ladderTrailingTpEnabled,
+                `trail=${c.ladderTrailingTpPct}% from peak`),
+            buildSafetyRow('QUAL', '⏱️ Buy 2 staleness cancel (iter 37)',
+                "If Buy 2 LIMIT doesn't fill within N min of Buy 1, cancel + refresh TP at Buy 1-only avg.",
+                !!c.ladderBuy2StalenessEnabled,
+                `timeout=${c.ladderBuy2StalenessMinutes}m`),
+            buildSafetyRow('QUAL', '🚧 Pending pump-dump cancel (iter 16)',
+                'While Buy 1 sits as resting LIMIT, cancel if price pumps then crashes back (falling-knife into limit).',
+                !!c.pendingPumpDumpCancelEnabled,
+                `pump≥${c.pendingPumpThresholdPct}% · dump≥${c.pendingDumpFromPeakPct}% · age≥${c.pendingMinAgeSeconds}s`),
+            // Master switches at the top
+            buildSafetyRow('🟢', 'Auto-buy master switch',
+                'Off = bot stops placing new buys (positions still managed).',
+                !!c.autoBuyEnabled,
+                `ladder cap=${c.maxConcurrentLadders}`),
+            buildSafetyRow('🟢', 'Virtual Scalper live mode',
+                'Off = Virtual runs paper-only. Both scalpers share the same safety stack (iter 40 parity).',
+                !!c.virtualScalperLiveMode,
+                ''),
+        ].join('');
+        document.getElementById('safetyStack').innerHTML = html;
+    } catch (e) {
+        document.getElementById('safetyStack').innerHTML = `<div class="mute">Failed to load safety config: ${e.message}</div>`;
+    }
 }
 
 async function loadMonitor() {
@@ -294,7 +443,7 @@ function renderRecent(audit, nowMs) {
         tbody.innerHTML = '<tr><td colspan="8" class="empty">No completed trades yet</td></tr>';
         return;
     }
-    tbody.innerHTML = items.map(it => {
+    tbody.innerHTML = items.map((it, idx) => {
         const ts = Number(it.ts || 0);
         const buy = it.buy_1_actual_price || it.buy_1_limit_price || it.signal_price;
         const exit = it.exit_price;
@@ -302,8 +451,16 @@ function renderRecent(audit, nowMs) {
         const scalperPill = scalper === 'FAST'
             ? '<span class="pill win">FAST</span>'
             : '<span class="pill open">VIRTUAL</span>';
-        return `<tr>
-            <td class="mute">${fmtTime(ts)}</td>
+        // iter5 fe: expandable row — click to see full exit_reason + factor breakdown.
+        const factors = parseExitReasonFactors(it.exit_reason);
+        const explanation = explainReason(it.exit_reason);
+        const hasDetail = !!(it.exit_reason && (factors.length || explanation));
+        const factorChips = factors.map(f => {
+            const flag = f.flag ? ` ${f.flag}` : '';
+            return `<span class="factor-chip${flag}">${f.key}=${f.val}</span>`;
+        }).join('');
+        const mainRow = `<tr class="recent-tr ${hasDetail ? 'expandable' : ''}" data-detail="trade-detail-${idx}" onclick="toggleDetail('trade-detail-${idx}')">
+            <td class="mute">${fmtTime(ts)}${hasDetail ? ' <span style="color:var(--muted);font-size:10px;">▸</span>' : ''}</td>
             <td class="mute">${fmtAge(nowMs, ts)}</td>
             <td>${scalperPill}</td>
             <td><strong>${it.symbol || '—'}</strong></td>
@@ -312,11 +469,27 @@ function renderRecent(audit, nowMs) {
             <td class="num ${pnlClass(it.pnl_usdt)}">${it.pnl_usdt != null ? fmtSignedMoney(it.pnl_usdt, 4) : '—'}</td>
             <td>${statusPill(it.exit_reason, it.pnl_usdt)}</td>
         </tr>`;
+        const detailRow = hasDetail ? `<tr class="reason-detail-row" id="trade-detail-${idx}" style="display:none;"><td colspan="8">
+            <div style="margin-top:6px;"><strong style="color:var(--text);">Why this exited:</strong> ${explanation || '<span class="mute">—</span>'}</div>
+            <div style="margin-top:6px;"><strong style="color:var(--muted);">Raw reason:</strong> <code>${escapeHtml(it.exit_reason || '')}</code></div>
+            ${factorChips ? `<div style="margin-top:6px;"><strong style="color:var(--muted);">Factors at exit:</strong> ${factorChips}</div>` : ''}
+        </td></tr>` : '';
+        return mainRow + detailRow;
     }).join('');
+}
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+function toggleDetail(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.style.display = el.style.display === 'none' ? 'table-row' : 'none';
 }
 
 loadMonitor();
+loadSafetyStack();   // iter5 fe: render Safety Stack panel on initial load
 setInterval(loadMonitor, 10000);
+setInterval(loadSafetyStack, 30000);  // refresh config view every 30s (live-hot-reload)
 </script>
 
 </body>
