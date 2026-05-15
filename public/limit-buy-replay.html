@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Book-Now — Limit-Buy Replay</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --panel-2: #1a232e; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --neutral: #8b949e;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  .sub { color: var(--muted); margin-bottom: 18px; font-size: 13px; }
+  .topnav { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .topnav a { display: inline-block; padding: 6px 14px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 600; }
+  .topnav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .topnav a:not(.active):hover { color: var(--text); border-color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  .card h2 { margin: 0 0 12px; font-size: 14px; color: var(--text); font-weight: 700; }
+
+  .controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .controls input, .controls select { padding: 6px 10px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 4px; font: 13px monospace; }
+  .controls button { padding: 8px 16px; background: var(--accent); color: #fff; border: 0; border-radius: 4px; cursor: pointer; font-weight: 600; }
+  .controls button:disabled { opacity: 0.5; cursor: wait; }
+
+  /* Verdict banner */
+  .verdict-banner { padding: 18px 24px; border-radius: 10px; text-align: center; font-size: 16px; font-weight: 700; margin-bottom: 14px; }
+  .verdict-banner.positive { background: rgba(46,204,113,.12); border: 2px solid var(--good); color: var(--good); }
+  .verdict-banner.neutral  { background: rgba(41,182,246,.10); border: 2px solid var(--accent); color: var(--accent); }
+  .verdict-banner.negative { background: rgba(231,76,60,.12); border: 2px solid var(--bad); color: var(--bad); }
+  .verdict-banner .sub-text { font-size: 13px; font-weight: 400; color: var(--muted); margin-top: 6px; }
+
+  /* Summary stats */
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .stat { padding: 12px 14px; background: var(--panel-2); border-radius: 6px; }
+  .stat .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .stat .value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 3px; }
+  .pos { color: var(--good); } .neg { color: var(--bad); } .mute { color: var(--muted); } .warn { color: var(--warn); }
+
+  /* Trade rows */
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); font-size: 12px; white-space: nowrap; }
+  th { background: var(--panel-2); color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 9px; letter-spacing: .4px; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.row { cursor: pointer; }
+  tr.both td      { background: rgba(46,204,113,.04); }
+  tr.adaptive td  { background: rgba(46,204,113,.10); border-left: 3px solid var(--good); }
+  tr.static td    { background: rgba(231,76,60,.08); }
+  tr.neither td   { background: rgba(241,196,15,.04); }
+  tr.expandable:hover td { background: rgba(255,255,255,.03); }
+
+  /* Pills */
+  .pill { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; }
+  .pill.both     { background: rgba(46,204,113,.15); color: var(--good); }
+  .pill.adaptive { background: rgba(46,204,113,.25); color: var(--good); font-weight: 800; }
+  .pill.static   { background: rgba(231,76,60,.20); color: var(--bad); }
+  .pill.neither  { background: rgba(241,196,15,.15); color: var(--warn); }
+
+  /* Detail row */
+  tr.detail-row td { padding: 12px 16px; background: rgba(20,27,36,.6); font-size: 11px; }
+  .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+  .detail-box { padding: 10px 12px; background: var(--panel-2); border-radius: 6px; border-left: 3px solid var(--accent); }
+  .detail-box .lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; }
+  .detail-box .val { font-size: 13px; font-weight: 600; margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+  .empty { padding: 40px; text-align: center; color: var(--muted); font-style: italic; }
+  .error { padding: 14px; background: rgba(231,76,60,.10); color: var(--bad); border-radius: 6px; }
+  .info-banner { padding: 12px 14px; background: rgba(41,182,246,.08); border-left: 3px solid var(--accent); border-radius: 6px; font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+  .info-banner strong { color: var(--accent); }
+  .info-banner code { font-family: 'SF Mono', monospace; color: var(--text); background: rgba(0,0,0,.3); padding: 2px 5px; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/">📊 Monitor</a>
+  <a href="/metrics.html">📈 Metrics</a>
+  <a href="/spot.html">📋 Spot</a>
+  <a href="/backtest.html">🔬 Backtest</a>
+  <a href="/decision-trace.html">🔍 Decision Trace</a>
+  <a href="/bounce-watch.html">⤴️ Bounce Watch</a>
+  <a href="/early-pump.html">🚀 Early Pump</a>
+  <a href="/pattern-backtest.html">📊 Pattern Backtest</a>
+  <a href="/pattern-bot.html">🤖 Pattern Bot</a>
+  <a href="/adaptive-offset.html">🎯 Adaptive Offset</a>
+  <a href="/limit-buy-replay.html" class="active">🔄 Limit Replay</a>
+  <a href="/scanner">🏠 Scanner</a>
+</nav>
+
+<h1>Limit-Buy Replay — would Adaptive Offset fix the misses?</h1>
+<div class="sub">For every unfilled Buy 1 LIMIT, compares the original iter43 static offset vs the Adaptive Offset algorithm. Answers: "would the new algorithm fill orders the old one missed?"</div>
+
+<div class="info-banner">
+  <strong>What this shows:</strong>
+  Each historical "unfilled" trade is replayed two ways:
+  <code>STATIC</code> = original iter43 limit price · <code>ADAPTIVE</code> = computed from last 30 1m klines.
+  Then both prices are checked against actual <strong>1-hour</strong> post-signal price action.
+  <br><br>
+  <strong>Decision rule:</strong>
+  if <strong>ADAPTIVE-only</strong> wins outnumber <strong>STATIC-only</strong> wins → new algorithm is a strict improvement.
+</div>
+
+<div class="card">
+  <div class="controls">
+    <label>Date: <input id="date" type="date" /></label>
+    <label>Lookback: <input id="lookback" type="number" value="30" min="10" max="60" />m</label>
+    <label>Check window: <input id="checkMin" type="number" value="60" min="15" max="240" />m</label>
+    <button id="runBtn" onclick="run()">Run replay</button>
+    <span class="mute" id="runStatus"></span>
+  </div>
+</div>
+
+<div id="result"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+$('#date').value = new Date().toISOString().slice(0, 10);
+
+function fmtPrice(n) {
+  if (n == null || isNaN(n)) return '—';
+  const a = Math.abs(n);
+  if (a >= 100) return n.toFixed(2);
+  if (a >= 1) return n.toFixed(4);
+  return n.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+}
+function fmtPct(n, dp=2) {
+  if (n == null || isNaN(n)) return '—';
+  const s = Number(n) >= 0 ? '+' : '';
+  return s + Number(n).toFixed(dp) + '%';
+}
+
+async function run() {
+  const date = $('#date').value;
+  const lookback = $('#lookback').value;
+  const checkMin = $('#checkMin').value;
+  $('#runBtn').disabled = true;
+  $('#runStatus').textContent = 'Replaying… fetching klines from Binance (10-30s)';
+  $('#result').innerHTML = '<div class="card empty">Loading…</div>';
+  try {
+    const r = await fetch(`/api/limit-buy-replay?date=${date}&lookback_min=${lookback}&check_min=${checkMin}`);
+    if (!r.ok) {
+      $('#result').innerHTML = `<div class="card error">Error: ${r.status}</div>`;
+      return;
+    }
+    const data = await r.json();
+    $('#runStatus').textContent = `Completed for ${date}.`;
+    $('#result').innerHTML = render(data);
+  } catch (e) {
+    $('#result').innerHTML = `<div class="card error">Network error: ${e.message}</div>`;
+  } finally {
+    $('#runBtn').disabled = false;
+  }
+}
+
+function render(d) {
+  const s = d.summary;
+
+  // Verdict banner
+  let banner;
+  if (s.adaptive_advantage > 0) {
+    banner = `<div class="verdict-banner positive">
+      🎯 ADAPTIVE WINS — caught ${s.adaptive_only} fills that STATIC missed, with 0 regressions
+      <div class="sub-text">Recommend promoting Adaptive Offset as iter43 fallback (zero downside, strict improvement)</div>
+    </div>`;
+  } else if (s.adaptive_advantage === 0 && s.total_unfilled > 0) {
+    banner = `<div class="verdict-banner neutral">
+      ⚖️ NEUTRAL — same fill rate both ways
+      <div class="sub-text">Adaptive offers no advantage on today's sample (${s.total_unfilled} trades). Keep observing.</div>
+    </div>`;
+  } else if (s.adaptive_advantage < 0) {
+    banner = `<div class="verdict-banner negative">
+      ⚠️ STATIC WINS — adaptive missed ${Math.abs(s.adaptive_advantage)} fills the static would have caught
+      <div class="sub-text">Do NOT promote yet. Investigate why adaptive is too conservative.</div>
+    </div>`;
+  } else {
+    banner = `<div class="verdict-banner neutral">No unfilled trades to replay for this date.</div>`;
+  }
+
+  const summaryHtml = `
+    <div class="summary">
+      <div class="stat"><div class="label">Unfilled trades</div><div class="value">${s.total_unfilled}</div></div>
+      <div class="stat"><div class="label">Both filled</div><div class="value pos">${s.both_filled}</div></div>
+      <div class="stat"><div class="label">🎯 Adaptive ONLY</div><div class="value pos">${s.adaptive_only}</div></div>
+      <div class="stat"><div class="label">Static ONLY</div><div class="value neg">${s.static_only}</div></div>
+      <div class="stat"><div class="label">Neither filled</div><div class="value warn">${s.neither}</div></div>
+      <div class="stat">
+        <div class="label">Adaptive advantage</div>
+        <div class="value ${s.adaptive_advantage > 0 ? 'pos' : s.adaptive_advantage < 0 ? 'neg' : 'mute'}">${s.adaptive_advantage > 0 ? '+' : ''}${s.adaptive_advantage}</div>
+      </div>
+    </div>`;
+
+  const rows = (d.trades || []).map((r, i) => {
+    if (r.error) {
+      return `<tr><td colspan="11"><strong>${r.symbol}</strong> — error: ${r.error}</td></tr>`;
+    }
+    const cls = r.winner;
+    const winnerPill = `<span class="pill ${r.winner}">${
+      r.winner === 'both' ? '✓ BOTH' :
+      r.winner === 'adaptive' ? '🎯 ADAPTIVE ONLY' :
+      r.winner === 'static' ? 'STATIC ONLY' :
+      'NEITHER'
+    }</span>`;
+    const tFmt = new Date(r.buy_ts).toLocaleTimeString('en-GB',{hour12:false});
+    return `
+      <tr class="row expandable ${cls}" onclick="toggle('det-${i}')">
+        <td class="mute">${tFmt}</td>
+        <td><strong>${r.symbol}</strong></td>
+        <td class="num">${fmtPrice(r.signal_price)}</td>
+        <td class="num">${fmtPct(-r.static_offset_pct)}</td>
+        <td class="num">${fmtPrice(r.static_buy_price)}</td>
+        <td class="num">${fmtPct(-r.adaptive.offset_pct)}</td>
+        <td class="num">${fmtPrice(r.adaptive.buy_price)}</td>
+        <td class="num ${r.static_fill.filled?'pos':'mute'}">${r.static_fill.filled ? r.static_fill.time_min + 'm' : '—'}</td>
+        <td class="num ${r.adaptive_fill.filled?'pos':'mute'}">${r.adaptive_fill.filled ? r.adaptive_fill.time_min + 'm' : '—'}</td>
+        <td>${winnerPill}</td>
+      </tr>
+      <tr class="detail-row" id="det-${i}" style="display:none;">
+        <td colspan="10">
+          <div class="detail-grid">
+            <div class="detail-box">
+              <div class="lbl">Original iter43 offset</div>
+              <div class="val">${fmtPct(-r.static_offset_pct)}</div>
+            </div>
+            <div class="detail-box">
+              <div class="lbl">Adaptive offset (p50 dip)</div>
+              <div class="val">${fmtPct(-r.adaptive.offset_pct)}</div>
+            </div>
+            <div class="detail-box">
+              <div class="lbl">5m momentum at signal</div>
+              <div class="val ${r.adaptive.momentum_5m >= 0 ? 'pos' : 'neg'}">${fmtPct(r.adaptive.momentum_5m)}</div>
+            </div>
+            <div class="detail-box">
+              <div class="lbl">Dip distribution (p25/p50/p75)</div>
+              <div class="val">${r.adaptive.p25}% · ${r.adaptive.p50}% · ${r.adaptive.p75}%</div>
+            </div>
+            <div class="detail-box">
+              <div class="lbl">Lowest price in 60m</div>
+              <div class="val">${fmtPrice(r.static_fill.min_low)}</div>
+            </div>
+            <div class="detail-box">
+              <div class="lbl">Original bot reason</div>
+              <div class="val mute">${r.exit_reason}</div>
+            </div>
+          </div>
+        </td>
+      </tr>`;
+  }).join('');
+
+  const tableHtml = `
+    <div class="card">
+      <h2>Per-trade replay (click row for details)</h2>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th><th>Symbol</th><th class="num">Signal $</th>
+              <th class="num">Static offset</th><th class="num">Static buy</th>
+              <th class="num">Adaptive offset</th><th class="num">Adaptive buy</th>
+              <th class="num">Static fill</th><th class="num">Adaptive fill</th>
+              <th>Winner</th>
+            </tr>
+          </thead>
+          <tbody>${rows || '<tr><td colspan="10" class="empty">No unfilled trades for this date</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div style="margin-top:10px;padding:10px;background:var(--panel-2);border-radius:6px;font-size:11px;color:var(--muted);">
+        <strong style="color:var(--text);">Row colour:</strong>
+        <span class="pill adaptive">🎯 ADAPTIVE ONLY</span> = adaptive caught a fill static missed (pure improvement) ·
+        <span class="pill both">✓ BOTH</span> = same outcome ·
+        <span class="pill static">STATIC ONLY</span> = regression (would not happen if math is correct) ·
+        <span class="pill neither">NEITHER</span> = coin truly didn't dip
+      </div>
+    </div>`;
+
+  return banner + summaryHtml + tableHtml;
+}
+
+function toggle(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.display = el.style.display === 'none' ? 'table-row' : 'none';
+}
+
+run();
+</script>
+
+</body>
+</html>

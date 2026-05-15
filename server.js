@@ -1825,6 +1825,168 @@ function summariseResults(results) {
     };
 }
 
+// iter 19 fe (2026-05-15): Limit-Buy Replay
+// For every unfilled Buy 1 LIMIT (filled=0 in METRICS:OUTCOME), replays
+// the trade two ways:
+//   1. STATIC — would the original iter43-chosen limit price have filled
+//      within 60 min if the bot's pending_pump_dump_cancel hadn't fired?
+//   2. ADAPTIVE — what offset would the Adaptive Offset Predictor have
+//      recommended, and would IT have filled?
+// Answers: "does the new algorithm break existing auto-buy, or fix it?"
+
+async function fetchKlinesRange(binanceSym, startMs, endMs) {
+    try {
+        const url = `https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1m&startTime=${startMs}&endTime=${endMs}&limit=200`;
+        const r = await fetch(url);
+        if (!r.ok) return null;
+        return await r.json();
+    } catch (_) { return null; }
+}
+
+function computeAdaptiveFromKlines(klines, signalPrice) {
+    if (!klines || klines.length < 10) return null;
+    const opens  = klines.map(k => parseFloat(k[1]));
+    const lows   = klines.map(k => parseFloat(k[3]));
+    const closes = klines.map(k => parseFloat(k[4]));
+    const n = klines.length;
+    const dips = opens.map((o, i) => Math.max(0, (o - lows[i]) / o * 100));
+    const p25 = percentile([...dips].sort((a,b)=>a-b), 25);
+    const p50 = percentile([...dips].sort((a,b)=>a-b), 50);
+    const p75 = percentile([...dips].sort((a,b)=>a-b), 75);
+    const momentum5 = (closes[n-1] / closes[Math.max(0, n-6)] - 1) * 100;
+    let rec;
+    if (momentum5 <= -0.5) rec = p75;
+    else if (momentum5 >= 0.5) rec = p25;
+    else rec = p50;
+    rec = Math.max(0.10, Math.min(2.0, rec));
+    return {
+        offset_pct: +rec.toFixed(3),
+        buy_price: +(signalPrice * (1 - rec/100)).toFixed(10),
+        p25: +p25.toFixed(3),
+        p50: +p50.toFixed(3),
+        p75: +p75.toFixed(3),
+        momentum_5m: +momentum5.toFixed(2),
+    };
+}
+
+function checkFill(klines, limitPrice) {
+    if (!klines) return { filled: false, time_min: null, min_low: null };
+    let minLow = Infinity;
+    for (let i = 0; i < klines.length; i++) {
+        const low = parseFloat(klines[i][3]);
+        if (low < minLow) minLow = low;
+        if (low <= limitPrice) return { filled: true, time_min: i+1, min_low: +low.toFixed(10) };
+    }
+    return { filled: false, time_min: null, min_low: minLow === Infinity ? null : +minLow.toFixed(10) };
+}
+
+app.get('/api/limit-buy-replay', async (req, res) => {
+    try {
+        const date = req.query.date || new Date().toISOString().slice(0, 10);
+        const lookbackMin = parseInt(req.query.lookback_min || '30', 10);
+        const checkMin = parseInt(req.query.check_min || '60', 10);
+
+        // Scan all OUTCOME keys for the date
+        const pattern = `METRICS:OUTCOME:${date}:*`;
+        const stream = redis.scanStream({ match: pattern, count: 100 });
+        const keys = [];
+        stream.on('data', (batch) => keys.push(...batch));
+        await new Promise((resolve) => stream.on('end', resolve));
+
+        // Pull each outcome record
+        const trades = [];
+        for (const k of keys) {
+            const h = await redis.hgetall(k);
+            if (!h || !h.symbol || !h.buy_ts) continue;
+            const filled = parseInt(h.filled || '0', 10);
+            if (filled !== 0) continue;  // only unfilled trades
+            const buy_ts = parseInt(h.buy_ts, 10);
+            const buy_1_limit_price = parseFloat(h.buy_1_limit_price);
+            const signal_price_raw = h.signal_price || '';
+            // Strip np.float64(...) wrapper if present
+            let signal_price = parseFloat(signal_price_raw.replace(/np\.float64\(/, '').replace(/\)$/, ''));
+            if (isNaN(signal_price) || isNaN(buy_1_limit_price)) continue;
+            trades.push({
+                symbol: h.symbol,
+                buy_ts,
+                signal_price,
+                static_buy_price: buy_1_limit_price,
+                exit_reason: h.exit_reason || '',
+                origin: h.scalper_origin || '?',
+            });
+        }
+        // De-dupe by symbol (keep most recent)
+        trades.sort((a, b) => b.buy_ts - a.buy_ts);
+        const seen = new Set();
+        const uniqTrades = trades.filter(t => {
+            if (seen.has(t.symbol)) return false;
+            seen.add(t.symbol);
+            return true;
+        });
+
+        // Replay each — in parallel batches of 3
+        const results = [];
+        for (let i = 0; i < uniqTrades.length; i += 3) {
+            const batch = uniqTrades.slice(i, i + 3);
+            const batchResults = await Promise.all(batch.map(async (t) => {
+                const binanceSym = t.symbol.replace('/', '');
+                // Pre-signal klines (for adaptive)
+                const preStart = t.buy_ts - lookbackMin * 60 * 1000;
+                const preEnd   = t.buy_ts;
+                const preKl = await fetchKlinesRange(binanceSym, preStart, preEnd);
+                // Post-signal klines (for fill check)
+                const postStart = t.buy_ts;
+                const postEnd   = t.buy_ts + checkMin * 60 * 1000;
+                const postKl = await fetchKlinesRange(binanceSym, postStart, postEnd);
+
+                const adaptive = computeAdaptiveFromKlines(preKl, t.signal_price);
+                if (!adaptive) {
+                    return { ...t, error: 'insufficient pre-signal klines' };
+                }
+                const staticFill = checkFill(postKl, t.static_buy_price);
+                const adaptiveFill = checkFill(postKl, adaptive.buy_price);
+
+                let winner;
+                if (staticFill.filled && adaptiveFill.filled) winner = 'both';
+                else if (adaptiveFill.filled && !staticFill.filled) winner = 'adaptive';
+                else if (staticFill.filled && !adaptiveFill.filled) winner = 'static';
+                else winner = 'neither';
+
+                const staticOffsetPct = +(((1 - t.static_buy_price / t.signal_price) * 100).toFixed(3));
+                return {
+                    ...t,
+                    static_offset_pct: staticOffsetPct,
+                    adaptive,
+                    static_fill: staticFill,
+                    adaptive_fill: adaptiveFill,
+                    winner,
+                };
+            }));
+            results.push(...batchResults);
+        }
+
+        // Aggregate
+        const summary = {
+            total_unfilled: results.length,
+            both_filled: results.filter(r => r.winner === 'both').length,
+            adaptive_only: results.filter(r => r.winner === 'adaptive').length,
+            static_only: results.filter(r => r.winner === 'static').length,
+            neither: results.filter(r => r.winner === 'neither').length,
+            errors: results.filter(r => r.error).length,
+        };
+        summary.adaptive_advantage = summary.adaptive_only - summary.static_only;
+
+        res.json({
+            date,
+            params: { lookback_min: lookbackMin, check_min: checkMin },
+            summary,
+            trades: results,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message, stack: err.stack });
+    }
+});
+
 // iter 18 fe (2026-05-15): Adaptive Offset Predictor
 // Analyzes a coin's last 30× 1m candles to recommend the best limit-buy
 // offset. iter43 uses fixed offsets (-0.15% CALM / -0.30% NORMAL /
