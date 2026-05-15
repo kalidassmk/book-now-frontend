@@ -1825,6 +1825,141 @@ function summariseResults(results) {
     };
 }
 
+// iter 21 fe (2026-05-16): Filter Candidate Tester
+// Replay a CANDIDATE pre-buy filter against historical OUTCOME records
+// to see whether it would have helped (blocking losses) or hurt (blocking
+// winners). Used to validate filter ideas BEFORE shipping them.
+//
+// The candidate filter has three knobs:
+//   withinHighPct   — "block when price is within X% of 30d high"
+//   redDaysIn7      — "AND at least Y red daily candles in last 7"
+//   maxReturn30dPct — "AND 30d return is BELOW Z% (i.e. not a strong uptrend)"
+
+app.get('/api/filter-candidate-test', async (req, res) => {
+    try {
+        const dateFrom = req.query.date_from || new Date(Date.now() - 7*24*60*60*1000).toISOString().slice(0,10);
+        const dateTo   = req.query.date_to   || new Date().toISOString().slice(0,10);
+        const withinHi = parseFloat(req.query.within_high_pct || '90');
+        const redDays  = parseInt(req.query.red_days_min    || '4', 10);
+        const maxRet30 = parseFloat(req.query.max_30d_return_pct || '30');
+
+        // Build date list
+        const dates = [];
+        const dFrom = new Date(dateFrom);
+        const dTo   = new Date(dateTo);
+        for (let d = new Date(dFrom); d <= dTo; d.setDate(d.getDate() + 1)) {
+            dates.push(d.toISOString().slice(0,10));
+        }
+
+        // Collect all outcome records across the date range
+        const allTrades = [];
+        for (const date of dates) {
+            const pattern = `METRICS:OUTCOME:${date}:*`;
+            const stream = redis.scanStream({ match: pattern, count: 100 });
+            const keys = [];
+            stream.on('data', (b) => keys.push(...b));
+            await new Promise(r => stream.on('end', r));
+            for (const k of keys) {
+                const h = await redis.hgetall(k);
+                if (!h || !h.symbol || !h.buy_ts) continue;
+                allTrades.push({
+                    date,
+                    symbol: h.symbol,
+                    buy_ts: parseInt(h.buy_ts, 10),
+                    filled: parseInt(h.filled || '0', 10),
+                    exit_reason: h.exit_reason || '',
+                    pnl_usdt: parseFloat(h.pnl_usdt || '0'),
+                });
+            }
+        }
+
+        // De-dupe by symbol+date (keep most recent)
+        allTrades.sort((a, b) => b.buy_ts - a.buy_ts);
+        const seen = new Set();
+        const uniq = allTrades.filter(t => {
+            const k = `${t.date}:${t.symbol}`;
+            if (seen.has(k)) return false;
+            seen.add(k);
+            return true;
+        });
+
+        // For each trade, fetch 30 daily klines ending before buy_ts and compute the metrics
+        const results = [];
+        for (let i = 0; i < uniq.length; i += 5) {
+            const batch = uniq.slice(i, i + 5);
+            const batchResults = await Promise.all(batch.map(async (t) => {
+                const sym = t.symbol.replace('/', '');
+                const start = t.buy_ts - 31 * 24 * 60 * 60 * 1000;
+                const end   = t.buy_ts;
+                try {
+                    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=1d&startTime=${start}&endTime=${end}&limit=31`);
+                    if (!r.ok) return { ...t, error: 'kline_fetch' };
+                    const c1d = (await r.json()).filter(k => k[0] < t.buy_ts).slice(-30);
+                    if (c1d.length < 8) return { ...t, error: 'insufficient_data' };
+                    const closes = c1d.map(k => parseFloat(k[4]));
+                    const opens  = c1d.map(k => parseFloat(k[1]));
+                    const highs  = c1d.map(k => parseFloat(k[2]));
+                    const last_close = closes[closes.length - 1];
+                    const h30 = Math.max(...highs);
+                    const ret30 = (last_close / closes[0] - 1) * 100;
+                    const within = h30 > 0 ? (last_close / h30) * 100 : 0;
+                    const last7open = opens.slice(-7);
+                    const last7close = closes.slice(-7);
+                    const red7 = last7close.reduce((s, cl, i) => s + (cl < last7open[i] ? 1 : 0), 0);
+                    const blocked = within >= withinHi && red7 >= redDays && ret30 < maxRet30;
+                    return {
+                        ...t,
+                        within_30d_high_pct: +within.toFixed(2),
+                        red_days_in_7: red7,
+                        ret_30d_pct: +ret30.toFixed(2),
+                        blocked,
+                    };
+                } catch (e) {
+                    return { ...t, error: e.message };
+                }
+            }));
+            results.push(...batchResults);
+        }
+
+        // Classify outcomes
+        const valid = results.filter(r => !r.error);
+        const isWin = (t) => t.pnl_usdt > 0.005;
+        const isLoss = (t) => t.pnl_usdt < -0.005;
+        const isOpenOrZero = (t) => Math.abs(t.pnl_usdt) <= 0.005;
+
+        const losses_caught   = valid.filter(t => t.blocked && isLoss(t));
+        const wins_blocked    = valid.filter(t => t.blocked && isWin(t));
+        const neutral_blocked = valid.filter(t => t.blocked && isOpenOrZero(t));
+        const losses_missed   = valid.filter(t => !t.blocked && isLoss(t));
+        const wins_kept       = valid.filter(t => !t.blocked && isWin(t));
+
+        const sumPnl = (arr) => +arr.reduce((s, t) => s + t.pnl_usdt, 0).toFixed(4);
+        const summary = {
+            total_trades: valid.length,
+            blocked_total: valid.filter(t => t.blocked).length,
+            losses_caught: losses_caught.length,
+            losses_caught_pnl_saved: -sumPnl(losses_caught),  // negative -> positive savings
+            wins_blocked: wins_blocked.length,
+            wins_blocked_pnl_lost: sumPnl(wins_blocked),       // positive -> lost opportunity
+            neutral_blocked: neutral_blocked.length,
+            losses_missed: losses_missed.length,
+            wins_kept: wins_kept.length,
+            actual_total_pnl: sumPnl(valid),
+            simulated_total_pnl: sumPnl(valid.filter(t => !t.blocked)),
+        };
+        summary.net_impact = +(summary.simulated_total_pnl - summary.actual_total_pnl).toFixed(4);
+        summary.verdict = summary.net_impact > 0.05 ? 'ACCEPT' : summary.net_impact < -0.05 ? 'REJECT' : 'NEUTRAL';
+
+        res.json({
+            params: { dateFrom, dateTo, withinHi, redDays, maxRet30 },
+            summary,
+            trades: results.sort((a, b) => b.buy_ts - a.buy_ts),
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message, stack: err.stack });
+    }
+});
+
 // iter 19 fe (2026-05-15): Limit-Buy Replay
 // For every unfilled Buy 1 LIMIT (filled=0 in METRICS:OUTCOME), replays
 // the trade two ways:

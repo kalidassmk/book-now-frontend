@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Book-Now — Filter Candidate Tester</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --panel-2: #1a232e; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --neutral: #8b949e;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  .sub { color: var(--muted); margin-bottom: 18px; font-size: 13px; }
+  .topnav { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .topnav a { display: inline-block; padding: 6px 14px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 600; }
+  .topnav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .topnav a:not(.active):hover { color: var(--text); border-color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  .card h2 { margin: 0 0 12px; font-size: 14px; color: var(--text); font-weight: 700; }
+
+  .info-banner { padding: 12px 14px; background: rgba(41,182,246,.08); border-left: 3px solid var(--accent); border-radius: 6px; font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+  .info-banner strong { color: var(--accent); }
+  .info-banner code { font-family: 'SF Mono', monospace; color: var(--text); background: rgba(0,0,0,.3); padding: 2px 5px; border-radius: 3px; }
+
+  /* Filter controls */
+  .filter-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .form-field label { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 4px; }
+  .form-field input { width: 100%; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 4px; font: 14px monospace; }
+  .form-field .hint { font-size: 10px; color: var(--muted); margin-top: 3px; }
+  .run-bar { display: flex; gap: 12px; align-items: center; margin-top: 14px; }
+  .run-bar button { padding: 10px 20px; background: var(--accent); color: #fff; border: 0; border-radius: 4px; cursor: pointer; font-weight: 600; }
+  .run-bar button:disabled { opacity: 0.5; cursor: wait; }
+
+  /* Verdict banner */
+  .verdict-banner { padding: 18px 24px; border-radius: 10px; text-align: center; font-size: 18px; font-weight: 700; margin-bottom: 14px; }
+  .verdict-banner.accept { background: rgba(46,204,113,.12); border: 2px solid var(--good); color: var(--good); }
+  .verdict-banner.neutral { background: rgba(41,182,246,.10); border: 2px solid var(--accent); color: var(--accent); }
+  .verdict-banner.reject { background: rgba(231,76,60,.12); border: 2px solid var(--bad); color: var(--bad); }
+  .verdict-banner .sub-text { font-size: 13px; font-weight: 400; color: var(--muted); margin-top: 6px; }
+
+  /* Summary stats */
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .stat { padding: 12px 14px; background: var(--panel-2); border-radius: 6px; }
+  .stat .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .stat .value { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 3px; }
+  .stat .delta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .pos { color: var(--good); } .neg { color: var(--bad); } .mute { color: var(--muted); } .warn { color: var(--warn); }
+
+  /* Trade table */
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--line); font-size: 11px; white-space: nowrap; }
+  th { background: var(--panel-2); color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 9px; letter-spacing: .4px; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.win-blocked td       { background: rgba(231,76,60,.10); border-left: 3px solid var(--bad); }
+  tr.loss-caught td       { background: rgba(46,204,113,.10); border-left: 3px solid var(--good); }
+  tr.win-kept td          { }
+  tr.loss-missed td       { background: rgba(231,76,60,.04); }
+  tr.neutral-blocked td   { background: rgba(241,196,15,.04); }
+
+  .pill { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 9px; font-weight: 700; }
+  .pill.block { background: rgba(231,76,60,.20); color: var(--bad); }
+  .pill.pass  { background: rgba(46,204,113,.15); color: var(--good); }
+  .pill.win   { background: rgba(46,204,113,.20); color: var(--good); }
+  .pill.loss  { background: rgba(231,76,60,.20); color: var(--bad); }
+  .pill.neut  { background: rgba(139,148,158,.20); color: var(--muted); }
+
+  .empty { padding: 30px; text-align: center; color: var(--muted); font-style: italic; }
+
+  /* Preset chips */
+  .preset { display: inline-block; padding: 4px 12px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); border-radius: 4px; cursor: pointer; font-size: 11px; margin: 2px; }
+  .preset:hover { color: var(--text); border-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/">📊 Monitor</a>
+  <a href="/metrics.html">📈 Metrics</a>
+  <a href="/spot.html">📋 Spot</a>
+  <a href="/backtest.html">🔬 Backtest</a>
+  <a href="/decision-trace.html">🔍 Decision Trace</a>
+  <a href="/bounce-watch.html">⤴️ Bounce Watch</a>
+  <a href="/early-pump.html">🚀 Early Pump</a>
+  <a href="/pattern-backtest.html">📊 Pattern Backtest</a>
+  <a href="/pattern-bot.html">🤖 Pattern Bot</a>
+  <a href="/adaptive-offset.html">🎯 Adaptive Offset</a>
+  <a href="/limit-buy-replay.html">🔄 Limit Replay</a>
+  <a href="/filter-candidate.html" class="active">🧪 Filter Tester</a>
+  <a href="/scanner">🏠 Scanner</a>
+</nav>
+
+<h1>Filter Candidate Tester</h1>
+<div class="sub">Validate a proposed pre-buy filter BEFORE shipping it. Run any threshold combo against historical trades and see whether it would have helped or hurt.</div>
+
+<div class="info-banner">
+  <strong>How it works:</strong> Define a "rolling-over momentum" filter by setting 3 thresholds. The tool replays the filter against every trade in the date range and reports:
+  <ul style="margin:6px 0 0;padding-left:18px;">
+    <li><strong>Losses caught:</strong> trades the filter would have BLOCKED that actually lost money — these are saves</li>
+    <li><strong>Wins blocked:</strong> trades the filter would have BLOCKED that actually made money — these are missed opportunity</li>
+    <li><strong>Net impact:</strong> total P&L if the filter had been on, vs the actual P&L without it. Positive = filter helps, negative = filter hurts</li>
+  </ul>
+  Filter logic: block if <code>within_30d_high% ≥ X</code> AND <code>red_days_in_7 ≥ Y</code> AND <code>30d_return% &lt; Z</code>.
+</div>
+
+<div class="card">
+  <h2>Candidate filter parameters</h2>
+  <div class="filter-form">
+    <div class="form-field">
+      <label>Within 30d high % (≥)</label>
+      <input id="withinHigh" type="number" value="90" step="1" min="50" max="100" />
+      <div class="hint">e.g. 90 = "buy price is within 10% of 30d peak"</div>
+    </div>
+    <div class="form-field">
+      <label>Red days in last 7 (≥)</label>
+      <input id="redDays" type="number" value="4" step="1" min="0" max="7" />
+      <div class="hint">how many of last 7 days closed lower than open</div>
+    </div>
+    <div class="form-field">
+      <label>Max 30d return % (&lt;)</label>
+      <input id="maxRet" type="number" value="30" step="5" min="0" max="200" />
+      <div class="hint">only block when 30d return is BELOW this (avoid blocking strong uptrends)</div>
+    </div>
+    <div class="form-field">
+      <label>Date from</label>
+      <input id="dateFrom" type="date" />
+    </div>
+    <div class="form-field">
+      <label>Date to</label>
+      <input id="dateTo" type="date" />
+    </div>
+  </div>
+  <div class="run-bar">
+    <button id="runBtn" onclick="run()">Run test</button>
+    <span class="mute" id="runStatus"></span>
+  </div>
+  <div style="margin-top:14px;">
+    <span class="mute" style="font-size:11px;">Quick presets:</span>
+    <span class="preset" onclick="preset(90,4,30)">iter47 idea (90% / 4d / &lt;30%)</span>
+    <span class="preset" onclick="preset(95,5,50)">Stricter (95% / 5d / &lt;50%)</span>
+    <span class="preset" onclick="preset(85,3,30)">Looser (85% / 3d / &lt;30%)</span>
+    <span class="preset" onclick="preset(0,0,1000)">Off (no blocks)</span>
+  </div>
+</div>
+
+<div id="result"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const today = new Date().toISOString().slice(0,10);
+const weekAgo = new Date(Date.now()-7*86400000).toISOString().slice(0,10);
+$('#dateFrom').value = weekAgo;
+$('#dateTo').value = today;
+
+function preset(h,r,m) { $('#withinHigh').value=h; $('#redDays').value=r; $('#maxRet').value=m; }
+
+function fmtMoney(n, dp=4) {
+  if (n == null || isNaN(n)) return '—';
+  const s = Number(n) >= 0 ? '+' : '−';
+  return s + '$' + Math.abs(n).toFixed(dp);
+}
+function pnlCls(n) {
+  if (n == null) return '';
+  if (n > 0.005) return 'pos';
+  if (n < -0.005) return 'neg';
+  return 'mute';
+}
+
+async function run() {
+  const params = new URLSearchParams({
+    within_high_pct: $('#withinHigh').value,
+    red_days_min: $('#redDays').value,
+    max_30d_return_pct: $('#maxRet').value,
+    date_from: $('#dateFrom').value,
+    date_to: $('#dateTo').value,
+  });
+  $('#runBtn').disabled = true;
+  $('#runStatus').textContent = 'Replaying historical trades…';
+  $('#result').innerHTML = '<div class="card empty">Loading…</div>';
+  try {
+    const r = await fetch('/api/filter-candidate-test?' + params);
+    if (!r.ok) {
+      $('#result').innerHTML = `<div class="card empty">Error: ${r.status}</div>`;
+      return;
+    }
+    const d = await r.json();
+    $('#runStatus').textContent = `${d.summary.total_trades} trades analysed`;
+    $('#result').innerHTML = render(d);
+  } catch (e) {
+    $('#result').innerHTML = `<div class="card empty">Error: ${e.message}</div>`;
+  } finally {
+    $('#runBtn').disabled = false;
+  }
+}
+
+function render(d) {
+  const s = d.summary;
+
+  // Verdict banner
+  const verdictCls = s.verdict === 'ACCEPT' ? 'accept' : s.verdict === 'REJECT' ? 'reject' : 'neutral';
+  const verdictIcon = s.verdict === 'ACCEPT' ? '✅' : s.verdict === 'REJECT' ? '🚫' : '⚖️';
+  const verdictHtml = `
+    <div class="verdict-banner ${verdictCls}">
+      ${verdictIcon} VERDICT: ${s.verdict}
+      <div class="sub-text">
+        ${
+          s.verdict === 'ACCEPT' ? `This filter SAVES money — net P&L would have improved by ${fmtMoney(s.net_impact, 2)}.` :
+          s.verdict === 'REJECT' ? `This filter LOSES money — would have cost ${fmtMoney(-s.net_impact, 2)} (blocks more wins than losses caught).` :
+          `This filter is roughly neutral — net impact ${fmtMoney(s.net_impact, 2)}.`
+        }
+      </div>
+    </div>`;
+
+  const summaryHtml = `
+    <div class="summary">
+      <div class="stat">
+        <div class="label">Total trades analysed</div>
+        <div class="value">${s.total_trades}</div>
+        <div class="delta">${s.blocked_total} would have been blocked</div>
+      </div>
+      <div class="stat">
+        <div class="label">✅ Losses caught</div>
+        <div class="value pos">${s.losses_caught}</div>
+        <div class="delta">saved ${fmtMoney(s.losses_caught_pnl_saved, 2)}</div>
+      </div>
+      <div class="stat">
+        <div class="label">❌ Wins blocked</div>
+        <div class="value neg">${s.wins_blocked}</div>
+        <div class="delta">missed ${fmtMoney(s.wins_blocked_pnl_lost, 2)}</div>
+      </div>
+      <div class="stat">
+        <div class="label">Neutral blocked</div>
+        <div class="value mute">${s.neutral_blocked}</div>
+        <div class="delta">no impact (zero/open)</div>
+      </div>
+      <div class="stat">
+        <div class="label">Actual total P&L</div>
+        <div class="value ${pnlCls(s.actual_total_pnl)}">${fmtMoney(s.actual_total_pnl, 2)}</div>
+      </div>
+      <div class="stat">
+        <div class="label">Simulated total P&L</div>
+        <div class="value ${pnlCls(s.simulated_total_pnl)}">${fmtMoney(s.simulated_total_pnl, 2)}</div>
+      </div>
+      <div class="stat" style="border:2px solid ${s.net_impact>0 ? 'var(--good)' : s.net_impact<0 ? 'var(--bad)' : 'var(--neutral)'};">
+        <div class="label">Net impact (sim − actual)</div>
+        <div class="value ${pnlCls(s.net_impact)}">${fmtMoney(s.net_impact, 2)}</div>
+      </div>
+    </div>`;
+
+  // Trades table
+  const rows = (d.trades || []).map(t => {
+    let cls;
+    if (t.blocked && t.pnl_usdt < -0.005) cls = 'loss-caught';
+    else if (t.blocked && t.pnl_usdt > 0.005) cls = 'win-blocked';
+    else if (t.blocked) cls = 'neutral-blocked';
+    else if (t.pnl_usdt < -0.005) cls = 'loss-missed';
+    else if (t.pnl_usdt > 0.005) cls = 'win-kept';
+    else cls = '';
+    return `
+      <tr class="${cls}">
+        <td class="mute">${t.date}</td>
+        <td><strong>${t.symbol}</strong></td>
+        <td class="num">${t.within_30d_high_pct != null ? t.within_30d_high_pct + '%' : '—'}</td>
+        <td class="num">${t.red_days_in_7 != null ? t.red_days_in_7 + '/7' : '—'}</td>
+        <td class="num">${t.ret_30d_pct != null ? (t.ret_30d_pct >= 0 ? '+' : '') + t.ret_30d_pct + '%' : '—'}</td>
+        <td>${t.blocked ? '<span class="pill block">🚫 BLOCK</span>' : '<span class="pill pass">✓ pass</span>'}</td>
+        <td class="num ${pnlCls(t.pnl_usdt)}">${fmtMoney(t.pnl_usdt)}</td>
+        <td class="mute">${t.exit_reason || '—'}</td>
+      </tr>`;
+  }).join('');
+
+  const tableHtml = `
+    <div class="card">
+      <h2>Per-trade results</h2>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead><tr>
+            <th>Date</th><th>Symbol</th><th class="num">Within 30d hi</th>
+            <th class="num">Red/7</th><th class="num">30d return</th>
+            <th>Filter</th><th class="num">Actual P&L</th><th>Bot exit reason</th>
+          </tr></thead>
+          <tbody>${rows || '<tr><td colspan="8" class="empty">No trades in this date range</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div style="margin-top:10px;padding:10px;background:var(--panel-2);border-radius:6px;font-size:11px;color:var(--muted);">
+        <strong style="color:var(--text);">Row colour:</strong>
+        <span class="pill loss" style="background:rgba(46,204,113,.10);border-left:3px solid var(--good);">✅ loss caught</span> (filter saved you money) ·
+        <span class="pill loss" style="background:rgba(231,76,60,.10);border-left:3px solid var(--bad);">❌ win blocked</span> (filter cost you money) ·
+        <span style="opacity:.5">no highlight</span> = unchanged
+      </div>
+    </div>`;
+
+  return verdictHtml + summaryHtml + tableHtml;
+}
+
+run();
+</script>
+
+</body>
+</html>
