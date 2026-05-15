@@ -222,6 +222,8 @@ function statusPill(reason, pnl) {
     if (r === 'hard_stop_from_avg')   return '<span class="pill stop">🛡️ HARD STOP</span>';
     // iter44: macro-top exhaustion pre-buy skip (only seen on SKIP events, not outcomes)
     if (r === 'macro_top')            return '<span class="pill stale">🪦 MACRO TOP</span>';
+    // iter45: volatility regime pre-buy skip
+    if (r === 'vol_regime')           return '<span class="pill stale">🌪️ VOL REGIME</span>';
     // iter41 (2026-05-15): Post-Buy-2 careful monitor exits
     if (r.startsWith('active2_quick_profit'))    return `<span class="pill trail">💰 A2 QUICK PROFIT +$${Number(pnl||0).toFixed(2)}</span>`;
     if (r.startsWith('active2_tight_breakeven')) return '<span class="pill flat">⚖️ A2 BREAK-EVEN</span>';
@@ -323,6 +325,10 @@ async function loadSafetyStack() {
                 'Block when coin has rallied massively, is near top of rally, AND showing distribution (red days).',
                 !!c.macroTopFilterEnabled,
                 `30d return≥${c.macroTopMinReturnPct}% · within ${100-c.macroTopWithinHighPct}% of high · ≥${c.macroTopMinRedDaysIn7} red days/7`),
+            buildSafetyRow('GATE 5', '🌪️ Volatility Regime Filter (iter 45)',
+                'Block when coin recently crashed or has extreme daily ranges. Catches MLN-style chaos.',
+                !!c.volRegimeFilterEnabled,
+                `max ${c.volRegimeLookbackDays}d range>${c.volRegimeMaxDailyRangePct}% OR any day ≤−${c.volRegimeBigCrashPct}%`),
             buildSafetyRow('ENTRY', '🎚️ Volatility-Adaptive Entry + TP (iter 43)',
                 'At signal time pick deeper Buy 1 offset + higher TP for volatile coins. 4 tiers based on range_1h_pct.',
                 !!c.adaptiveEntryEnabled,
