@@ -1029,6 +1029,17 @@ const DEFAULT_TRADING_CONFIG = {
     ladderBuy1OffsetPct: 0.15,        // 0 = market; >0 = LIMIT at signal × (1-X%) — iter 12 default
     ladderCooldownSeconds: 14400,    // 4h per-coin cooldown after a ladder closes
     metricsEnabled: true,
+
+    // iter 17 fe (2026-05-15): Pattern Bot config defaults.
+    // 3rd auto-trader driven by Bounce Watch / Early Pump pattern
+    // detectors. Paper-mode by default — flip to live after validation.
+    patternBotEnabled: true,           // master switch
+    patternBotPaperMode: true,         // true = log paper trades, no real orders
+    patternBotAlgo: 'early_pump',      // 'bounce' | 'early_pump' | 'both'
+    patternBotMinScore: 70,            // tighter than detector's 60 (no losses goal)
+    patternBotStopPct: 1.5,            // -1.5% cat-stop (tighter than iter39's 2.5%)
+    patternBotMaxFreshSec: 60,         // detection must be < 60s old to trade
+    patternBotTimeoutMin: 240,         // 4h max hold then close at market
 };
 
 app.get('/api/v1/config', async (req, res) => {
@@ -1813,6 +1824,94 @@ function summariseResults(results) {
         avg_tp_resolve_min: avgTpMin !== null ? +avgTpMin.toFixed(1) : null,
     };
 }
+
+// iter 17 fe: Pattern Bot endpoints
+app.get('/api/pattern-bot/status', async (req, res) => {
+    try {
+        const cfg = JSON.parse((await redis.get(CONFIG_KEY)) || '{}');
+        const status = await redis.hgetall('PATTERN_BOT:STATUS') || {};
+        const open = await redis.hgetall('PATTERN_BOT:OPEN') || {};
+        const openTrades = Object.values(open).map(v => { try { return JSON.parse(v); } catch (_) { return null; } }).filter(Boolean);
+        res.json({
+            config: {
+                enabled: !!cfg.patternBotEnabled,
+                paper_mode: !!cfg.patternBotPaperMode,
+                algo: cfg.patternBotAlgo || 'early_pump',
+                min_score: cfg.patternBotMinScore ?? 70,
+                stop_pct: cfg.patternBotStopPct ?? 1.5,
+                max_fresh_sec: cfg.patternBotMaxFreshSec ?? 60,
+                timeout_min: cfg.patternBotTimeoutMin ?? 240,
+            },
+            status: {
+                last_poll_ts: status.last_poll_ts ? +status.last_poll_ts : null,
+                last_eval_count: status.last_eval_count ? +status.last_eval_count : 0,
+                last_executed: status.last_executed ? +status.last_executed : 0,
+                pattern_open: status.pattern_open ? +status.pattern_open : 0,
+                slot_available: status.slot_available === '1',
+            },
+            open_trades: openTrades,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/pattern-bot/trades', async (req, res) => {
+    try {
+        const date = req.query.date || new Date().toISOString().slice(0, 10);
+        const mode = req.query.mode || 'paper';  // paper | live | both
+        const limit = parseInt(req.query.limit || '100', 10);
+        const result = { date, paper_trades: [], live_trades: [], skips: [] };
+
+        if (mode === 'paper' || mode === 'both') {
+            const raw = await redis.lrange(`PATTERN_BOT:PAPER_TRADES:${date}`, 0, limit - 1);
+            result.paper_trades = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+        }
+        if (mode === 'live' || mode === 'both') {
+            const raw = await redis.lrange(`PATTERN_BOT:LIVE_TRADES:${date}`, 0, limit - 1);
+            result.live_trades = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+        }
+        const skipsRaw = await redis.lrange(`PATTERN_BOT:SKIPS:${date}`, 0, 50);
+        result.skips = skipsRaw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+
+        // Summary
+        const trades = [...result.paper_trades, ...result.live_trades];
+        const wins = trades.filter(t => t.outcome === 'tp_hit').length;
+        const losses = trades.filter(t => t.outcome === 'stop_loss').length;
+        const timeouts = trades.filter(t => t.outcome === 'timeout').length;
+        const totalPnl = trades.reduce((s, t) => s + (t.net_pnl || 0), 0);
+        result.summary = {
+            total: trades.length,
+            wins, losses, timeouts,
+            win_rate_pct: trades.length ? +(wins / trades.length * 100).toFixed(1) : 0,
+            total_pnl_usdt: +totalPnl.toFixed(4),
+        };
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/pattern-bot/toggle', async (req, res) => {
+    try {
+        const { enabled, paper_mode, algo, min_score } = req.body || {};
+        const existingRaw = await redis.get(CONFIG_KEY);
+        const existing = existingRaw ? JSON.parse(existingRaw) : {};
+        const merged = { ...DEFAULT_TRADING_CONFIG, ...existing };
+        if (typeof enabled === 'boolean') merged.patternBotEnabled = enabled;
+        if (typeof paper_mode === 'boolean') merged.patternBotPaperMode = paper_mode;
+        if (typeof algo === 'string') merged.patternBotAlgo = algo;
+        if (typeof min_score === 'number') merged.patternBotMinScore = min_score;
+        await redis.set(CONFIG_KEY, JSON.stringify(merged));
+        res.json({ success: true,
+            enabled: merged.patternBotEnabled,
+            paper_mode: merged.patternBotPaperMode,
+            algo: merged.patternBotAlgo,
+            min_score: merged.patternBotMinScore });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 
 app.get('/api/pattern-backtest', async (req, res) => {
     try {
@@ -3162,7 +3261,21 @@ io.on('connection', async socket => {
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 redis.connect().catch(() => { });
+redisAnalyse.connect().catch(() => { });
+
+// iter 17 fe (2026-05-15): Pattern Bot worker
+const patternBot = require('./pattern-bot-worker');
+
 server.listen(PORT, () => {
     console.log(`\n🚀 BookNow Fast Dashboard → http://localhost:${PORT}`);
     console.log(`📡 Polling Redis every ${POLL_MS}ms\n`);
+
+    // Start pattern bot 5s after server boot (gives Redis time to connect)
+    setTimeout(() => {
+        try {
+            patternBot.start({ redis, redisAnalyse, port: PORT });
+        } catch (e) {
+            console.error('[pattern-bot] failed to start:', e.message);
+        }
+    }, 5000);
 });

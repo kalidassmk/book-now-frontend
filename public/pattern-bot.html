@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Book-Now — Pattern Bot</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --panel-2: #1a232e; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --neutral: #8b949e;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  .sub { color: var(--muted); margin-bottom: 18px; font-size: 13px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:.4;transform:scale(.85);} }
+  .topnav { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .topnav a { display: inline-block; padding: 6px 14px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 600; }
+  .topnav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .topnav a:not(.active):hover { color: var(--text); border-color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  .card h2 { margin: 0 0 12px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 600; }
+
+  /* Master toggle */
+  .master { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; margin-bottom: 14px; }
+  .master .switch-block { padding: 14px 18px; background: var(--panel-2); border-radius: 8px; border-left: 4px solid var(--neutral); flex: 1; min-width: 200px; }
+  .master .switch-block.on { border-left-color: var(--good); }
+  .master .switch-block.live { border-left-color: var(--bad); }
+  .master .switch-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .master .switch-value { font-size: 20px; font-weight: 700; margin-top: 4px; }
+  .master button { padding: 8px 16px; background: var(--accent); color: #fff; border: 0; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; }
+  .master button:hover { filter: brightness(1.1); }
+  .master button.danger { background: var(--bad); }
+  .master button.warn { background: var(--warn); color: #000; }
+  .toggle-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .toggle-row label { font-size: 12px; color: var(--muted); }
+  .toggle-row select, .toggle-row input { padding: 4px 8px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 4px; font-size: 12px; }
+
+  /* Summary stats */
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .stat { padding: 10px 12px; background: var(--panel-2); border-radius: 6px; }
+  .stat .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .stat .value { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 3px; }
+  .pos { color: var(--good); } .neg { color: var(--bad); } .mute { color: var(--muted); } .warn { color: var(--warn); }
+
+  /* Open positions */
+  .open-pos { background: linear-gradient(135deg, rgba(41,182,246,.08) 0%, var(--panel) 100%); border-color: var(--accent); }
+  .pos-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+  .pos-item { padding: 10px 14px; background: var(--panel-2); border-radius: 6px; }
+  .pos-item .lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; }
+  .pos-item .val { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 3px; }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--line); font-size: 11px; white-space: nowrap; }
+  th { background: var(--panel-2); color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 9px; letter-spacing: .4px; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.tp td { background: rgba(46,204,113,.04); }
+  tr.stop td { background: rgba(231,76,60,.05); }
+  tr.timeout td { background: rgba(241,196,15,.04); }
+  .pill { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 9px; font-weight: 700; }
+  .pill.tp { background: rgba(46,204,113,.20); color: var(--good); }
+  .pill.stop { background: rgba(231,76,60,.20); color: var(--bad); }
+  .pill.timeout { background: rgba(241,196,15,.20); color: var(--warn); }
+  .pill.paper { background: rgba(139,148,158,.20); color: var(--muted); }
+  .pill.live { background: rgba(231,76,60,.20); color: var(--bad); font-weight: 700; }
+  .empty { padding: 30px; text-align: center; color: var(--muted); font-style: italic; }
+
+  .info-banner { padding: 12px 14px; background: rgba(241,196,15,.08); border-left: 3px solid var(--warn); border-radius: 6px; font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+  .info-banner strong { color: var(--warn); }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/">📊 Monitor</a>
+  <a href="/metrics.html">📈 Metrics</a>
+  <a href="/spot.html">📋 Spot</a>
+  <a href="/backtest.html">🔬 Backtest</a>
+  <a href="/decision-trace.html">🔍 Decision Trace</a>
+  <a href="/bounce-watch.html">⤴️ Bounce Watch</a>
+  <a href="/early-pump.html">🚀 Early Pump</a>
+  <a href="/pattern-backtest.html">📊 Pattern Backtest</a>
+  <a href="/pattern-bot.html" class="active">🤖 Pattern Bot</a>
+  <a href="/scanner">🏠 Scanner</a>
+</nav>
+
+<h1>Pattern Bot — auto-trader driven by detection algorithms</h1>
+<div class="sub">
+  <span class="live-dot"></span>
+  <span>Auto-refresh every 10s · last update <span id="lastUpdate">never</span></span>
+  <span class="mute">·</span>
+  <span>3rd auto-trader. Reads Bounce / Early-Pump detections, applies safety stack, executes trades.</span>
+</div>
+
+<div class="info-banner">
+  <strong>⚠️ Paper mode by default.</strong> Pattern Bot starts in paper-trading mode — every detection that passes safety checks
+  creates a simulated trade with TP +0.567% (= +$0.15 net) and stop -1.5%. Outcomes logged to Redis.
+  <strong>After 24-48h of validated wins, switch to LIVE</strong> with the toggle below.
+</div>
+
+<div class="card">
+  <h2>Master controls</h2>
+  <div class="master">
+    <div class="switch-block" id="enabledBlock">
+      <div class="switch-label">Bot enabled</div>
+      <div class="switch-value" id="enabledVal">—</div>
+    </div>
+    <div class="switch-block" id="modeBlock">
+      <div class="switch-label">Trading mode</div>
+      <div class="switch-value" id="modeVal">—</div>
+    </div>
+    <div class="switch-block">
+      <div class="switch-label">Pattern source</div>
+      <div class="switch-value mute" id="algoVal">—</div>
+    </div>
+    <div class="switch-block">
+      <div class="switch-label">Min score</div>
+      <div class="switch-value mute" id="minScoreVal">—</div>
+    </div>
+    <div class="switch-block">
+      <div class="switch-label">Slot available?</div>
+      <div class="switch-value" id="slotVal">—</div>
+    </div>
+  </div>
+  <div class="toggle-row">
+    <button id="toggleEnabled" onclick="toggle('enabled')">Toggle bot</button>
+    <button id="toggleMode" onclick="toggle('mode')" class="warn">Switch mode</button>
+    <label>Algo: <select id="algoSel" onchange="toggle('algo')">
+      <option value="early_pump">early_pump</option>
+      <option value="bounce">bounce</option>
+      <option value="both">both</option>
+    </select></label>
+    <label>Min score: <input id="minScoreInput" type="number" min="40" max="100" step="5" onchange="toggle('score')" /></label>
+  </div>
+</div>
+
+<div class="card open-pos" id="openPosCard">
+  <h2>Open positions (max 1 — shared with Fast & Virtual)</h2>
+  <div id="openPosBody"><div class="empty">No open positions</div></div>
+</div>
+
+<div class="card">
+  <h2>Today — paper trades P&amp;L summary</h2>
+  <div class="summary" id="summary">
+    <div class="stat"><div class="label">Total trades</div><div class="value">—</div></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Today's paper trades</h2>
+  <div style="overflow-x:auto;">
+    <table id="tradeTable">
+      <thead>
+        <tr>
+          <th>Time</th><th>Symbol</th><th>Mode</th><th>Source</th><th class="num">Score</th>
+          <th class="num">Buy @</th><th class="num">Exit @</th><th class="num">TP</th><th class="num">Stop</th>
+          <th class="num">Hold</th><th class="num">Net P&L</th><th>Outcome</th>
+        </tr>
+      </thead>
+      <tbody><tr><td colspan="12" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Skipped detections (failed safety check)</h2>
+  <div style="overflow-x:auto;">
+    <table id="skipTable">
+      <thead><tr><th>Time</th><th>Symbol</th><th class="num">Score</th><th>Source</th><th>Block reason</th></tr></thead>
+      <tbody><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+function fmtPrice(n) {
+  if (n == null || isNaN(n)) return '—';
+  const a = Math.abs(n);
+  if (a >= 100) return n.toFixed(2);
+  if (a >= 1) return n.toFixed(4);
+  return n.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+}
+function fmtMoney(n, dp=4) {
+  if (n == null || isNaN(n)) return '—';
+  const s = Number(n) >= 0 ? '+' : '−';
+  return s + '$' + Math.abs(n).toFixed(dp);
+}
+function pnlClass(n) {
+  if (n == null) return '';
+  if (n > 0.005) return 'pos';
+  if (n < -0.005) return 'neg';
+  return 'mute';
+}
+function outcomePill(o) {
+  if (o === 'tp_hit') return '<span class="pill tp">✅ TP</span>';
+  if (o === 'stop_loss') return '<span class="pill stop">🛑 STOP</span>';
+  if (o === 'timeout') return '<span class="pill timeout">⏱ TIMEOUT</span>';
+  return '';
+}
+
+let _config = {};
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/pattern-bot/status');
+    const d = await r.json();
+    _config = d.config;
+    $('#lastUpdate').textContent = new Date().toLocaleTimeString();
+    renderMaster(d);
+    renderOpen(d.open_trades);
+    loadTrades();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function renderMaster(d) {
+  const c = d.config; const s = d.status;
+  // Enabled block
+  $('#enabledVal').textContent = c.enabled ? '● ON' : '○ OFF';
+  $('#enabledVal').className = 'switch-value ' + (c.enabled ? 'pos' : 'neg');
+  $('#enabledBlock').className = 'switch-block ' + (c.enabled ? 'on' : '');
+  $('#toggleEnabled').textContent = c.enabled ? 'Turn OFF' : 'Turn ON';
+  $('#toggleEnabled').className = c.enabled ? 'danger' : '';
+  // Mode block
+  $('#modeVal').textContent = c.paper_mode ? '📝 PAPER' : '💰 LIVE';
+  $('#modeVal').className = 'switch-value ' + (c.paper_mode ? 'warn' : 'neg');
+  $('#modeBlock').className = 'switch-block ' + (!c.paper_mode ? 'live' : '');
+  $('#toggleMode').textContent = c.paper_mode ? 'Switch to LIVE' : 'Switch to PAPER';
+  // Other
+  $('#algoVal').textContent = c.algo || '—';
+  $('#minScoreVal').textContent = '≥ ' + c.min_score;
+  $('#slotVal').textContent = s.slot_available ? '✓ available' : '✗ taken';
+  $('#slotVal').className = 'switch-value ' + (s.slot_available ? 'pos' : 'mute');
+  $('#algoSel').value = c.algo || 'early_pump';
+  $('#minScoreInput').value = c.min_score;
+}
+
+function renderOpen(trades) {
+  const body = $('#openPosBody');
+  if (!trades || !trades.length) {
+    body.innerHTML = '<div class="empty">No open positions</div>';
+    return;
+  }
+  body.innerHTML = trades.map(t => `
+    <div class="pos-grid">
+      <div class="pos-item">
+        <div class="lbl">Symbol</div>
+        <div class="val">${t.symbol} <span class="pill ${t.mode}">${t.mode.toUpperCase()}</span></div>
+      </div>
+      <div class="pos-item">
+        <div class="lbl">Buy price</div>
+        <div class="val">${fmtPrice(t.buy_price)}</div>
+      </div>
+      <div class="pos-item">
+        <div class="lbl">TP @</div>
+        <div class="val pos">${fmtPrice(t.tp_price)}</div>
+      </div>
+      <div class="pos-item">
+        <div class="lbl">Stop @</div>
+        <div class="val neg">${fmtPrice(t.stop_price)}</div>
+      </div>
+      <div class="pos-item">
+        <div class="lbl">Detection score</div>
+        <div class="val">${t.detection_score}</div>
+      </div>
+      <div class="pos-item">
+        <div class="lbl">Source</div>
+        <div class="val mute">${t.source}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function loadTrades() {
+  try {
+    const r = await fetch('/api/pattern-bot/trades?mode=both');
+    const d = await r.json();
+    // Summary
+    const s = d.summary || {};
+    $('#summary').innerHTML = `
+      <div class="stat"><div class="label">Total trades</div><div class="value">${s.total||0}</div></div>
+      <div class="stat"><div class="label">✅ Wins</div><div class="value pos">${s.wins||0}</div></div>
+      <div class="stat"><div class="label">🛑 Losses</div><div class="value neg">${s.losses||0}</div></div>
+      <div class="stat"><div class="label">⏱ Timeouts</div><div class="value warn">${s.timeouts||0}</div></div>
+      <div class="stat"><div class="label">Win rate</div><div class="value ${s.win_rate_pct>=50?'pos':'mute'}">${s.win_rate_pct||0}%</div></div>
+      <div class="stat"><div class="label">Total P&amp;L</div><div class="value ${pnlClass(s.total_pnl_usdt)}">${fmtMoney(s.total_pnl_usdt, 2)}</div></div>
+    `;
+    // Trades table
+    const all = [...(d.paper_trades||[]), ...(d.live_trades||[])].sort((a,b)=>b.opened_ts - a.opened_ts);
+    const tbody = document.querySelector('#tradeTable tbody');
+    if (!all.length) {
+      tbody.innerHTML = '<tr><td colspan="12" class="empty">No trades yet today</td></tr>';
+    } else {
+      tbody.innerHTML = all.map(t => {
+        const time = new Date(t.opened_ts).toLocaleTimeString('en-GB',{hour12:false});
+        const cls = t.outcome === 'tp_hit' ? 'tp' : (t.outcome === 'stop_loss' ? 'stop' : (t.outcome === 'timeout' ? 'timeout' : ''));
+        return `
+          <tr class="${cls}">
+            <td class="mute">${time}</td>
+            <td><strong>${t.symbol}</strong></td>
+            <td><span class="pill ${t.mode}">${t.mode.toUpperCase()}</span></td>
+            <td class="mute">${t.source}</td>
+            <td class="num">${t.detection_score}</td>
+            <td class="num">${fmtPrice(t.buy_price)}</td>
+            <td class="num">${fmtPrice(t.exit_price)}</td>
+            <td class="num pos">${fmtPrice(t.tp_price)}</td>
+            <td class="num neg">${fmtPrice(t.stop_price)}</td>
+            <td class="num mute">${t.hold_minutes?.toFixed?.(0) || '—'}m</td>
+            <td class="num ${pnlClass(t.net_pnl)}">${fmtMoney(t.net_pnl)}</td>
+            <td>${outcomePill(t.outcome)}</td>
+          </tr>`;
+      }).join('');
+    }
+    // Skips
+    const skips = d.skips || [];
+    const skipBody = document.querySelector('#skipTable tbody');
+    if (!skips.length) {
+      skipBody.innerHTML = '<tr><td colspan="5" class="empty">No safety-check skips today</td></tr>';
+    } else {
+      skipBody.innerHTML = skips.map(s => {
+        const t = new Date(s.ts).toLocaleTimeString('en-GB',{hour12:false});
+        return `<tr><td class="mute">${t}</td><td><strong>${s.symbol}</strong></td><td class="num">${s.score}</td><td class="mute">${s.source}</td><td class="mute">${s.reason}</td></tr>`;
+      }).join('');
+    }
+  } catch (e) { console.error(e); }
+}
+
+async function toggle(what) {
+  const body = {};
+  if (what === 'enabled') body.enabled = !_config.enabled;
+  else if (what === 'mode') {
+    if (!_config.paper_mode) {
+      if (!confirm('Switch from LIVE to PAPER mode?')) return;
+    } else {
+      if (!confirm('⚠️ Switch from PAPER to LIVE mode? Real money will be at risk!')) return;
+    }
+    body.paper_mode = !_config.paper_mode;
+  } else if (what === 'algo') {
+    body.algo = $('#algoSel').value;
+  } else if (what === 'score') {
+    body.min_score = parseInt($('#minScoreInput').value, 10);
+  }
+  try {
+    const r = await fetch('/api/pattern-bot/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      alert('Toggle failed: ' + r.status);
+      return;
+    }
+    refresh();
+  } catch (e) {
+    alert('Toggle failed: ' + e.message);
+  }
+}
+
+refresh();
+setInterval(refresh, 10000);
+</script>
+
+</body>
+</html>
