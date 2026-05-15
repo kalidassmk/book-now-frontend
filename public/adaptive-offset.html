@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Book-Now — Adaptive Offset Predictor</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --panel-2: #1a232e; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --neutral: #8b949e;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  .sub { color: var(--muted); margin-bottom: 18px; font-size: 13px; }
+  .topnav { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .topnav a { display: inline-block; padding: 6px 14px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 600; }
+  .topnav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .topnav a:not(.active):hover { color: var(--text); border-color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 14px; }
+  .card h2 { margin: 0 0 14px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 600; }
+
+  .search { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .search input { flex: 1; min-width: 220px; padding: 10px 14px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 6px; font: 14px monospace; }
+  .search button { padding: 10px 20px; background: var(--accent); color: #fff; border: 0; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; }
+  .chip { display: inline-block; padding: 4px 10px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); border-radius: 4px; cursor: pointer; font-size: 11px; margin: 2px; }
+  .chip:hover { color: var(--text); border-color: var(--accent); }
+
+  /* Verdict banner */
+  .verdict-banner { padding: 16px 20px; border-radius: 8px; text-align: center; font-size: 14px; font-weight: 600; margin-bottom: 14px; }
+  .verdict-banner.use_adaptive { background: rgba(46,204,113,.12); border: 2px solid var(--good); color: var(--good); }
+  .verdict-banner.keep_static  { background: rgba(41,182,246,.10); border: 2px solid var(--accent); color: var(--accent); }
+  .verdict-banner.consider     { background: rgba(241,196,15,.10); border: 2px solid var(--warn); color: var(--warn); }
+  .verdict-banner .reason { font-size: 12px; font-weight: 400; color: var(--muted); margin-top: 6px; }
+
+  /* Side-by-side comparison */
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+  .compare-box { padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .compare-box.static { border-left: 4px solid var(--neutral); }
+  .compare-box.adaptive { border-left: 4px solid var(--accent); }
+  .compare-box .header { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 8px; }
+  .compare-box .title { font-size: 16px; font-weight: 700; margin-bottom: 12px; }
+  .compare-box .row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed var(--line); }
+  .compare-box .row:last-child { border-bottom: none; }
+  .compare-box .row .k { font-size: 11px; color: var(--muted); }
+  .compare-box .row .v { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .pos { color: var(--good); } .neg { color: var(--bad); } .mute { color: var(--muted); } .warn { color: var(--warn); }
+
+  /* Stats */
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .stat { padding: 10px 12px; background: var(--panel-2); border-radius: 6px; }
+  .stat .label { font-size: 10px; color: var(--muted); text-transform: uppercase; }
+  .stat .value { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 3px; }
+
+  /* Fill probability bars */
+  .fill-prob-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+  .fill-prob-label { min-width: 80px; font-family: 'SF Mono', monospace; font-size: 12px; font-weight: 600; }
+  .fill-prob-bar { flex: 1; height: 18px; background: var(--line); border-radius: 3px; overflow: hidden; position: relative; }
+  .fill-prob-fill { height: 100%; background: linear-gradient(to right, var(--bad) 0%, var(--warn) 50%, var(--good) 100%); transition: width 0.3s; }
+  .fill-prob-val { min-width: 60px; text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; font-weight: 600; }
+
+  .error { padding: 14px; background: rgba(231,76,60,.10); color: var(--bad); border-radius: 6px; }
+  .empty { padding: 30px; text-align: center; color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/">📊 Monitor</a>
+  <a href="/metrics.html">📈 Metrics</a>
+  <a href="/spot.html">📋 Spot</a>
+  <a href="/backtest.html">🔬 Backtest</a>
+  <a href="/decision-trace.html">🔍 Decision Trace</a>
+  <a href="/bounce-watch.html">⤴️ Bounce Watch</a>
+  <a href="/early-pump.html">🚀 Early Pump</a>
+  <a href="/pattern-backtest.html">📊 Pattern Backtest</a>
+  <a href="/pattern-bot.html">🤖 Pattern Bot</a>
+  <a href="/adaptive-offset.html" class="active">🎯 Adaptive Offset</a>
+  <a href="/scanner">🏠 Scanner</a>
+</nav>
+
+<h1>Adaptive Offset Predictor</h1>
+<div class="sub">Analyzes any coin's last 30× 1m candles to recommend the BEST limit-buy offset. Compares iter43 static tier vs adaptive computed offset side-by-side.</div>
+
+<div class="card">
+  <h2>Check a coin</h2>
+  <div class="search">
+    <input id="symInput" type="text" placeholder="Symbol e.g. CHZUSDT" value="CHZUSDT" />
+    <button onclick="check()">Analyze</button>
+  </div>
+  <div style="margin-top:10px;">
+    <span style="font-size:11px;color:var(--muted);">Try:</span>
+    <span class="chip" onclick="quick('CHZUSDT')">CHZUSDT</span>
+    <span class="chip" onclick="quick('BTCUSDT')">BTCUSDT</span>
+    <span class="chip" onclick="quick('ETHUSDT')">ETHUSDT</span>
+    <span class="chip" onclick="quick('SOLUSDT')">SOLUSDT</span>
+    <span class="chip" onclick="quick('PEPEUSDT')">PEPEUSDT</span>
+    <span class="chip" onclick="quick('FLOKIUSDT')">FLOKIUSDT</span>
+  </div>
+</div>
+
+<div id="result"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+
+function quick(s) { $('#symInput').value = s; check(); }
+
+function fmtPrice(n) {
+  if (n == null || isNaN(n)) return '—';
+  const a = Math.abs(n);
+  if (a >= 100) return n.toFixed(2);
+  if (a >= 1) return n.toFixed(4);
+  return n.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+}
+function fmtPct(n, dp=2) {
+  if (n == null || isNaN(n)) return '—';
+  const s = Number(n) >= 0 ? '+' : '';
+  return s + Number(n).toFixed(dp) + '%';
+}
+
+async function check() {
+  const sym = $('#symInput').value.trim();
+  if (!sym) return;
+  $('#result').innerHTML = '<div class="card empty">Analyzing 30 minutes of price data…</div>';
+  try {
+    const r = await fetch('/api/adaptive-offset?symbol=' + encodeURIComponent(sym));
+    const d = await r.json();
+    if (!r.ok) {
+      $('#result').innerHTML = `<div class="card"><div class="error">Error: ${d.error}</div></div>`;
+      return;
+    }
+    $('#result').innerHTML = render(d);
+  } catch (e) {
+    $('#result').innerHTML = `<div class="card"><div class="error">Network error: ${e.message}</div></div>`;
+  }
+}
+
+function render(d) {
+  const v = d.verdict;
+  const verdictCls = v.recommendation === 'USE_ADAPTIVE' ? 'use_adaptive'
+                   : v.recommendation === 'KEEP_STATIC' ? 'keep_static'
+                   : 'consider';
+  const verdictIcon = v.recommendation === 'USE_ADAPTIVE' ? '🎯'
+                    : v.recommendation === 'KEEP_STATIC' ? '✓'
+                    : '⚠️';
+
+  const verdictHtml = `
+    <div class="verdict-banner ${verdictCls}">
+      ${verdictIcon} ${v.recommendation.replace('_',' ')}
+      <div class="reason">${v.reason}</div>
+    </div>`;
+
+  const compareHtml = `
+    <div class="compare">
+      <div class="compare-box static">
+        <div class="header">iter 43 Static Tier</div>
+        <div class="title">${d.iter43.tier}</div>
+        <div class="row"><span class="k">Static offset</span><span class="v">−${d.iter43.static_offset_pct}%</span></div>
+        <div class="row"><span class="k">Buy price (LIMIT)</span><span class="v">${fmtPrice(d.iter43.static_buy_price)}</span></div>
+        <div class="row"><span class="k">Historical fill probability</span><span class="v ${d.iter43.static_fill_prob >= 0.5 ? 'pos' : d.iter43.static_fill_prob >= 0.2 ? 'warn' : 'neg'}">${(d.iter43.static_fill_prob*100).toFixed(0)}%</span></div>
+      </div>
+      <div class="compare-box adaptive">
+        <div class="header">Adaptive Recommendation</div>
+        <div class="title">−${d.adaptive.recommended.offset_pct}%</div>
+        <div class="row"><span class="k">Recommended offset</span><span class="v">−${d.adaptive.recommended.offset_pct}%</span></div>
+        <div class="row"><span class="k">Buy price (LIMIT)</span><span class="v">${fmtPrice(d.adaptive.recommended.buy_price)}</span></div>
+        <div class="row"><span class="k">Expected fill probability</span><span class="v pos">${(d.adaptive.recommended.expected_fill_prob*100).toFixed(0)}%</span></div>
+      </div>
+    </div>`;
+
+  const marketHtml = `
+    <div class="card">
+      <h2>Market snapshot</h2>
+      <div class="stats-grid">
+        <div class="stat">
+          <div class="label">Last price</div>
+          <div class="value">${fmtPrice(d.market.last_price)}</div>
+        </div>
+        <div class="stat">
+          <div class="label">24h change</div>
+          <div class="value ${d.market.change_24h_pct>=0?'pos':'neg'}">${fmtPct(d.market.change_24h_pct)}</div>
+        </div>
+        <div class="stat">
+          <div class="label">1h range</div>
+          <div class="value">${d.market.range_1h_pct.toFixed(2)}%</div>
+        </div>
+        <div class="stat">
+          <div class="label">5m momentum</div>
+          <div class="value ${d.adaptive.momentum_5m_pct>=0?'pos':'neg'}">${fmtPct(d.adaptive.momentum_5m_pct)}</div>
+        </div>
+        <div class="stat">
+          <div class="label">5m spread</div>
+          <div class="value">${d.adaptive.spread_5m_pct.toFixed(2)}%</div>
+        </div>
+        <div class="stat">
+          <div class="label">Samples analyzed</div>
+          <div class="value mute">${d.adaptive.n_candles}</div>
+        </div>
+      </div>
+    </div>`;
+
+  const dipHtml = `
+    <div class="card">
+      <h2>Dip distribution (last ${d.adaptive.n_candles}× 1m candles, % below candle open)</h2>
+      <div class="stats-grid">
+        <div class="stat"><div class="label">p25 dip</div><div class="value">${d.adaptive.dip_stats.p25}%</div></div>
+        <div class="stat"><div class="label">p50 (median)</div><div class="value">${d.adaptive.dip_stats.p50}%</div></div>
+        <div class="stat"><div class="label">p75 dip</div><div class="value">${d.adaptive.dip_stats.p75}%</div></div>
+        <div class="stat"><div class="label">Max dip</div><div class="value warn">${d.adaptive.dip_stats.max_pct}%</div></div>
+        <div class="stat"><div class="label">Vol-weighted median</div><div class="value">${d.adaptive.dip_stats.vw_median}%</div></div>
+      </div>
+      <div style="margin-top:14px;padding:12px;background:var(--panel-2);border-radius:6px;font-size:12px;color:var(--muted);">
+        <strong style="color:var(--text);">Reading the percentiles:</strong>
+        25% of candles dipped at least <code>${d.adaptive.dip_stats.p25}%</code> below open. Median dip is <code>${d.adaptive.dip_stats.p50}%</code>. 75% of candles dipped at least <code>${d.adaptive.dip_stats.p75}%</code>. The adaptive algorithm uses p50 as the base (50% fill probability target), adjusted for current momentum.
+      </div>
+    </div>`;
+
+  const fp = d.adaptive.fill_probabilities;
+  const fpHtml = `
+    <div class="card">
+      <h2>Fill probability per offset</h2>
+      <div style="margin-bottom:6px;font-size:11px;color:var(--muted);">If you'd placed a limit at this offset on the last 30 candles, what % would have filled?</div>
+      ${Object.entries(fp).map(([offset, prob]) => {
+        const pct = (prob * 100).toFixed(0);
+        const isCurrent = parseFloat(offset) === d.iter43.static_offset_pct;
+        return `
+          <div class="fill-prob-row">
+            <span class="fill-prob-label">−${offset}%${isCurrent ? ' ←' : ''}</span>
+            <div class="fill-prob-bar"><div class="fill-prob-fill" style="width:${prob*100}%;"></div></div>
+            <span class="fill-prob-val ${prob >= 0.5 ? 'pos' : prob >= 0.2 ? 'warn' : 'neg'}">${pct}%</span>
+          </div>`;
+      }).join('')}
+      <div style="margin-top:10px;font-size:11px;color:var(--muted);">
+        ← arrow points to iter43's current static offset for this coin's tier (${d.iter43.tier})
+      </div>
+    </div>`;
+
+  return verdictHtml + compareHtml + marketHtml + dipHtml + fpHtml;
+}
+
+check();
+</script>
+
+</body>
+</html>

@@ -1825,6 +1825,189 @@ function summariseResults(results) {
     };
 }
 
+// iter 18 fe (2026-05-15): Adaptive Offset Predictor
+// Analyzes a coin's last 30× 1m candles to recommend the best limit-buy
+// offset. iter43 uses fixed offsets (-0.15% CALM / -0.30% NORMAL /
+// -0.70% VOLATILE / -1.50% X_VOLATILE) which can miss fills on calm
+// coins or give up edge on choppy ones. This predictor returns the
+// offset with ~50% historical fill probability.
+
+function percentile(sortedArr, p) {
+    if (!sortedArr.length) return 0;
+    const idx = (sortedArr.length - 1) * (p / 100);
+    const lo = Math.floor(idx), hi = Math.ceil(idx);
+    if (lo === hi) return sortedArr[lo];
+    return sortedArr[lo] + (sortedArr[hi] - sortedArr[lo]) * (idx - lo);
+}
+
+function computeAdaptiveOffset(klines, current_price) {
+    if (!klines || klines.length < 10) return null;
+    const opens = klines.map(k => parseFloat(k[1]));
+    const highs = klines.map(k => parseFloat(k[2]));
+    const lows  = klines.map(k => parseFloat(k[3]));
+    const closes= klines.map(k => parseFloat(k[4]));
+    const vols  = klines.map(k => parseFloat(k[5]) * parseFloat(k[4]));   // USDT vol
+    const n = klines.length;
+
+    // Dip from open of each candle: (open - low) / open * 100
+    // Only positive dips count (when low < open)
+    const dipsFromOpen = opens.map((o, i) => Math.max(0, (o - lows[i]) / o * 100));
+    const sortedDips = [...dipsFromOpen].sort((a, b) => a - b);
+    const p25 = +percentile(sortedDips, 25).toFixed(4);
+    const p50 = +percentile(sortedDips, 50).toFixed(4);
+    const p75 = +percentile(sortedDips, 75).toFixed(4);
+    const maxDip = +Math.max(...dipsFromOpen).toFixed(4);
+
+    // Volume-weighted median dip (weight each dip by its candle's volume)
+    const totalVol = vols.reduce((s, v) => s + v, 0);
+    let cumVol = 0, vwMedian = p50;
+    if (totalVol > 0) {
+        const pairs = dipsFromOpen.map((d, i) => ({ d, v: vols[i] })).sort((a, b) => a.d - b.d);
+        for (const { d, v } of pairs) {
+            cumVol += v;
+            if (cumVol >= totalVol / 2) { vwMedian = +d.toFixed(4); break; }
+        }
+    }
+
+    // Fill probability at each iter43 static offset
+    const fillProb = (offsetPct) => {
+        let hits = 0;
+        for (let i = 0; i < n; i++) {
+            if (lows[i] <= opens[i] * (1 - offsetPct / 100)) hits++;
+        }
+        return +(hits / n).toFixed(3);
+    };
+    const fillProbabilities = {
+        '0.15': fillProb(0.15),
+        '0.30': fillProb(0.30),
+        '0.70': fillProb(0.70),
+        '1.50': fillProb(1.50),
+    };
+
+    // Recent momentum — last 5min drift
+    const recent5_close = closes[n-1];
+    const recent5_open  = closes[Math.max(0, n-6)];
+    const momentum_5m_pct = +((recent5_close / recent5_open - 1) * 100).toFixed(2);
+
+    // Spread proxy — last 5min high-low range
+    const recent5_high = Math.max(...highs.slice(-5));
+    const recent5_low  = Math.min(...lows.slice(-5));
+    const spread_5m_pct = recent5_low > 0 ? +((recent5_high - recent5_low) / recent5_low * 100).toFixed(2) : 0;
+
+    // Recommended adaptive offset:
+    // Base = p50 (median dip)
+    // Floor = 0.10% (don't go tighter than this)
+    // Ceiling = 2.0% (don't go deeper than this)
+    // If momentum is strongly negative, allow deeper (price is dropping)
+    // If momentum strongly positive, tighter (price is rising, less dip)
+    let recommended = p50;
+    if (momentum_5m_pct <= -0.5) recommended = p75;       // dropping → use deeper offset
+    else if (momentum_5m_pct >= 0.5) recommended = p25;   // rising → use shallower
+    recommended = Math.max(0.10, Math.min(2.0, recommended));
+    recommended = +recommended.toFixed(3);
+
+    // Compute expected fill probability for the recommended offset
+    const recFillProb = fillProb(recommended);
+
+    return {
+        n_candles: n,
+        dip_stats: { p25, p50, p75, max_pct: maxDip, vw_median: vwMedian },
+        fill_probabilities: fillProbabilities,
+        momentum_5m_pct,
+        spread_5m_pct,
+        recommended: {
+            offset_pct: recommended,
+            buy_price: +(current_price * (1 - recommended / 100)).toFixed(8),
+            expected_fill_prob: recFillProb,
+            reason: momentum_5m_pct <= -0.5
+                ? `Momentum negative (${momentum_5m_pct}% in 5m) — use p75 dip = ${p75}% for higher fill rate.`
+                : momentum_5m_pct >= 0.5
+                ? `Momentum positive (${momentum_5m_pct}% in 5m) — use p25 dip = ${p25}% (price rising, smaller dips).`
+                : `Neutral momentum — use p50 dip = ${p50}% (50% historical fill).`,
+        },
+    };
+}
+
+app.get('/api/adaptive-offset', async (req, res) => {
+    const sym = (req.query.symbol || '').toUpperCase().trim();
+    if (!sym) return res.status(400).json({ error: 'symbol query param required' });
+    const binanceSym = sym.includes('/') ? sym.replace('/', '') : sym;
+    const ccxtSym = sym.includes('/') ? sym : (sym.endsWith('USDT') ? sym.slice(0, -4) + '/USDT' : sym);
+
+    try {
+        const cfgRaw = await redis.get(CONFIG_KEY);
+        const cfg = { ...DEFAULT_TRADING_CONFIG, ...(cfgRaw ? JSON.parse(cfgRaw) : {}) };
+
+        // Fetch ticker + 30× 1m klines + 1× 1h kline (for tier classification)
+        const [tickerRes, klinesRes, hourlyRes] = await Promise.all([
+            fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${binanceSym}`).then(r => r.json()),
+            fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1m&limit=30`).then(r => r.json()),
+            fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1h&limit=2`).then(r => r.json()),
+        ]);
+        if (tickerRes.code) return res.status(404).json({ error: tickerRes.msg || 'binance error' });
+        if (!Array.isArray(klinesRes)) return res.status(502).json({ error: 'klines fetch failed' });
+
+        const lastPrice = parseFloat(tickerRes.lastPrice);
+        const change24 = parseFloat(tickerRes.priceChangePercent);
+
+        // 1h range → iter43 tier
+        const last1h = hourlyRes[hourlyRes.length - 1];
+        const h1 = parseFloat(last1h[2]); const l1 = parseFloat(last1h[3]);
+        const range1h = l1 > 0 ? (h1 - l1) / l1 * 100 : 0;
+
+        let tier, staticOffset;
+        if (range1h < cfg.adaptiveTierCalmMaxPct) { tier = 'CALM'; staticOffset = cfg.adaptiveBuy1OffsetCalm; }
+        else if (range1h < cfg.adaptiveTierNormalMaxPct) { tier = 'NORMAL'; staticOffset = cfg.adaptiveBuy1OffsetNormal; }
+        else if (range1h < cfg.adaptiveTierVolatileMaxPct) { tier = 'VOLATILE'; staticOffset = cfg.adaptiveBuy1OffsetVolatile; }
+        else { tier = 'X_VOLATILE'; staticOffset = cfg.adaptiveBuy1OffsetXVolatile; }
+
+        const adaptive = computeAdaptiveOffset(klinesRes, lastPrice);
+        if (!adaptive) return res.status(500).json({ error: 'insufficient klines' });
+
+        // Static iter43 fill probability
+        const staticFillProb = adaptive.fill_probabilities[String(staticOffset)] ?? null;
+
+        // Verdict
+        let verdict;
+        if (staticFillProb !== null && staticFillProb < 0.20) {
+            verdict = {
+                recommendation: 'USE_ADAPTIVE',
+                reason: `iter43 static -${staticOffset}% has only ${(staticFillProb*100).toFixed(0)}% fill probability. Adaptive -${adaptive.recommended.offset_pct}% has ${(adaptive.recommended.expected_fill_prob*100).toFixed(0)}%.`,
+            };
+        } else if (staticFillProb !== null && staticFillProb >= 0.50) {
+            verdict = {
+                recommendation: 'KEEP_STATIC',
+                reason: `iter43 static -${staticOffset}% already has ${(staticFillProb*100).toFixed(0)}% fill probability — no need to change.`,
+            };
+        } else {
+            verdict = {
+                recommendation: 'CONSIDER_ADAPTIVE',
+                reason: `iter43 static fill prob = ${(staticFillProb*100).toFixed(0)}%, adaptive = ${(adaptive.recommended.expected_fill_prob*100).toFixed(0)}%. Either is reasonable.`,
+            };
+        }
+
+        res.json({
+            symbol: ccxtSym,
+            timestamp: new Date().toISOString(),
+            market: {
+                last_price: lastPrice,
+                change_24h_pct: +change24.toFixed(2),
+                range_1h_pct: +range1h.toFixed(2),
+            },
+            iter43: {
+                tier,
+                static_offset_pct: staticOffset,
+                static_buy_price: +(lastPrice * (1 - staticOffset / 100)).toFixed(8),
+                static_fill_prob: staticFillProb,
+            },
+            adaptive,
+            verdict,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // iter 17 fe: Pattern Bot endpoints
 app.get('/api/pattern-bot/status', async (req, res) => {
     try {
