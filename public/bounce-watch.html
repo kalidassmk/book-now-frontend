@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Book-Now — Bounce Watch</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --panel-2: #1a232e; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --neutral: #8b949e;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  .sub { color: var(--muted); margin-bottom: 18px; font-size: 13px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:.4;transform:scale(.85);} }
+  .topnav { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .topnav a { display: inline-block; padding: 6px 14px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 600; }
+  .topnav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .topnav a:not(.active):hover { color: var(--text); border-color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+  .card h2 { margin: 0 0 10px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 600; }
+
+  /* Controls bar */
+  .controls { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--muted); }
+  .controls label { display: flex; align-items: center; gap: 6px; }
+  .controls input { width: 80px; padding: 4px 8px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 4px; }
+  .controls button { padding: 6px 14px; background: var(--accent); color: #fff; border: 0; border-radius: 4px; cursor: pointer; font-weight: 600; }
+
+  /* Summary cards */
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .stat { padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .stat .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .stat .value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 4px; }
+  .pos { color: var(--good); } .neg { color: var(--bad); } .mute { color: var(--muted); } .warn { color: var(--warn); }
+
+  /* Watchlist table */
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); font-size: 12px; white-space: nowrap; }
+  th { background: var(--panel-2); color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .4px; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.row { cursor: pointer; }
+  tr.row.expandable:hover td { background: rgba(255,255,255,.03); }
+  tr.row.hot td { background: rgba(46,204,113,.06); }
+  tr.row.warm td { background: rgba(241,196,15,.04); }
+
+  /* Score badge */
+  .score-cell { display: inline-flex; align-items: center; gap: 8px; }
+  .score-bar { width: 60px; height: 8px; background: var(--line); border-radius: 2px; overflow: hidden; position: relative; }
+  .score-bar-fill { height: 100%; background: var(--bad); transition: width 0.3s, background 0.3s; }
+  .score-bar-fill.warm { background: var(--warn); }
+  .score-bar-fill.hot { background: var(--good); }
+  .score-num { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 28px; }
+
+  /* Factor chips */
+  .factor-chip { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 10px; margin: 1px; font-family: 'SF Mono', monospace; }
+  .factor-chip.on { background: rgba(46,204,113,.15); color: var(--good); }
+  .factor-chip.off { background: rgba(139,148,158,.10); color: var(--muted); }
+
+  /* Detail row */
+  tr.detail-row td { padding: 14px 16px; background: rgba(20,27,36,.6); font-size: 12px; }
+  .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+  .detail-box { padding: 10px 12px; background: var(--panel-2); border-radius: 6px; border-left: 3px solid var(--accent); }
+  .detail-box .lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; }
+  .detail-box .val { font-size: 14px; font-weight: 600; margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+  .empty { padding: 40px; text-align: center; color: var(--muted); font-style: italic; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 10px; font-weight: 600; }
+  .pill.hot { background: rgba(46,204,113,.20); color: var(--good); }
+  .pill.warm { background: rgba(241,196,15,.18); color: var(--warn); }
+  .pill.cold { background: rgba(139,148,158,.20); color: var(--muted); }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/">📊 Monitor</a>
+  <a href="/metrics.html">📈 Metrics</a>
+  <a href="/spot.html">📋 Spot</a>
+  <a href="/backtest.html">🔬 Backtest</a>
+  <a href="/decision-trace.html">🔍 Decision Trace</a>
+  <a href="/bounce-watch.html" class="active">⤴️ Bounce Watch</a>
+  <a href="/scanner">🏠 Scanner</a>
+</nav>
+
+<h1>Bounce Watch — oversold coin bounce predictor</h1>
+<div class="sub">
+  <span class="live-dot"></span>
+  <span>Auto-refresh every 15s · last update <span id="lastUpdate">never</span></span>
+  <span class="mute">·</span>
+  <span>Scoring oversold coins (≥5% down 24h) for bounce-reversal patterns</span>
+</div>
+
+<div class="card">
+  <h2>Filters</h2>
+  <div class="controls">
+    <label>Min 24h drop: <input id="minDown" type="number" value="5" min="1" step="0.5" />%</label>
+    <label>Min 24h vol: <input id="minVol" type="number" value="2" min="0.1" step="0.5" />M USDT</label>
+    <label>Show top: <input id="limit" type="number" value="30" min="5" max="100" step="5" /></label>
+    <label>Hot score ≥: <input id="hotScore" type="number" value="60" min="30" max="100" step="5" /></label>
+    <button onclick="refresh(true)">Refresh now</button>
+  </div>
+</div>
+
+<div class="summary">
+  <div class="stat">
+    <div class="label">Coins down ≥ threshold</div>
+    <div class="value neg" id="totalDown">—</div>
+  </div>
+  <div class="stat">
+    <div class="label">🔥 Hot bounce candidates</div>
+    <div class="value pos" id="hotCount">—</div>
+  </div>
+  <div class="stat">
+    <div class="label">🟡 Warm (score 40-59)</div>
+    <div class="value warn" id="warmCount">—</div>
+  </div>
+  <div class="stat">
+    <div class="label">Highest score now</div>
+    <div class="value" id="topScore">—</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Watchlist — sorted by bounce score (click row for factor detail)</h2>
+  <div style="overflow-x:auto;">
+    <table id="watchTable">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th class="num">Price</th>
+          <th class="num">24h %</th>
+          <th class="num">24h vol $M</th>
+          <th class="num">5m rec %</th>
+          <th class="num">Vol surge</th>
+          <th class="num">Buy ratio</th>
+          <th class="num">Bounce score</th>
+          <th>Verdict</th>
+        </tr>
+      </thead>
+      <tbody><tr><td colspan="9" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Recent high-score detections (today's pattern library)</h2>
+  <div style="overflow-x:auto;">
+    <table id="detTable">
+      <thead><tr><th>Time UTC</th><th>Symbol</th><th class="num">Score</th><th class="num">24h %</th><th>Key factors</th></tr></thead>
+      <tbody><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+
+function fmtPrice(n) {
+  if (n == null || isNaN(n)) return '—';
+  const a = Math.abs(n);
+  if (a >= 100) return n.toFixed(2);
+  if (a >= 1) return n.toFixed(4);
+  return n.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+}
+function fmtPct(n, dp=2) {
+  if (n == null || isNaN(n)) return '—';
+  const s = Number(n) >= 0 ? '+' : '';
+  return s + Number(n).toFixed(dp) + '%';
+}
+function scoreClass(s) {
+  if (s >= 60) return 'hot';
+  if (s >= 40) return 'warm';
+  return 'cold';
+}
+function scoreColor(s) {
+  if (s >= 60) return 'pos';
+  if (s >= 40) return 'warn';
+  return 'mute';
+}
+
+let _state = { hotThreshold: 60 };
+
+async function refresh(manual=false) {
+  const minDown = $('#minDown').value;
+  const minVol = $('#minVol').value;
+  const limit = $('#limit').value;
+  const hotScore = parseInt($('#hotScore').value, 10);
+  _state.hotThreshold = hotScore;
+  try {
+    const url = `/api/bounce-watch?min_down_pct=${minDown}&min_vol_m=${minVol}&limit=${limit}&score_threshold=${hotScore}`;
+    const r = await fetch(url);
+    if (!r.ok) {
+      document.querySelector('#watchTable tbody').innerHTML = `<tr><td colspan="9" class="empty">Error: ${r.status}</td></tr>`;
+      return;
+    }
+    const d = await r.json();
+    $('#lastUpdate').textContent = new Date(d.timestamp).toLocaleTimeString();
+    renderSummary(d);
+    renderTable(d.ranked || []);
+  } catch (e) {
+    document.querySelector('#watchTable tbody').innerHTML = `<tr><td colspan="9" class="empty">Network error: ${e.message}</td></tr>`;
+  }
+  loadDetections();
+}
+
+function renderSummary(d) {
+  const hot = (d.ranked || []).filter(x => x.bounce.score >= _state.hotThreshold).length;
+  const warm = (d.ranked || []).filter(x => x.bounce.score >= 40 && x.bounce.score < _state.hotThreshold).length;
+  const top = (d.ranked || [])[0]?.bounce.score || 0;
+  $('#totalDown').textContent = d.total_down_movers;
+  $('#hotCount').textContent = hot;
+  $('#warmCount').textContent = warm;
+  $('#topScore').textContent = top;
+  $('#topScore').className = 'value ' + scoreColor(top);
+}
+
+function renderTable(rows) {
+  const tbody = document.querySelector('#watchTable tbody');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">No oversold coins match your filters</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map((r, i) => {
+    const f = r.bounce.factors;
+    const score = r.bounce.score;
+    const cls = scoreClass(score);
+    const rowCls = score >= _state.hotThreshold ? 'hot' : (score >= 40 ? 'warm' : '');
+    const verdict = score >= _state.hotThreshold ? '🔥 hot bounce candidate'
+                  : score >= 40 ? '🟡 watch closely'
+                  : '⚪ cold';
+    return `
+      <tr class="row expandable ${rowCls}" onclick="toggleDetail('det-${i}')">
+        <td><strong>${r.symbol}</strong></td>
+        <td class="num">${fmtPrice(r.last_price)}</td>
+        <td class="num neg">${fmtPct(r.change_24h_pct)}</td>
+        <td class="num mute">${(r.quote_volume_24h_usd/1e6).toFixed(2)}</td>
+        <td class="num ${f.recovery_5m_pct>=0?'pos':'neg'}">${fmtPct(f.recovery_5m_pct)}</td>
+        <td class="num ${f.vol_surge_ratio>=2?'pos':'mute'}">${f.vol_surge_ratio.toFixed(2)}×</td>
+        <td class="num ${f.taker_buy_ratio_pct>55?'pos':'mute'}">${f.taker_buy_ratio_pct.toFixed(0)}%</td>
+        <td class="num">
+          <span class="score-cell">
+            <span class="score-bar"><span class="score-bar-fill ${cls}" style="width:${score}%;"></span></span>
+            <span class="score-num ${scoreColor(score)}">${score}</span>
+          </span>
+        </td>
+        <td><span class="pill ${cls}">${verdict}</span></td>
+      </tr>
+      <tr class="detail-row" id="det-${i}" style="display:none;">
+        <td colspan="9">
+          <div class="detail-grid">
+            <div class="detail-box">
+              <div class="lbl">F1 · Recovery momentum (35)</div>
+              <div class="val">${f.recovery_pts}/35 — last 5min ${fmtPct(f.recovery_5m_pct)}</div>
+            </div>
+            <div class="detail-box">
+              <div class="lbl">F2 · Volume surge (25)</div>
+              <div class="val">${f.vol_surge_pts}/25 — ${f.vol_surge_ratio.toFixed(2)}× vs prior 25min</div>
+            </div>
+            <div class="detail-box">
+              <div class="lbl">F3 · Higher lows in 10m (15)</div>
+              <div class="val">${f.higher_lows_pts}/15 — ${f.higher_lows_10}/9 candles</div>
+            </div>
+            <div class="detail-box">
+              <div class="lbl">F4 · Above MA(7) (10)</div>
+              <div class="val">${f.above_ma7_pts}/10 — ${f.above_ma7 ? '✓ above' : '✗ below'}</div>
+            </div>
+            <div class="detail-box">
+              <div class="lbl">F5 · Velocity flip (15)</div>
+              <div class="val">${f.velocity_flip_pts}/15 — before ${fmtPct(f.drift_before_pct)} → after ${fmtPct(f.drift_after_pct)}</div>
+            </div>
+            <div class="detail-box">
+              <div class="lbl">Bonus · Taker buy %</div>
+              <div class="val">${f.taker_buy_ratio_pct.toFixed(1)}% (>50 = bullish)</div>
+            </div>
+          </div>
+          <div style="margin-top:10px;font-size:11px;color:var(--muted);">
+            Last close $${fmtPrice(r.bounce.last_close)} · 5m low $${fmtPrice(r.bounce.last_5min_low)} · avg trades/min ${r.bounce.avg_trades_per_min}
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+function toggleDetail(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.display = el.style.display === 'none' ? 'table-row' : 'none';
+}
+
+async function loadDetections() {
+  try {
+    const r = await fetch('/api/bounce-detections?limit=50');
+    if (!r.ok) return;
+    const d = await r.json();
+    const tbody = document.querySelector('#detTable tbody');
+    if (!d.events.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty">No hot detections logged yet today.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = d.events.map(ev => {
+      const t = new Date(ev.ts).toLocaleTimeString('en-GB', {hour12:false});
+      const f = ev.factors || {};
+      const keys = [];
+      if (f.recovery_pts > 0) keys.push(`recov ${f.recovery_5m_pct?.toFixed?.(2)}%`);
+      if (f.vol_surge_ratio >= 2) keys.push(`vol ${f.vol_surge_ratio?.toFixed?.(2)}×`);
+      if (f.higher_lows_10 >= 6) keys.push(`HL ${f.higher_lows_10}/9`);
+      if (f.taker_buy_ratio_pct > 55) keys.push(`buy ${f.taker_buy_ratio_pct?.toFixed?.(0)}%`);
+      return `
+        <tr>
+          <td class="mute">${t}</td>
+          <td><strong>${ev.symbol}</strong></td>
+          <td class="num pos">${ev.score}</td>
+          <td class="num neg">${fmtPct(ev.change_24h_pct)}</td>
+          <td class="mute">${keys.join(' · ')}</td>
+        </tr>
+      `;
+    }).join('');
+  } catch (_) {}
+}
+
+refresh();
+setInterval(refresh, 15000);
+</script>
+
+</body>
+</html>

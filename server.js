@@ -1308,6 +1308,203 @@ app.get('/api/recent-decisions', async (req, res) => {
     }
 });
 
+// iter 14 fe (2026-05-15): Bounce Watch — score oversold coins for
+// potential pump reversal. Scans top movers, picks the most-down ones
+// with healthy volume, and computes a 0-100 "bounce score" from 1m
+// klines (recovery momentum + volume surge + higher lows + MA cross +
+// velocity flip). Detections are logged to Redis so we build a pattern
+// library for prediction.
+const _bounceKlinesCache = new Map();
+const BOUNCE_KLINES_TTL_MS = 30 * 1000;  // 30s
+
+async function fetchKlines1m(binanceSym, limit = 30) {
+    const cached = _bounceKlinesCache.get(binanceSym);
+    if (cached && Date.now() - cached.ts < BOUNCE_KLINES_TTL_MS) return cached.data;
+    try {
+        const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1m&limit=${limit}`);
+        if (!r.ok) return null;
+        const data = await r.json();
+        _bounceKlinesCache.set(binanceSym, { ts: Date.now(), data });
+        return data;
+    } catch (_) { return null; }
+}
+
+function computeBounceScore(klines) {
+    // klines: array of [openTime, open, high, low, close, volume, ..., trades, takerBuyBase, takerBuyQuote]
+    if (!klines || klines.length < 20) return null;
+    const opens = klines.map(k => parseFloat(k[1]));
+    const highs = klines.map(k => parseFloat(k[2]));
+    const lows  = klines.map(k => parseFloat(k[3]));
+    const closes= klines.map(k => parseFloat(k[4]));
+    const vols  = klines.map(k => parseFloat(k[5]) * parseFloat(k[4]));   // quote-vol (USDT)
+    const trades= klines.map(k => parseInt(k[8] || 0, 10));
+    const tbQuote = klines.map(k => parseFloat(k[10] || 0));  // taker buy quote vol
+
+    const n = klines.length;
+    const last5 = closes.slice(-5);
+    const prior25 = closes.slice(-30, -5);
+
+    // F1: Recovery momentum — last 5min close vs 5min ago close
+    const close_now = closes[n-1];
+    const close_5min_ago = closes[Math.max(0, n-6)];
+    const recovery_pct = (close_now / close_5min_ago - 1) * 100;
+    let f1 = 0;
+    if (recovery_pct >= 1.0) f1 = 35;
+    else if (recovery_pct >= 0.5) f1 = 25;
+    else if (recovery_pct >= 0.2) f1 = 15;
+    else if (recovery_pct > 0) f1 = 5;
+
+    // F2: Volume surge — last 5min vs prior 25min
+    const vol5 = vols.slice(-5).reduce((s,v)=>s+v,0) / 5;
+    const vol25 = vols.slice(-30,-5).reduce((s,v)=>s+v,0) / Math.max(1, vols.slice(-30,-5).length);
+    const vol_ratio = vol25 > 0 ? vol5 / vol25 : 0;
+    let f2 = 0;
+    if (vol_ratio >= 3) f2 = 25;
+    else if (vol_ratio >= 2) f2 = 18;
+    else if (vol_ratio >= 1.5) f2 = 10;
+    else if (vol_ratio >= 1.0) f2 = 5;
+
+    // F3: Higher lows — last 10 candles
+    const recent10 = lows.slice(-10);
+    let hl_count = 0;
+    for (let i = 1; i < recent10.length; i++) {
+        if (recent10[i] > recent10[i-1]) hl_count++;
+    }
+    let f3 = 0;
+    if (hl_count >= 6) f3 = 15;
+    else if (hl_count >= 4) f3 = 8;
+    else if (hl_count >= 3) f3 = 3;
+
+    // F4: Above MA(7)
+    const last7 = closes.slice(-7);
+    const ma7 = last7.reduce((s,c)=>s+c,0) / 7;
+    const f4 = close_now > ma7 ? 10 : 0;
+
+    // F5: Velocity flip — was negative trend, now positive
+    const mid = Math.floor(n/2);
+    const drift_before = (closes[mid-1] - closes[0]) / closes[0] * 100;
+    const drift_after  = (close_now - closes[mid]) / closes[mid] * 100;
+    let f5 = 0;
+    if (drift_before < -0.3 && drift_after > 0.3) f5 = 15;
+    else if (drift_before < 0 && drift_after > 0) f5 = 8;
+    else if (drift_after > drift_before) f5 = 3;
+
+    // F6 (bonus): taker buy ratio in last 5min
+    const tb5 = tbQuote.slice(-5).reduce((s,v)=>s+v,0);
+    const tv5 = vols.slice(-5).reduce((s,v)=>s+v,0);
+    const buy_ratio = tv5 > 0 ? (tb5 / tv5) : 0.5;
+    // Higher buy ratio = more aggressive buying = bullish
+    const buy_ratio_pct = buy_ratio * 100;
+
+    const score = f1 + f2 + f3 + f4 + f5;
+
+    return {
+        score,
+        factors: {
+            recovery_5m_pct: +recovery_pct.toFixed(2),
+            recovery_pts: f1,
+            vol_surge_ratio: +vol_ratio.toFixed(2),
+            vol_surge_pts: f2,
+            higher_lows_10: hl_count,
+            higher_lows_pts: f3,
+            above_ma7: close_now > ma7,
+            above_ma7_pts: f4,
+            drift_before_pct: +drift_before.toFixed(2),
+            drift_after_pct: +drift_after.toFixed(2),
+            velocity_flip_pts: f5,
+            taker_buy_ratio_pct: +buy_ratio_pct.toFixed(1),
+        },
+        last_close: close_now,
+        last_5min_low: Math.min(...lows.slice(-5)),
+        avg_trades_per_min: Math.round(trades.slice(-5).reduce((s,t)=>s+t,0)/5),
+    };
+}
+
+app.get('/api/bounce-watch', async (req, res) => {
+    try {
+        const minDownPct  = parseFloat(req.query.min_down_pct  || '5');   // include coins down ≥ X%
+        const minVolUsdM  = parseFloat(req.query.min_vol_m     || '2');   // ≥ X million USDT
+        const limit       = parseInt(req.query.limit           || '30', 10);
+        const scoreThresh = parseInt(req.query.score_threshold || '60', 10);
+
+        // 1. Fetch all 24h tickers (single API call)
+        const tickersRes = await fetch('https://api.binance.com/api/v3/ticker/24hr');
+        if (!tickersRes.ok) return res.status(502).json({ error: 'Binance fetch failed' });
+        const tickers = await tickersRes.json();
+
+        // 2. Filter: USDT pairs, down >= minDownPct, vol >= minVolM
+        const downMovers = tickers
+            .filter(t => t.symbol.endsWith('USDT'))
+            .filter(t => !t.symbol.includes('UPUSDT') && !t.symbol.includes('DOWNUSDT'))  // skip leveraged
+            .map(t => ({
+                symbol: t.symbol,
+                last_price: parseFloat(t.lastPrice),
+                change_24h_pct: parseFloat(t.priceChangePercent),
+                high_24h: parseFloat(t.highPrice),
+                low_24h: parseFloat(t.lowPrice),
+                quote_volume_24h_usd: parseFloat(t.quoteVolume),
+            }))
+            .filter(t => t.change_24h_pct <= -minDownPct
+                       && t.quote_volume_24h_usd >= minVolUsdM * 1e6)
+            .sort((a, b) => a.change_24h_pct - b.change_24h_pct);  // most down first
+
+        // 3. For top N down-movers, fetch klines + compute score (parallel)
+        const top = downMovers.slice(0, limit);
+        const scored = await Promise.all(top.map(async (m) => {
+            const klines = await fetchKlines1m(m.symbol, 30);
+            const bounce = computeBounceScore(klines);
+            return { ...m, bounce };
+        }));
+
+        // 4. Filter to those with a valid bounce score, sort by score descending
+        const ranked = scored
+            .filter(s => s.bounce !== null)
+            .sort((a, b) => b.bounce.score - a.bounce.score);
+
+        // 5. Identify high-score candidates (score >= threshold)
+        const hot = ranked.filter(s => s.bounce.score >= scoreThresh);
+
+        // 6. Log new high-score detections to Redis (for pattern learning)
+        const date = new Date().toISOString().slice(0, 10);
+        for (const c of hot) {
+            const event = {
+                ts: Date.now(),
+                symbol: c.symbol,
+                score: c.bounce.score,
+                change_24h_pct: c.change_24h_pct,
+                last_price: c.last_price,
+                factors: c.bounce.factors,
+            };
+            await redis.lpush(`BOUNCE:DETECTIONS:${date}`, JSON.stringify(event));
+            await redis.ltrim(`BOUNCE:DETECTIONS:${date}`, 0, 999);
+            await redis.expire(`BOUNCE:DETECTIONS:${date}`, 7 * 24 * 60 * 60);
+        }
+
+        res.json({
+            timestamp: new Date().toISOString(),
+            params: { minDownPct, minVolUsdM, limit, scoreThresh },
+            total_down_movers: downMovers.length,
+            scored: ranked.length,
+            high_score: hot.length,
+            ranked,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message, stack: err.stack });
+    }
+});
+
+app.get('/api/bounce-detections', async (req, res) => {
+    try {
+        const date = req.query.date || new Date().toISOString().slice(0, 10);
+        const limit = parseInt(req.query.limit || '50', 10);
+        const raw = await redis.lrange(`BOUNCE:DETECTIONS:${date}`, 0, limit - 1);
+        const events = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+        res.json({ date, total: events.length, events });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/v1/config', async (req, res) => {
     try {
         const newConfig = req.body || {};
