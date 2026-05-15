@@ -1697,6 +1697,165 @@ app.get('/api/early-pump-detections', async (req, res) => {
     }
 });
 
+// iter 16 fe (2026-05-15): Pattern Backtest
+// Replays every detection from BOUNCE:DETECTIONS and EARLY_PUMP:DETECTIONS
+// against actual 1m klines. Simulates the bot's iter43 strategy:
+//   Buy at detection price
+//   TP +0.567% (= +$0.15 net on $48 leg after 2× 0.075% fees, iter42)
+//   Stop -2.5% (iter39 catastrophic)
+//   Timeout 4h
+// Shows per-detection outcome + per-algorithm hit rate, avg P&L, win rate.
+
+const TP_PCT = 0.567;
+const SL_PCT = 2.5;
+const TIMEOUT_HOURS = 4;
+const LEG_SIZE_USDT = 48;
+const FEE_RATE = 0.00075;
+
+async function replayDetection(symbol, buyTs, buyPrice) {
+    // Fetch 1m klines from buyTs to buyTs + 4h
+    const endTs = buyTs + TIMEOUT_HOURS * 60 * 60 * 1000;
+    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1m&startTime=${buyTs}&endTime=${endTs}&limit=300`;
+    try {
+        const r = await fetch(url);
+        if (!r.ok) return { outcome: 'fetch_error', exit_price: null };
+        const k = await r.json();
+        if (!Array.isArray(k) || k.length < 2) return { outcome: 'no_data', exit_price: null };
+
+        const tpPrice = buyPrice * (1 + TP_PCT / 100);
+        const slPrice = buyPrice * (1 - SL_PCT / 100);
+
+        let maxHigh = 0, minLow = Infinity;
+        let outcome = 'timeout';
+        let exitPrice = parseFloat(k[k.length - 1][4]);  // last close
+        let resolveT = k.length;
+
+        for (let i = 0; i < k.length; i++) {
+            const high = parseFloat(k[i][2]);
+            const low = parseFloat(k[i][3]);
+            if (high > maxHigh) maxHigh = high;
+            if (low < minLow) minLow = low;
+
+            // Check TP first (we use limit-sell at TP price)
+            if (high >= tpPrice) {
+                outcome = 'tp_hit';
+                exitPrice = tpPrice;
+                resolveT = i + 1;
+                break;
+            }
+            // Then stop loss
+            if (low <= slPrice) {
+                outcome = 'stop_loss';
+                exitPrice = slPrice;
+                resolveT = i + 1;
+                break;
+            }
+        }
+
+        // Compute P&L
+        const qty = LEG_SIZE_USDT / buyPrice;
+        const gross = (exitPrice - buyPrice) * qty;
+        const fees = 2 * FEE_RATE * LEG_SIZE_USDT;
+        const net = gross - fees;
+
+        return {
+            outcome,
+            exit_price: +exitPrice.toFixed(8),
+            resolve_min: resolveT,
+            max_high: +maxHigh.toFixed(8),
+            max_high_pct: +((maxHigh / buyPrice - 1) * 100).toFixed(2),
+            min_low: minLow === Infinity ? null : +minLow.toFixed(8),
+            min_low_pct: minLow === Infinity ? null : +((minLow / buyPrice - 1) * 100).toFixed(2),
+            net_pnl: +net.toFixed(4),
+        };
+    } catch (e) {
+        return { outcome: 'error', error: e.message, exit_price: null };
+    }
+}
+
+async function backtestDetections(detections) {
+    // Sort by timestamp ascending
+    const sorted = detections.slice().sort((a, b) => a.ts - b.ts);
+    const results = [];
+    // Run in parallel batches of 5 to be nice to Binance
+    for (let i = 0; i < sorted.length; i += 5) {
+        const batch = sorted.slice(i, i + 5);
+        const batchResults = await Promise.all(batch.map(async (d) => {
+            const r = await replayDetection(d.symbol, d.ts, d.last_price);
+            return { ...d, replay: r };
+        }));
+        results.push(...batchResults);
+    }
+    return results;
+}
+
+function summariseResults(results) {
+    const total = results.length;
+    if (total === 0) return { total: 0 };
+    const tpHits   = results.filter(r => r.replay.outcome === 'tp_hit');
+    const stops    = results.filter(r => r.replay.outcome === 'stop_loss');
+    const timeouts = results.filter(r => r.replay.outcome === 'timeout');
+    const errors   = results.filter(r => ['fetch_error','no_data','error'].includes(r.replay.outcome));
+    const valid = results.filter(r => r.replay.outcome !== 'fetch_error' && r.replay.outcome !== 'no_data' && r.replay.outcome !== 'error');
+    const totalPnl = valid.reduce((s, r) => s + (r.replay.net_pnl || 0), 0);
+    const winRate = valid.length > 0 ? (tpHits.length / valid.length * 100) : 0;
+    const avgTpMin = tpHits.length ? (tpHits.reduce((s, r) => s + r.replay.resolve_min, 0) / tpHits.length) : null;
+    const avgWinPnl = tpHits.length ? (tpHits.reduce((s, r) => s + r.replay.net_pnl, 0) / tpHits.length) : null;
+    const avgLossPnl = stops.length ? (stops.reduce((s, r) => s + r.replay.net_pnl, 0) / stops.length) : null;
+    const avgTimeoutPnl = timeouts.length ? (timeouts.reduce((s, r) => s + r.replay.net_pnl, 0) / timeouts.length) : null;
+    return {
+        total, tp_hits: tpHits.length, stops: stops.length, timeouts: timeouts.length, errors: errors.length,
+        win_rate_pct: +winRate.toFixed(1),
+        total_pnl_usdt: +totalPnl.toFixed(4),
+        avg_win_pnl: avgWinPnl !== null ? +avgWinPnl.toFixed(4) : null,
+        avg_loss_pnl: avgLossPnl !== null ? +avgLossPnl.toFixed(4) : null,
+        avg_timeout_pnl: avgTimeoutPnl !== null ? +avgTimeoutPnl.toFixed(4) : null,
+        avg_tp_resolve_min: avgTpMin !== null ? +avgTpMin.toFixed(1) : null,
+    };
+}
+
+app.get('/api/pattern-backtest', async (req, res) => {
+    try {
+        const date = req.query.date || new Date().toISOString().slice(0, 10);
+        const which = req.query.algo || 'both';  // bounce | early_pump | both
+
+        const out = { date, params: { tp_pct: TP_PCT, sl_pct: SL_PCT, timeout_hours: TIMEOUT_HOURS, leg_size_usdt: LEG_SIZE_USDT } };
+
+        if (which === 'bounce' || which === 'both') {
+            // BOUNCE detections live in main Redis
+            const raw = await redis.lrange(`BOUNCE:DETECTIONS:${date}`, 0, -1);
+            const detections = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+            // De-dupe: keep first detection per symbol (avoid scoring the same signature multiple times)
+            const seen = new Set();
+            const uniq = detections.filter(d => {
+                if (seen.has(d.symbol)) return false;
+                seen.add(d.symbol);
+                return true;
+            });
+            const results = await backtestDetections(uniq);
+            out.bounce = { summary: summariseResults(results), trades: results };
+        }
+
+        if (which === 'early_pump' || which === 'both') {
+            // EARLY_PUMP detections live in analyse Redis
+            const raw = await redisAnalyse.lrange(`EARLY_PUMP:DETECTIONS:${date}`, 0, -1);
+            const detections = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+            const seen = new Set();
+            const uniq = detections.filter(d => {
+                if (seen.has(d.symbol)) return false;
+                seen.add(d.symbol);
+                return true;
+            });
+            const results = await backtestDetections(uniq);
+            out.early_pump = { summary: summariseResults(results), trades: results };
+        }
+
+        res.json(out);
+    } catch (err) {
+        res.status(500).json({ error: err.message, stack: err.stack });
+    }
+});
+
 app.post('/api/v1/config', async (req, res) => {
     try {
         const newConfig = req.body || {};
