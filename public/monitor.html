@@ -219,6 +219,11 @@ function statusPill(reason, pnl) {
     if (r.startsWith('liquidity_death:score'))        return '<span class="pill death">💀 LIQUIDITY DEATH</span>';
     // iter5 fe: iter37 fixed hard-stop fallback
     if (r === 'hard_stop_from_avg')   return '<span class="pill stop">🛡️ HARD STOP</span>';
+    // iter41 (2026-05-15): Post-Buy-2 careful monitor exits
+    if (r.startsWith('active2_quick_profit'))    return `<span class="pill trail">💰 A2 QUICK PROFIT +$${Number(pnl||0).toFixed(2)}</span>`;
+    if (r.startsWith('active2_tight_breakeven')) return '<span class="pill flat">⚖️ A2 BREAK-EVEN</span>';
+    if (r.startsWith('active2_no_recovery'))     return '<span class="pill stale">📉 A2 NO RECOVERY</span>';
+    if (r.startsWith('active2_hard_stop'))       return '<span class="pill stop">🛡️ A2 HARD STOP</span>';
     if (r.includes('cancel'))         return '<span class="pill cancel">CANCELLED</span>';
     if (r === 'trailing_tp')          return `<span class="pill trail">TRAIL +$${Number(pnl||0).toFixed(2)}</span>`;
     if (r.includes('breakeven'))      return '<span class="pill flat">BREAK-EVEN</span>';
@@ -260,6 +265,19 @@ function explainReason(reason) {
     if (r === 'hard_stop_from_avg') {
         return 'iter37 fixed hard-stop floor (price ≤ avg × (1 - ladderHardStopFromAvgPct/100)). Fallback safety net.';
     }
+    // iter41 Post-Buy-2 explanations
+    if (r.startsWith('active2_quick_profit')) {
+        return 'iter41: Buy 2 averaged-down, then price recovered to +0.2% above new avg. Locked in the quick profit instead of waiting for the full TP that may not come.';
+    }
+    if (r.startsWith('active2_tight_breakeven')) {
+        return 'iter41: After averaging down (Buy 2 filled), the ladder went underwater then returned to avg+0.15%. Exited at FLAT with a TIGHTER buffer than ACTIVE_1 — grab break-even when offered, do not wait.';
+    }
+    if (r.startsWith('active2_no_recovery')) {
+        return 'iter41: Buy 2 has been held >20 min, drop ≥ 0.5%, price NEVER reached avg since Buy 2 fill. Accepted minimal loss to avoid letting it grow into a heavy loss.';
+    }
+    if (r.startsWith('active2_hard_stop')) {
+        return 'iter41: Tighter ACTIVE_2 hard stop (1.5% from new avg). Caps worst case at ~$1.44 on $96 ladder — fired before iter37/iter39 because we have DOUBLE exposure in ACTIVE_2.';
+    }
     if (r === 'time_exit') return 'iter14 max-hold reached (ladderMaxHoldSeconds). Force-sold regardless of P&L.';
     if (r.includes('breakeven')) return 'iter14 break-even recovery: ladder went underwater then returned to avg+buffer. Locked in ~$0.';
     if (r === 'trailing_tp') return 'iter15 trailing TP: static TP reached, peak trailed, retraced by trailing %.';
@@ -298,6 +316,10 @@ async function loadSafetyStack() {
                 'Block coins that pumped ≥ X% in last N days and are bleeding off the peak.',
                 !!c.postPumpFilterEnabled,
                 `pump≥${c.postPumpThresholdPct}% · offPeak≥${c.postPumpOffPeakMinPct}% · lookback=${c.postPumpLookbackDays}d`),
+            buildSafetyRow('EXIT 0', '🎯 Post-Buy-2 Careful Monitor (iter 41)',
+                'Fires FIRST when state=ACTIVE_2 (double exposure). Grace→quick-profit→tight-breakeven→no-recovery→hard-stop.',
+                !!c.active2MonitorEnabled,
+                `grace=${c.active2GracePeriodMinutes}m · quickProfit=+${c.active2QuickProfitPct}% · tightBE=+${c.active2TightBreakevenBufferPct}% · patience=${c.active2PatienceMinutes}m · stop=${c.active2HardStopPct}%`),
             buildSafetyRow('EXIT 1', '💀 Liquidity-death adaptive exit (iter 39)',
                 'Multi-factor: vol_ratio, never_recovered, lower-lows, drop, red-share. Score ≥ N → exit.',
                 !!c.liquidityDeathExitEnabled,
