@@ -1880,6 +1880,62 @@ function checkFill(klines, limitPrice) {
     return { filled: false, time_min: null, min_low: minLow === Infinity ? null : +minLow.toFixed(10) };
 }
 
+// iter 20 fe (2026-05-16): full trade simulation after limit fill.
+// Given the fill candle index, walks forward checking TP / stop / timeout.
+// Matches the bot's iter43 strategy + iter42 TP target + iter39 catastrophic.
+function simulateExit(klines, fillIdx, buyPrice, tpPct = 0.567, slPct = 2.5, timeoutMin = 240) {
+    if (!klines || fillIdx == null || fillIdx >= klines.length) {
+        return { outcome: 'no_data', exit_price: null };
+    }
+    const tpPrice = buyPrice * (1 + tpPct / 100);
+    const slPrice = buyPrice * (1 - slPct / 100);
+    const LEG_USDT = 48;
+    const FEE = 0.00075;
+    const qty = LEG_USDT / buyPrice;
+
+    let outcome = 'timeout';
+    let exitPrice = parseFloat(klines[klines.length - 1][4]);
+    let resolveMin = (klines.length - fillIdx);
+    let maxHigh = 0, minLow = Infinity;
+
+    for (let i = fillIdx; i < klines.length && (i - fillIdx) < timeoutMin; i++) {
+        const high = parseFloat(klines[i][2]);
+        const low  = parseFloat(klines[i][3]);
+        if (high > maxHigh) maxHigh = high;
+        if (low < minLow) minLow = low;
+        if (high >= tpPrice) {
+            outcome = 'tp_hit';
+            exitPrice = tpPrice;
+            resolveMin = i - fillIdx + 1;
+            break;
+        }
+        if (low <= slPrice) {
+            outcome = 'stop_loss';
+            exitPrice = slPrice;
+            resolveMin = i - fillIdx + 1;
+            break;
+        }
+    }
+
+    const grossPnl = (exitPrice - buyPrice) * qty;
+    const fees = 2 * FEE * LEG_USDT;
+    const netPnl = grossPnl - fees;
+
+    return {
+        outcome,
+        tp_price: +tpPrice.toFixed(10),
+        sl_price: +slPrice.toFixed(10),
+        exit_price: +exitPrice.toFixed(10),
+        resolve_min: resolveMin,
+        max_high: +maxHigh.toFixed(10),
+        max_high_pct: +((maxHigh / buyPrice - 1) * 100).toFixed(2),
+        min_low: minLow === Infinity ? null : +minLow.toFixed(10),
+        min_low_pct: minLow === Infinity ? null : +((minLow / buyPrice - 1) * 100).toFixed(2),
+        gross_pnl: +grossPnl.toFixed(4),
+        net_pnl: +netPnl.toFixed(4),
+    };
+}
+
 app.get('/api/limit-buy-replay', async (req, res) => {
     try {
         const date = req.query.date || new Date().toISOString().slice(0, 10);
@@ -1924,6 +1980,9 @@ app.get('/api/limit-buy-replay', async (req, res) => {
             return true;
         });
 
+        // Extend fill check window for trade simulation (4h after fill)
+        const TRADE_HORIZON_MIN = 240;
+
         // Replay each — in parallel batches of 3
         const results = [];
         for (let i = 0; i < uniqTrades.length; i += 3) {
@@ -1934,9 +1993,10 @@ app.get('/api/limit-buy-replay', async (req, res) => {
                 const preStart = t.buy_ts - lookbackMin * 60 * 1000;
                 const preEnd   = t.buy_ts;
                 const preKl = await fetchKlinesRange(binanceSym, preStart, preEnd);
-                // Post-signal klines (for fill check)
+                // Post-signal klines: fetch enough for fill (60min) + trade horizon (4h after fill)
+                // = 60 + 240 = 300 min total
                 const postStart = t.buy_ts;
-                const postEnd   = t.buy_ts + checkMin * 60 * 1000;
+                const postEnd   = t.buy_ts + (checkMin + TRADE_HORIZON_MIN) * 60 * 1000;
                 const postKl = await fetchKlinesRange(binanceSym, postStart, postEnd);
 
                 const adaptive = computeAdaptiveFromKlines(preKl, t.signal_price);
@@ -1953,12 +2013,25 @@ app.get('/api/limit-buy-replay', async (req, res) => {
                 else winner = 'neither';
 
                 const staticOffsetPct = +(((1 - t.static_buy_price / t.signal_price) * 100).toFixed(3));
+
+                // iter 20 fe: simulate the FULL TRADE for each scenario
+                // (TP / stop / timeout after fill).
+                let staticTrade = null, adaptiveTrade = null;
+                if (staticFill.filled) {
+                    staticTrade = simulateExit(postKl, staticFill.time_min - 1, t.static_buy_price);
+                }
+                if (adaptiveFill.filled) {
+                    adaptiveTrade = simulateExit(postKl, adaptiveFill.time_min - 1, adaptive.buy_price);
+                }
+
                 return {
                     ...t,
                     static_offset_pct: staticOffsetPct,
                     adaptive,
                     static_fill: staticFill,
                     adaptive_fill: adaptiveFill,
+                    static_trade: staticTrade,
+                    adaptive_trade: adaptiveTrade,
                     winner,
                 };
             }));
@@ -1975,6 +2048,20 @@ app.get('/api/limit-buy-replay', async (req, res) => {
             errors: results.filter(r => r.error).length,
         };
         summary.adaptive_advantage = summary.adaptive_only - summary.static_only;
+
+        // P&L summaries — what would each strategy have netted if traded fully
+        const staticTrades = results.filter(r => r.static_trade);
+        const adaptiveTrades = results.filter(r => r.adaptive_trade);
+        const sumPnl = (arr, key) => +arr.reduce((s, r) => s + (r[key]?.net_pnl || 0), 0).toFixed(4);
+        summary.static_total_pnl = sumPnl(staticTrades, 'static_trade');
+        summary.adaptive_total_pnl = sumPnl(adaptiveTrades, 'adaptive_trade');
+        summary.static_tp_hits = staticTrades.filter(r => r.static_trade.outcome === 'tp_hit').length;
+        summary.static_stops   = staticTrades.filter(r => r.static_trade.outcome === 'stop_loss').length;
+        summary.static_timeouts= staticTrades.filter(r => r.static_trade.outcome === 'timeout').length;
+        summary.adaptive_tp_hits = adaptiveTrades.filter(r => r.adaptive_trade.outcome === 'tp_hit').length;
+        summary.adaptive_stops   = adaptiveTrades.filter(r => r.adaptive_trade.outcome === 'stop_loss').length;
+        summary.adaptive_timeouts= adaptiveTrades.filter(r => r.adaptive_trade.outcome === 'timeout').length;
+        summary.pnl_advantage = +(summary.adaptive_total_pnl - summary.static_total_pnl).toFixed(4);
 
         res.json({
             date,

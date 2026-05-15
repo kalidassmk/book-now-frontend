@@ -131,6 +131,23 @@ function fmtPct(n, dp=2) {
   const s = Number(n) >= 0 ? '+' : '';
   return s + Number(n).toFixed(dp) + '%';
 }
+function fmtMoney(n, dp=4) {
+  if (n == null || isNaN(n)) return '—';
+  const s = Number(n) >= 0 ? '+' : '−';
+  return s + '$' + Math.abs(n).toFixed(dp);
+}
+function pnlCls(n) {
+  if (n == null) return '';
+  if (n > 0.005) return 'pos';
+  if (n < -0.005) return 'neg';
+  return 'mute';
+}
+function outcomePill(o) {
+  if (o === 'tp_hit') return '<span class="pill" style="background:rgba(46,204,113,.20);color:var(--good);">✅ TP</span>';
+  if (o === 'stop_loss') return '<span class="pill" style="background:rgba(231,76,60,.20);color:var(--bad);">🛑 STOP</span>';
+  if (o === 'timeout') return '<span class="pill" style="background:rgba(241,196,15,.20);color:var(--warn);">⏱ TO</span>';
+  return o ? `<span class="pill mute">${o}</span>` : '<span class="mute">—</span>';
+}
 
 async function run() {
   const date = $('#date').value;
@@ -190,6 +207,32 @@ function render(d) {
         <div class="label">Adaptive advantage</div>
         <div class="value ${s.adaptive_advantage > 0 ? 'pos' : s.adaptive_advantage < 0 ? 'neg' : 'mute'}">${s.adaptive_advantage > 0 ? '+' : ''}${s.adaptive_advantage}</div>
       </div>
+    </div>
+    <div class="card" style="margin-top:6px;">
+      <h2 style="margin-bottom:8px;">Full-trade simulation P&amp;L (buy → TP / stop / 4h timeout)</h2>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">
+        For every fill above, we replay the next 4 hours and check if TP (+0.567% = +$0.15 net) hits before stop (-2.5%).
+      </div>
+      <div class="summary">
+        <div class="stat">
+          <div class="label">STATIC: total P&amp;L</div>
+          <div class="value ${pnlCls(s.static_total_pnl)}">${fmtMoney(s.static_total_pnl, 2)}</div>
+        </div>
+        <div class="stat"><div class="label">STATIC: TP / stop / timeout</div>
+          <div class="value">${s.static_tp_hits} <span class="mute">/</span> ${s.static_stops} <span class="mute">/</span> ${s.static_timeouts}</div>
+        </div>
+        <div class="stat" style="border-left:3px solid var(--accent);">
+          <div class="label">ADAPTIVE: total P&amp;L</div>
+          <div class="value ${pnlCls(s.adaptive_total_pnl)}">${fmtMoney(s.adaptive_total_pnl, 2)}</div>
+        </div>
+        <div class="stat" style="border-left:3px solid var(--accent);"><div class="label">ADAPTIVE: TP / stop / timeout</div>
+          <div class="value">${s.adaptive_tp_hits} <span class="mute">/</span> ${s.adaptive_stops} <span class="mute">/</span> ${s.adaptive_timeouts}</div>
+        </div>
+        <div class="stat">
+          <div class="label">P&amp;L advantage (adapt − static)</div>
+          <div class="value ${pnlCls(s.pnl_advantage)}">${fmtMoney(s.pnl_advantage, 2)}</div>
+        </div>
+      </div>
     </div>`;
 
   const rows = (d.trades || []).map((r, i) => {
@@ -204,17 +247,20 @@ function render(d) {
       'NEITHER'
     }</span>`;
     const tFmt = new Date(r.buy_ts).toLocaleTimeString('en-GB',{hour12:false});
+    const st = r.static_trade, at = r.adaptive_trade;
     return `
       <tr class="row expandable ${cls}" onclick="toggle('det-${i}')">
         <td class="mute">${tFmt}</td>
         <td><strong>${r.symbol}</strong></td>
         <td class="num">${fmtPrice(r.signal_price)}</td>
-        <td class="num">${fmtPct(-r.static_offset_pct)}</td>
-        <td class="num">${fmtPrice(r.static_buy_price)}</td>
         <td class="num">${fmtPct(-r.adaptive.offset_pct)}</td>
         <td class="num">${fmtPrice(r.adaptive.buy_price)}</td>
-        <td class="num ${r.static_fill.filled?'pos':'mute'}">${r.static_fill.filled ? r.static_fill.time_min + 'm' : '—'}</td>
         <td class="num ${r.adaptive_fill.filled?'pos':'mute'}">${r.adaptive_fill.filled ? r.adaptive_fill.time_min + 'm' : '—'}</td>
+        <td class="num">${at ? fmtPrice(at.tp_price) : '—'}</td>
+        <td class="num">${at ? fmtPrice(at.exit_price) : '—'}</td>
+        <td class="num mute">${at ? at.resolve_min + 'm' : '—'}</td>
+        <td class="num ${at ? pnlCls(at.net_pnl) : ''}">${at ? fmtMoney(at.net_pnl) : '—'}</td>
+        <td>${at ? outcomePill(at.outcome) : (r.adaptive_fill.filled ? '<span class="mute">—</span>' : '<span class="pill neither">no fill</span>')}</td>
         <td>${winnerPill}</td>
       </tr>
       <tr class="detail-row" id="det-${i}" style="display:none;">
@@ -251,27 +297,25 @@ function render(d) {
 
   const tableHtml = `
     <div class="card">
-      <h2>Per-trade replay (click row for details)</h2>
+      <h2>Per-trade full simulation — adaptive entry → TP / stop / 4h timeout (click row for details)</h2>
       <div style="overflow-x:auto;">
         <table>
           <thead>
             <tr>
               <th>Time</th><th>Symbol</th><th class="num">Signal $</th>
-              <th class="num">Static offset</th><th class="num">Static buy</th>
-              <th class="num">Adaptive offset</th><th class="num">Adaptive buy</th>
-              <th class="num">Static fill</th><th class="num">Adaptive fill</th>
-              <th>Winner</th>
+              <th class="num">Adapt offset</th><th class="num">Adapt buy</th><th class="num">Fill time</th>
+              <th class="num">TP price</th><th class="num">Exit price</th><th class="num">Resolve</th>
+              <th class="num">Net P&L</th><th>Outcome</th><th>vs Static</th>
             </tr>
           </thead>
-          <tbody>${rows || '<tr><td colspan="10" class="empty">No unfilled trades for this date</td></tr>'}</tbody>
+          <tbody>${rows || '<tr><td colspan="12" class="empty">No unfilled trades for this date</td></tr>'}</tbody>
         </table>
       </div>
       <div style="margin-top:10px;padding:10px;background:var(--panel-2);border-radius:6px;font-size:11px;color:var(--muted);">
-        <strong style="color:var(--text);">Row colour:</strong>
-        <span class="pill adaptive">🎯 ADAPTIVE ONLY</span> = adaptive caught a fill static missed (pure improvement) ·
-        <span class="pill both">✓ BOTH</span> = same outcome ·
-        <span class="pill static">STATIC ONLY</span> = regression (would not happen if math is correct) ·
-        <span class="pill neither">NEITHER</span> = coin truly didn't dip
+        <strong style="color:var(--text);">Reading the columns:</strong>
+        <code>Adapt offset</code> = computed dip offset · <code>Fill time</code> = minutes until limit filled ·
+        <code>TP price</code> = buy × 1.00567 (target +$0.15 net) · <code>Exit price</code> = where the trade actually exited ·
+        <code>Resolve</code> = total minutes from buy to exit · <code>Outcome</code>: ✅ TP / 🛑 STOP / ⏱ TIMEOUT
       </div>
     </div>`;
 
