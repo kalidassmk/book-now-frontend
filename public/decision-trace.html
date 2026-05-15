@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Book-Now — Decision Trace</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --panel-2: #1a232e; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --neutral: #8b949e;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  .sub { color: var(--muted); margin-bottom: 18px; }
+  .topnav { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .topnav a { display: inline-block; padding: 6px 14px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 600; }
+  .topnav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .topnav a:not(.active):hover { color: var(--text); border-color: var(--muted); }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+  .card h2 { margin: 0 0 14px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 600; }
+
+  /* Search bar */
+  .search { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .search input { flex: 1; min-width: 200px; padding: 10px 14px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 6px; font: 14px monospace; }
+  .search input:focus { outline: none; border-color: var(--accent); }
+  .search button { padding: 10px 20px; background: var(--accent); color: #fff; border: 0; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; }
+  .search button:hover { filter: brightness(1.1); }
+  .search button:disabled { opacity: 0.5; cursor: wait; }
+  .chip { display: inline-block; padding: 4px 10px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); border-radius: 4px; cursor: pointer; font-size: 11px; margin: 2px; }
+  .chip:hover { color: var(--text); border-color: var(--accent); }
+
+  /* Market data */
+  .market-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .market-item { padding: 10px 14px; background: var(--panel-2); border-radius: 6px; border-left: 3px solid var(--accent); }
+  .market-item .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .market-item .value { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 4px; }
+  .pos { color: var(--good); } .neg { color: var(--bad); } .mute { color: var(--muted); }
+
+  /* Filter pipeline */
+  .pipeline { display: flex; flex-direction: column; gap: 8px; }
+  .filter-step { display: flex; gap: 12px; padding: 14px; border-radius: 8px; background: var(--panel-2); border-left: 4px solid var(--neutral); position: relative; }
+  .filter-step.pass { border-left-color: var(--good); }
+  .filter-step.block { border-left-color: var(--bad); background: rgba(231,76,60,.08); }
+  .filter-step.disabled { opacity: 0.5; }
+  .filter-step .step-num { font-size: 18px; font-weight: 700; color: var(--muted); min-width: 28px; }
+  .filter-step.pass .step-num { color: var(--good); }
+  .filter-step.block .step-num { color: var(--bad); }
+  .filter-step .body { flex: 1; }
+  .filter-step .name { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+  .filter-step .verdict { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; margin-left: 8px; }
+  .filter-step.pass .verdict { background: rgba(46,204,113,.2); color: var(--good); }
+  .filter-step.block .verdict { background: rgba(231,76,60,.25); color: var(--bad); }
+  .filter-step.disabled .verdict { background: rgba(139,148,158,.2); color: var(--muted); }
+  .filter-step .reason { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .filter-step .details { margin-top: 8px; font-family: 'SF Mono', Menlo, monospace; font-size: 11px; color: var(--muted); padding: 8px 10px; background: rgba(0,0,0,.2); border-radius: 4px; }
+
+  /* Final verdict */
+  .verdict-banner { padding: 20px 24px; border-radius: 10px; text-align: center; font-size: 18px; font-weight: 700; margin: 16px 0; }
+  .verdict-banner.buy { background: rgba(46,204,113,.15); color: var(--good); border: 2px solid var(--good); }
+  .verdict-banner.block { background: rgba(231,76,60,.15); color: var(--bad); border: 2px solid var(--bad); }
+  .verdict-banner .sub-text { font-size: 13px; font-weight: 400; color: var(--muted); margin-top: 6px; }
+
+  /* Strategy card (when would_buy) */
+  .strategy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .strategy-box { padding: 14px; background: var(--panel-2); border-radius: 8px; border-top: 3px solid var(--accent); }
+  .strategy-box .label { font-size: 10px; color: var(--muted); text-transform: uppercase; }
+  .strategy-box .price { font-size: 20px; font-weight: 700; margin: 4px 0; font-variant-numeric: tabular-nums; }
+  .strategy-box .delta { font-size: 11px; color: var(--muted); }
+  .strategy-box code { font-family: 'SF Mono', monospace; font-size: 11px; color: var(--text); background: rgba(0,0,0,.3); padding: 2px 6px; border-radius: 3px; }
+  .tier-pill { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; }
+  .tier-pill.CALM { background: rgba(46,204,113,.2); color: var(--good); }
+  .tier-pill.NORMAL { background: rgba(41,182,246,.2); color: var(--accent); }
+  .tier-pill.VOLATILE { background: rgba(241,196,15,.2); color: var(--warn); }
+  .tier-pill.X_VOLATILE { background: rgba(231,76,60,.2); color: var(--bad); }
+
+  /* Recent decisions */
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); font-size: 12px; white-space: nowrap; }
+  th { background: var(--panel-2); color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .4px; }
+  tr:last-child td { border-bottom: none; }
+  .rule-pill { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; }
+  .rule-pill.low_volume_24h { background: rgba(139,148,158,.2); color: var(--muted); }
+  .rule-pill.post_pump_bleed { background: rgba(231,76,60,.15); color: var(--bad); }
+  .rule-pill.volatile_1h { background: rgba(241,196,15,.15); color: var(--warn); }
+  .rule-pill.pump_24h { background: rgba(231,76,60,.2); color: var(--bad); }
+  .rule-pill.near_top_pump { background: rgba(41,182,246,.15); color: var(--accent); }
+  .rule-pill.vol_regime { background: rgba(231,76,60,.25); color: var(--bad); font-weight: 700; }
+  .rule-pill.macro_top { background: rgba(231,76,60,.25); color: var(--bad); font-weight: 700; }
+  .rule-pill.pending_pump_dump { background: rgba(139,148,158,.2); color: var(--muted); }
+
+  .empty { padding: 40px; text-align: center; color: var(--muted); font-style: italic; }
+  .error { padding: 14px; background: rgba(231,76,60,.1); color: var(--bad); border-radius: 6px; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/">📊 Monitor</a>
+  <a href="/metrics.html">📈 Metrics</a>
+  <a href="/spot.html">📋 Spot</a>
+  <a href="/backtest.html">🔬 Backtest</a>
+  <a href="/decision-trace.html" class="active">🔍 Decision Trace</a>
+</nav>
+
+<h1>Trade Decision Trace</h1>
+<div class="sub">Live what-if checker — runs all 5 pre-buy filters + iter43 strategy chooser against any coin.
+  Shows step-by-step why a coin is <span class="pos">BUY</span> or <span class="neg">BLOCKED</span>, and exactly how the sell price is calculated.</div>
+
+<div class="card">
+  <h2>Check a coin</h2>
+  <div class="search">
+    <input id="symInput" type="text" placeholder="Enter symbol e.g. BTCUSDT or BTC/USDT" value="币安人生USDT" />
+    <button id="checkBtn" onclick="checkCoin()">Check</button>
+  </div>
+  <div style="margin-top:10px;">
+    <span style="font-size:11px;color:var(--muted);">Quick try:</span>
+    <span class="chip" onclick="quick('币安人生USDT')">币安人生USDT</span>
+    <span class="chip" onclick="quick('BTCUSDT')">BTCUSDT</span>
+    <span class="chip" onclick="quick('ETHUSDT')">ETHUSDT</span>
+    <span class="chip" onclick="quick('MLNUSDT')">MLNUSDT</span>
+    <span class="chip" onclick="quick('LINKUSDT')">LINKUSDT</span>
+    <span class="chip" onclick="quick('PENDLEUSDT')">PENDLEUSDT</span>
+    <span class="chip" onclick="quick('LAYERUSDT')">LAYERUSDT</span>
+  </div>
+</div>
+
+<div id="result"></div>
+
+<div class="card">
+  <h2>Recent decisions (last 30 signals the bot evaluated today)</h2>
+  <div id="recentList">Loading…</div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+
+function quick(sym) {
+  $('#symInput').value = sym;
+  checkCoin();
+}
+
+function fmtMoney(n, dp=2) {
+  if (n == null || isNaN(n)) return '—';
+  return '$' + Number(n).toLocaleString(undefined, {minimumFractionDigits: dp, maximumFractionDigits: dp});
+}
+function fmtPct(n, dp=2) {
+  if (n == null || isNaN(n)) return '—';
+  const s = Number(n) >= 0 ? '+' : '';
+  return s + Number(n).toFixed(dp) + '%';
+}
+function fmtPrice(n) {
+  if (n == null || isNaN(n)) return '—';
+  const a = Math.abs(n);
+  if (a >= 100) return n.toFixed(2);
+  if (a >= 1) return n.toFixed(4);
+  return n.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+async function checkCoin() {
+  const sym = $('#symInput').value.trim();
+  if (!sym) return;
+  $('#checkBtn').disabled = true;
+  $('#result').innerHTML = '<div class="card empty">Fetching live data from Binance and running filters…</div>';
+  try {
+    const r = await fetch('/api/check-coin?symbol=' + encodeURIComponent(sym));
+    const data = await r.json();
+    if (!r.ok) {
+      $('#result').innerHTML = `<div class="card"><div class="error">Error: ${data.error || r.statusText}</div></div>`;
+      return;
+    }
+    $('#result').innerHTML = renderResult(data);
+  } catch (e) {
+    $('#result').innerHTML = `<div class="card"><div class="error">Network error: ${e.message}</div></div>`;
+  } finally {
+    $('#checkBtn').disabled = false;
+  }
+}
+
+function renderResult(d) {
+  const m = d.market;
+  const v = d.verdict;
+
+  // Market snapshot
+  const marketHtml = `
+    <div class="card">
+      <h2>Market snapshot — ${d.symbol} (live from Binance ${new Date(d.timestamp).toLocaleTimeString()})</h2>
+      <div class="market-grid">
+        <div class="market-item">
+          <div class="label">Last price</div>
+          <div class="value">${fmtPrice(m.last_price)}</div>
+        </div>
+        <div class="market-item">
+          <div class="label">24h change</div>
+          <div class="value ${m.change_24h_pct>=0?'pos':'neg'}">${fmtPct(m.change_24h_pct)}</div>
+        </div>
+        <div class="market-item">
+          <div class="label">From 24h high</div>
+          <div class="value ${m.from_24h_high_pct>=0?'pos':'neg'}">${fmtPct(m.from_24h_high_pct)}</div>
+        </div>
+        <div class="market-item">
+          <div class="label">24h range</div>
+          <div class="value mute">${fmtPrice(m.low_24h)} → ${fmtPrice(m.high_24h)}</div>
+        </div>
+        <div class="market-item">
+          <div class="label">1h range</div>
+          <div class="value ${m.range_1h_pct>=3?'neg':'mute'}">${m.range_1h_pct.toFixed(2)}%</div>
+        </div>
+        <div class="market-item">
+          <div class="label">24h vol</div>
+          <div class="value mute">${(m.quote_volume_24h_usd/1e6).toFixed(2)}M</div>
+        </div>
+      </div>
+    </div>`;
+
+  // Filter pipeline
+  const filterHtml = `
+    <div class="card">
+      <h2>Filter pipeline — 5 gates the bot checks BEFORE buying</h2>
+      <div class="pipeline">
+        ${d.filters.map((f, i) => {
+          const cls = f.blocked ? 'block' : (f.enabled === false ? 'disabled' : 'pass');
+          const verdict = f.blocked ? '🚫 BLOCK' : (f.enabled === false ? '○ DISABLED' : '✓ PASS');
+          return `
+            <div class="filter-step ${cls}">
+              <div class="step-num">${i+1}</div>
+              <div class="body">
+                <div class="name">${f.name}<span class="verdict">${verdict}</span></div>
+                <div class="reason">${f.reason || f.note || ''}</div>
+                ${f.details ? `<div class="details">${JSON.stringify(f.details, null, 2).replace(/\n/g, '<br>').replace(/  /g, '&nbsp;&nbsp;')}</div>` : ''}
+              </div>
+            </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+
+  // Verdict banner
+  let verdictHtml = '';
+  if (v.blocked) {
+    verdictHtml = `
+      <div class="verdict-banner block">
+        🚫 BLOCKED by ${v.blocker}
+        <div class="sub-text">${v.blocker_reason}</div>
+      </div>`;
+  } else if (v.would_buy) {
+    verdictHtml = `
+      <div class="verdict-banner buy">
+        ✅ WOULD BUY — all 5 filters passed
+        <div class="sub-text">If a SCALP_BUY_SIGNAL fires for this coin right now, the bot will enter using iter43 strategy below</div>
+      </div>`;
+  }
+
+  // Strategy + TP (only when would buy)
+  let strategyHtml = '';
+  if (d.strategy) {
+    const s = d.strategy;
+    strategyHtml = `
+      <div class="card">
+        <h2>iter 43 strategy — how the bot would size + price the entry</h2>
+        <div style="margin-bottom:14px;">
+          1-hour range = <strong>${s.range_1h_pct}%</strong> → tier: <span class="tier-pill ${s.tier}">${s.tier}</span>
+        </div>
+        <div class="strategy-grid">
+          <div class="strategy-box">
+            <div class="label">Buy 1 LIMIT</div>
+            <div class="price">${fmtPrice(s.buy_1.price)}</div>
+            <div class="delta">−${s.buy_1.offset_pct}% from signal · $${s.buy_1.size_usdt}</div>
+          </div>
+          <div class="strategy-box">
+            <div class="label">Buy 2 LIMIT (if Buy 1 fills)</div>
+            <div class="price">${fmtPrice(s.buy_2.price)}</div>
+            <div class="delta">−${s.buy_2.offset_pct}% from signal · $${s.buy_2.size_usdt}</div>
+          </div>
+          <div class="strategy-box" style="border-top-color:var(--good);">
+            <div class="label">TP LIMIT SELL — target +$${s.tp.target_net_usdt} net</div>
+            <div class="price pos">${fmtPrice(s.tp.tp_price)}</div>
+            <div class="delta">+${s.tp.tp_pct}% above Buy 1</div>
+          </div>
+        </div>
+        <div style="margin-top:14px;padding:14px;background:var(--panel-2);border-radius:6px;font-size:12px;">
+          <strong>How TP is calculated:</strong><br>
+          <code>${s.tp.formula}</code><br><br>
+          <strong>What it means:</strong> ${s.tp.explanation}
+        </div>
+      </div>`;
+  }
+
+  return marketHtml + filterHtml + verdictHtml + strategyHtml;
+}
+
+async function loadRecent() {
+  try {
+    const r = await fetch('/api/recent-decisions?limit=30');
+    const data = await r.json();
+    if (!r.ok || !data.events.length) {
+      $('#recentList').innerHTML = '<div class="empty">No skip events recorded today yet.</div>';
+      return;
+    }
+    const rows = data.events.map(ev => {
+      const t = ev.ts ? new Date(ev.ts).toLocaleTimeString('en-GB', {hour12:false}) : '—';
+      return `
+        <tr>
+          <td class="mute">${t}</td>
+          <td><strong>${ev.symbol || '?'}</strong></td>
+          <td><span class="rule-pill ${ev.rule||''}">${ev.rule || '?'}</span></td>
+          <td class="mute">${(ev.reason || '').substring(0, 100)}</td>
+        </tr>`;
+    }).join('');
+    $('#recentList').innerHTML = `
+      <table>
+        <thead><tr>
+          <th>Time UTC</th><th>Symbol</th><th>Rule that blocked</th><th>Reason</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  } catch (e) {
+    $('#recentList').innerHTML = `<div class="error">Failed to load: ${e.message}</div>`;
+  }
+}
+
+// Auto-check on load
+checkCoin();
+loadRecent();
+setInterval(loadRecent, 30000);
+</script>
+
+</body>
+</html>

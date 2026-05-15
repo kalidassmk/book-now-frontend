@@ -1044,6 +1044,270 @@ app.get('/api/backtest-report', async (req, res) => {
     }
 });
 
+// iter 47 (2026-05-15): Trade Decision Trace endpoint.
+// Runs the same 5 pre-buy filters + iter43 strategy chooser that the
+// bot uses internally, against fresh Binance data. Returns a step-by-
+// step pass/block verdict for the symbol — answers "why was this coin
+// blocked?" / "would this coin pass right now?" / "what TP would the
+// bot set?".
+app.get('/api/check-coin', async (req, res) => {
+    const sym = (req.query.symbol || '').toUpperCase().trim();
+    if (!sym) return res.status(400).json({ error: 'symbol query param required, e.g. /api/check-coin?symbol=BTCUSDT' });
+    const binanceSym = sym.includes('/') ? sym.replace('/', '') : sym;
+    const ccxtSym = sym.includes('/') ? sym : (sym.endsWith('USDT') ? sym.slice(0, -4) + '/USDT' : sym);
+
+    try {
+        // Pull live config thresholds from Redis
+        const rawCfg = await redis.get(CONFIG_KEY);
+        const cfg = { ...DEFAULT_TRADING_CONFIG, ...(rawCfg ? JSON.parse(rawCfg) : {}) };
+
+        // Fetch 24h ticker + daily klines (parallel)
+        const [tickerRaw, dailyRaw, hourlyRaw] = await Promise.all([
+            fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${binanceSym}`).then(r => r.json()),
+            fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1d&limit=31`).then(r => r.json()),
+            fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1h&limit=2`).then(r => r.json()),
+        ]);
+
+        if (tickerRaw.code) return res.status(404).json({ error: `Binance: ${tickerRaw.msg || JSON.stringify(tickerRaw)}` });
+
+        const t = tickerRaw;
+        const lastPrice  = parseFloat(t.lastPrice);
+        const high24     = parseFloat(t.highPrice);
+        const low24      = parseFloat(t.lowPrice);
+        const chg24Pct   = parseFloat(t.priceChangePercent);
+        const quoteVol24 = parseFloat(t.quoteVolume);
+        const fromHigh24Pct = (lastPrice / high24 - 1) * 100;
+
+        // 1h range from current hour candle
+        let range1hPct = 0;
+        if (Array.isArray(hourlyRaw) && hourlyRaw.length) {
+            const last1h = hourlyRaw[hourlyRaw.length - 1];
+            const h1h = parseFloat(last1h[2]); const l1h = parseFloat(last1h[3]);
+            range1hPct = l1h > 0 ? (h1h - l1h) / l1h * 100 : 0;
+        }
+
+        // Daily klines (drop today's partial)
+        const now = Date.now();
+        const dayMs = 24 * 60 * 60 * 1000;
+        const dayStart = now - (now % dayMs);
+        const dailyDone = (Array.isArray(dailyRaw) ? dailyRaw : []).filter(k => k[0] < dayStart);
+        const last30d = dailyDone.slice(-30);
+        const last7d  = dailyDone.slice(-7);
+        const last5d  = dailyDone.slice(-5);
+
+        const filters = [];
+
+        // ── Filter 1: falling_knife (24h pump, low volume, volatility, overbought) ──
+        const fkChecks = [];
+        if (chg24Pct >= cfg.maxChange24hPct) fkChecks.push(`24h +${chg24Pct.toFixed(2)}% ≥ ${cfg.maxChange24hPct}%`);
+        if (quoteVol24 < cfg.minVol24hUsd) fkChecks.push(`vol $${(quoteVol24/1e6).toFixed(2)}M < $${(cfg.minVol24hUsd/1e6).toFixed(0)}M`);
+        if (range1hPct > cfg.maxRange1hPct) fkChecks.push(`1h range ${range1hPct.toFixed(2)}% > ${cfg.maxRange1hPct}%`);
+        filters.push({
+            id: 'falling_knife',
+            name: 'Falling-knife filter (built-in)',
+            pass: fkChecks.length === 0,
+            reason: fkChecks.length ? fkChecks.join(' AND ') : 'all checks passed',
+            details: {
+                change_24h_pct: +chg24Pct.toFixed(2),
+                quote_vol_24h_usd: quoteVol24,
+                range_1h_pct: +range1hPct.toFixed(2),
+                limits: { maxChange24hPct: cfg.maxChange24hPct, minVol24hUsd: cfg.minVol24hUsd, maxRange1hPct: cfg.maxRange1hPct },
+            },
+        });
+
+        // ── Filter 2: iter38 near-top pump ──
+        const i38_blocked = chg24Pct >= cfg.nearTopPumpMin24hChangePct && fromHigh24Pct >= -cfg.nearTopPumpMaxFromHighPct;
+        filters.push({
+            id: 'iter38_near_top_pump',
+            name: 'iter 38 — Near-top pump filter',
+            pass: !i38_blocked && !!cfg.nearTopPumpFilterEnabled,
+            blocked: i38_blocked && !!cfg.nearTopPumpFilterEnabled,
+            enabled: !!cfg.nearTopPumpFilterEnabled,
+            reason: i38_blocked
+                ? `24h +${chg24Pct.toFixed(2)}% ≥ ${cfg.nearTopPumpMin24hChangePct}% AND within ${(-fromHigh24Pct).toFixed(2)}% of 24h high (≤ ${cfg.nearTopPumpMaxFromHighPct}%)`
+                : `24h +${chg24Pct.toFixed(2)}% (need ≥${cfg.nearTopPumpMin24hChangePct}%) AND/OR from high ${fromHigh24Pct.toFixed(2)}% (need ≥-${cfg.nearTopPumpMaxFromHighPct}%) — at least one check fails the BLOCK condition`,
+            details: {
+                change_24h_pct: +chg24Pct.toFixed(2),
+                from_24h_high_pct: +fromHigh24Pct.toFixed(2),
+                limits: { min_24h_change: cfg.nearTopPumpMin24hChangePct, max_from_high: cfg.nearTopPumpMaxFromHighPct },
+            },
+        });
+
+        // ── Filter 3: iter44 macro-top exhaustion ──
+        let i44_blocked = false, i44_details = {};
+        if (last30d.length >= 8) {
+            const closes = last30d.map(k => parseFloat(k[4]));
+            const opens  = last30d.map(k => parseFloat(k[1]));
+            const highs  = last30d.map(k => parseFloat(k[2]));
+            const lastC = closes[closes.length - 1];
+            const ret30 = (lastC / closes[0] - 1) * 100;
+            const h30 = Math.max(...highs);
+            const withinHi = h30 > 0 ? (lastC / h30) * 100 : 0;
+            const last7 = closes.slice(-7);
+            const open7 = opens.slice(-7);
+            const red7 = last7.reduce((s, c, i) => s + (c < open7[i] ? 1 : 0), 0);
+            i44_blocked = ret30 >= cfg.macroTopMinReturnPct &&
+                          withinHi >= cfg.macroTopWithinHighPct &&
+                          red7 >= cfg.macroTopMinRedDaysIn7;
+            i44_details = {
+                return_30d_pct: +ret30.toFixed(2),
+                within_30d_high_pct: +withinHi.toFixed(2),
+                red_days_in_7: red7,
+                limits: { min_return: cfg.macroTopMinReturnPct, within_high: cfg.macroTopWithinHighPct, min_red: cfg.macroTopMinRedDaysIn7 },
+            };
+        }
+        filters.push({
+            id: 'iter44_macro_top',
+            name: 'iter 44 — Macro-top exhaustion filter',
+            pass: !i44_blocked && !!cfg.macroTopFilterEnabled,
+            blocked: i44_blocked && !!cfg.macroTopFilterEnabled,
+            enabled: !!cfg.macroTopFilterEnabled,
+            reason: i44_blocked
+                ? `30d return +${i44_details.return_30d_pct}% (≥${cfg.macroTopMinReturnPct}%) AND within ${i44_details.within_30d_high_pct}% of 30d high (≥${cfg.macroTopWithinHighPct}%) AND red ${i44_details.red_days_in_7}/7 (≥${cfg.macroTopMinRedDaysIn7})`
+                : (last30d.length >= 8 ? 'at least one of the 3 conditions fails the BLOCK threshold' : 'insufficient daily history → pass (fail-open)'),
+            details: i44_details,
+        });
+
+        // ── Filter 4: iter45 vol_regime ──
+        let i45_blocked = false, i45_details = {};
+        if (last5d.length >= 3) {
+            const ranges = last5d.map(k => {
+                const h = parseFloat(k[2]), l = parseFloat(k[3]);
+                return l > 0 ? (h - l) / l * 100 : 0;
+            });
+            const dailyChgs = last5d.map(k => {
+                const o = parseFloat(k[1]), c = parseFloat(k[4]);
+                return o > 0 ? (c - o) / o * 100 : 0;
+            });
+            const maxR = Math.max(...ranges);
+            const worst = Math.min(...dailyChgs);
+            i45_blocked = (maxR > cfg.volRegimeMaxDailyRangePct) || (worst <= -cfg.volRegimeBigCrashPct);
+            i45_details = {
+                max_5d_range_pct: +maxR.toFixed(2),
+                worst_5d_day_pct: +worst.toFixed(2),
+                limits: { max_range: cfg.volRegimeMaxDailyRangePct, big_crash: cfg.volRegimeBigCrashPct },
+            };
+        }
+        filters.push({
+            id: 'iter45_vol_regime',
+            name: 'iter 45 — Volatility regime filter',
+            pass: !i45_blocked && !!cfg.volRegimeFilterEnabled,
+            blocked: i45_blocked && !!cfg.volRegimeFilterEnabled,
+            enabled: !!cfg.volRegimeFilterEnabled,
+            reason: i45_blocked
+                ? (() => {
+                    const parts = [];
+                    if (i45_details.max_5d_range_pct > cfg.volRegimeMaxDailyRangePct) parts.push(`max 5d range ${i45_details.max_5d_range_pct}% > ${cfg.volRegimeMaxDailyRangePct}%`);
+                    if (i45_details.worst_5d_day_pct <= -cfg.volRegimeBigCrashPct) parts.push(`worst day ${i45_details.worst_5d_day_pct}% ≤ -${cfg.volRegimeBigCrashPct}%`);
+                    return parts.join(' AND ');
+                })()
+                : (last5d.length >= 3 ? `max range ${i45_details.max_5d_range_pct}% (limit ${cfg.volRegimeMaxDailyRangePct}%), worst day ${i45_details.worst_5d_day_pct}% (limit -${cfg.volRegimeBigCrashPct}%) — both within tolerance` : 'insufficient data → pass'),
+            details: i45_details,
+        });
+
+        // ── Filter 5: post_pump_bleed (simplified — would need full kline scan; show config only) ──
+        filters.push({
+            id: 'post_pump_bleed',
+            name: 'Post-pump bleed (multi-day)',
+            pass: true,  // approximated as pass — full scan is server-side only
+            note: 'Bot checks for +30% pump in last 15 days now off-peak by 10%. Full check runs in the scalper at signal time.',
+            details: {
+                limits: { threshold: cfg.postPumpThresholdPct, off_peak: cfg.postPumpOffPeakMinPct, lookback_days: cfg.postPumpLookbackDays },
+            },
+        });
+
+        // Final verdict
+        const blocker = filters.find(f => f.blocked);
+        const wouldPass = filters.every(f => f.pass !== false);
+
+        // ── iter43 strategy chooser (only relevant if would pass) ──
+        let strategy = null;
+        if (wouldPass) {
+            const r1h = range1hPct;
+            let tier, buy1Off, buy2Off, tpUsdt;
+            if (r1h < cfg.adaptiveTierCalmMaxPct) {
+                tier = 'CALM'; buy1Off = cfg.adaptiveBuy1OffsetCalm; buy2Off = cfg.adaptiveBuy2OffsetCalm; tpUsdt = cfg.adaptiveTpTargetCalm;
+            } else if (r1h < cfg.adaptiveTierNormalMaxPct) {
+                tier = 'NORMAL'; buy1Off = cfg.adaptiveBuy1OffsetNormal; buy2Off = cfg.adaptiveBuy2OffsetNormal; tpUsdt = cfg.adaptiveTpTargetNormal;
+            } else if (r1h < cfg.adaptiveTierVolatileMaxPct) {
+                tier = 'VOLATILE'; buy1Off = cfg.adaptiveBuy1OffsetVolatile; buy2Off = cfg.adaptiveBuy2OffsetVolatile; tpUsdt = cfg.adaptiveTpTargetVolatile;
+            } else {
+                tier = 'X_VOLATILE'; buy1Off = cfg.adaptiveBuy1OffsetXVolatile; buy2Off = cfg.adaptiveBuy2OffsetXVolatile; tpUsdt = cfg.adaptiveTpTargetXVolatile;
+            }
+            const buy1Price = lastPrice * (1 - buy1Off / 100);
+            const buy2Price = lastPrice * (1 - buy2Off / 100);
+            // TP math: tp_pct = (target_net / leg_size)*100 + 2*fee_rate*100
+            const tpPct = (tpUsdt / cfg.ladderBuy1SizeUsdt) * 100 + 2 * cfg.ladderFeeRatePerSide * 100;
+            const tpPrice = buy1Price * (1 + tpPct / 100);
+            strategy = {
+                tier,
+                range_1h_pct: +r1h.toFixed(2),
+                signal_price: +lastPrice.toFixed(8),
+                buy_1: {
+                    offset_pct: buy1Off,
+                    price: +buy1Price.toFixed(8),
+                    size_usdt: cfg.ladderBuy1SizeUsdt,
+                },
+                buy_2: {
+                    offset_pct: buy2Off,
+                    price: +buy2Price.toFixed(8),
+                    size_usdt: cfg.ladderBuy2SizeUsdt,
+                    note: 'placed as LIMIT after Buy 1 fills; cancelled if Buy 1 fills + 10min stale',
+                },
+                tp: {
+                    target_net_usdt: tpUsdt,
+                    tp_pct: +tpPct.toFixed(4),
+                    tp_price: +tpPrice.toFixed(8),
+                    formula: `tp_pct = (${tpUsdt}/${cfg.ladderBuy1SizeUsdt})×100 + 2×${cfg.ladderFeeRatePerSide}×100 = ${tpPct.toFixed(4)}%`,
+                    explanation: `If Buy 1 fills at $${buy1Price.toFixed(6)} and Buy 2 doesn't fill, TP sell at $${tpPrice.toFixed(6)} = +$${tpUsdt} net (after both 0.075% fees)`,
+                },
+            };
+        }
+
+        res.json({
+            symbol: ccxtSym,
+            timestamp: new Date().toISOString(),
+            market: {
+                last_price: lastPrice,
+                change_24h_pct: +chg24Pct.toFixed(2),
+                high_24h: high24,
+                low_24h: low24,
+                from_24h_high_pct: +fromHigh24Pct.toFixed(2),
+                quote_volume_24h_usd: quoteVol24,
+                range_1h_pct: +range1hPct.toFixed(2),
+            },
+            filters,
+            verdict: {
+                would_buy: wouldPass && !blocker,
+                blocked: !!blocker,
+                blocker: blocker ? blocker.id : null,
+                blocker_reason: blocker ? blocker.reason : null,
+            },
+            strategy,
+            config_summary: {
+                auto_buy_enabled: !!cfg.autoBuyEnabled,
+                virtual_live_mode: !!cfg.virtualScalperLiveMode,
+                ladder_enabled: !!cfg.ladderedRecoveryEnabled,
+            },
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Recent skip events from METRICS:SKIP:<today>
+app.get('/api/recent-decisions', async (req, res) => {
+    try {
+        const date = new Date().toISOString().slice(0, 10);
+        const limit = parseInt(req.query.limit || '30', 10);
+        const raw = await redis.lrange(`METRICS:SKIP:${date}`, 0, limit - 1);
+        const events = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+        res.json({ date, total: events.length, events });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/v1/config', async (req, res) => {
     try {
         const newConfig = req.body || {};
