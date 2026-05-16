@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Book-Now — Scalper Diagnostic</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --panel-2: #1a232e; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --neutral: #8b949e; --pink: #ff6b9d; --purple: #b07ee0;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  .sub { color: var(--muted); margin-bottom: 18px; font-size: 13px; }
+  .topnav { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .topnav a { display: inline-block; padding: 6px 14px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 600; }
+  .topnav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .topnav a:not(.active):hover { color: var(--text); border-color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+  .card h2 { margin: 0 0 12px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+  .pill.tb { background: rgba(231,76,60,.18); color: var(--bad); }
+  .pill.skip { background: rgba(241,196,15,.15); color: var(--warn); }
+  .pill.info { background: rgba(41,182,246,.15); color: var(--accent); }
+  .pill.malf { background: rgba(231,76,60,.18); color: var(--bad); }
+  .pill.ok { background: rgba(46,204,113,.15); color: var(--good); }
+  .pill.restart { background: rgba(231,76,60,.18); color: var(--bad); }
+  .pill.skip_healthy { background: rgba(46,204,113,.15); color: var(--good); }
+  .pill.skip_positions_open { background: rgba(241,196,15,.15); color: var(--warn); }
+  .pill.skip_cooldown { background: rgba(139,148,158,.20); color: var(--muted); }
+
+  /* Log tail */
+  .log-area { background: #08090c; border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; font: 11px/1.5 'SF Mono', Menlo, monospace; max-height: 480px; overflow-y: auto; white-space: pre-wrap; }
+  .log-line { padding: 2px 0; border-bottom: 1px dashed rgba(255,255,255,.04); }
+  .log-line.tb { color: #ff9999; background: rgba(231,76,60,.08); }
+  .log-line.skip { color: var(--warn); }
+  .log-line.info { color: var(--muted); }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; padding: 6px 8px; background: var(--panel-2); color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .4px; border-bottom: 1px solid var(--line); }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  tr:hover td { background: var(--panel-2); }
+
+  /* Inputs / buttons */
+  button { padding: 6px 12px; background: var(--accent); color: #fff; border: 0; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 11px; }
+  button.alt { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+  button.danger { background: var(--bad); }
+  button.warn { background: var(--warn); color: #0c1116; }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  select { padding: 5px 10px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 4px; font-size: 11px; }
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+  .empty { padding: 20px; text-align: center; color: var(--muted); font-style: italic; }
+  .ok-banner { padding: 10px 14px; background: rgba(46,204,113,.10); border-left: 3px solid var(--good); border-radius: 6px; color: var(--good); font-size: 12px; margin-bottom: 10px; }
+  .warn-banner { padding: 10px 14px; background: rgba(241,196,15,.10); border-left: 3px solid var(--warn); border-radius: 6px; color: var(--warn); font-size: 12px; margin-bottom: 10px; }
+  .err-banner { padding: 10px 14px; background: rgba(231,76,60,.10); border-left: 3px solid var(--bad); border-radius: 6px; color: var(--bad); font-size: 12px; margin-bottom: 10px; }
+  .hint { color: var(--muted); font-size: 11px; }
+  .live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--good); margin-right: 6px; animation: pulse 1.5s infinite; vertical-align: middle; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+  .summary-tile { padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+  .summary-tile .label { font-size: 10px; color: var(--muted); text-transform: uppercase; }
+  .summary-tile .value { font-size: 18px; font-weight: 700; margin-top: 3px; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/">📊 Monitor</a>
+  <a href="/active-monitors.html">🎛️ Active Monitors</a>
+  <a href="/scalper-diagnostic.html" class="active">🔬 Scalper Diagnostic</a>
+  <a href="/offset-strategy.html">⚙️ Offset Strategy</a>
+  <a href="/pending-monitor.html">⏳ Pending Monitor</a>
+  <a href="/adaptive-eligibility.html">✅ Adaptive Gate</a>
+  <a href="/adaptive-offset.html">🎯 Adaptive Offset</a>
+  <a href="/limit-buy-replay.html">🔄 Limit Replay</a>
+  <a href="/filter-candidate.html">🧪 Filter Tester</a>
+  <a href="/pattern-bot.html">🤖 Pattern Bot</a>
+  <a href="/metrics.html">📈 Metrics</a>
+</nav>
+
+<h1>🔬 Scalper Diagnostic</h1>
+<div class="sub">
+  Live trace of Virtual Scalper crashes + safe-restart history + Redis JSON validation.
+  Replaces the dumb 4-hour blind restart with a smart watcher that only fires when:
+  <strong>Virtual silent &gt; 30 min</strong> AND <strong>no positions open</strong>.
+</div>
+
+<!-- Smart restart status + manual trigger -->
+<div class="card">
+  <h2>♻️ Smart-restart watcher
+    <span class="hint" id="watcherTs">—</span>
+  </h2>
+  <div class="summary-grid" id="restartSummary">
+    <div class="empty">Loading…</div>
+  </div>
+  <div class="toolbar" style="margin-top: 12px;">
+    <button class="warn" onclick="manualRestart(false)">🔄 Request safe restart</button>
+    <button class="danger" onclick="manualRestart(true)" title="Skip the position-check guard">⚠️ Force restart</button>
+    <span class="hint">Safe restart aborts if any Fast/Virtual/Pattern position is open. Force overrides.</span>
+  </div>
+  <div id="manualRestartResult"></div>
+</div>
+
+<div class="card">
+  <h2>📜 Recent smart-restart decisions (last 50)</h2>
+  <div id="restartHistory"><div class="empty">Loading…</div></div>
+</div>
+
+<!-- Virtual Scalper log tail -->
+<div class="card">
+  <h2>📡 Virtual Scalper log tail
+    <span class="pill tb" id="logTbCount">0 tb</span>
+    <span class="pill skip" id="logSkipCount">0 skip</span>
+    <span class="pill info" id="logTotalCount">0 lines</span>
+    <span style="flex: 1;"></span>
+    <span class="hint">Updated every minute from docker logs. Last 200 non-heartbeat lines.</span>
+  </h2>
+  <div class="log-area" id="logArea"><div class="empty">Loading…</div></div>
+</div>
+
+<!-- Redis JSON validation -->
+<div class="card">
+  <h2>🧪 Redis JSON validation
+    <span class="hint">Find malformed entries that would crash <code>json.loads()</code></span>
+  </h2>
+  <div class="toolbar">
+    <label style="font-size: 11px; color: var(--muted);">Key:</label>
+    <select id="validateKey">
+      <option value="FAST_MOVE">FAST_MOVE (391 entries)</option>
+      <option value="RW_BASE_PRICE">RW_BASE_PRICE (416 entries)</option>
+      <option value="BASE_CURRENT_INC_%">BASE_CURRENT_INC_% (419 entries)</option>
+      <option value="SCALPER:LADDER_STATES">SCALPER:LADDER_STATES</option>
+      <option value="VIRTUAL:LADDER_STATES">VIRTUAL:LADDER_STATES</option>
+      <option value="PATTERN_BOT:OPEN">PATTERN_BOT:OPEN</option>
+      <option value="BINANCE:OPEN_ORDERS:ALL">BINANCE:OPEN_ORDERS:ALL</option>
+    </select>
+    <button onclick="validateKey()">🔍 Scan</button>
+    <span class="hint">If anything fails JSON parse → that's the bug. Use 🗑 Purge to delete bad entries.</span>
+  </div>
+  <div id="validateResult" style="margin-top: 12px;"></div>
+</div>
+
+<script>
+function fmt(n, d) { return n == null || isNaN(n) ? '—' : Number(n).toFixed(d == null ? 2 : d); }
+
+// ── Smart restart status + history ──
+async function refreshRestartHistory() {
+  try {
+    const [hRes, sRes] = await Promise.all([
+      fetch('/api/scalper-restart-history'),
+      fetch('/api/scalper-health'),
+    ]);
+    const h = await hRes.json();
+    const s = await sRes.json();
+    document.getElementById('watcherTs').textContent = 'health updated ' + new Date(s.ts || Date.now()).toLocaleTimeString();
+    const v = s.virtual_scalper || {};
+
+    document.getElementById('restartSummary').innerHTML = `
+      <div class="summary-tile">
+        <div class="label">Virtual age</div>
+        <div class="value" style="color: ${v.last_activity_age_min == null ? 'var(--bad)' : v.last_activity_age_min > 30 ? 'var(--warn)' : 'var(--good)'};">
+          ${v.last_activity_age_min == null ? '∞' : (v.last_activity_age_min < 60 ? v.last_activity_age_min + 'm' : (v.last_activity_age_min/60).toFixed(1) + 'h')}
+        </div>
+      </div>
+      <div class="summary-tile">
+        <div class="label">Restart threshold</div>
+        <div class="value">30m</div>
+      </div>
+      <div class="summary-tile">
+        <div class="label">Open positions</div>
+        <div class="value">F:${v.active_positions || 0} V:${v.active_positions || 0}</div>
+      </div>
+      <div class="summary-tile">
+        <div class="label">Total restarts logged</div>
+        <div class="value">${h.summary?.restarts || 0}</div>
+      </div>
+      <div class="summary-tile">
+        <div class="label">Skipped (healthy)</div>
+        <div class="value">${h.summary?.skip_healthy || 0}</div>
+      </div>
+      <div class="summary-tile">
+        <div class="label">Skipped (positions)</div>
+        <div class="value">${h.summary?.skip_positions || 0}</div>
+      </div>
+    `;
+
+    const entries = h.entries || [];
+    if (entries.length === 0) {
+      document.getElementById('restartHistory').innerHTML = '<div class="empty">No restart attempts yet — watcher runs every 5 min.</div>';
+    } else {
+      document.getElementById('restartHistory').innerHTML = `
+        <table>
+          <thead><tr><th>Time</th><th>Action</th><th>Reason</th></tr></thead>
+          <tbody>
+            ${entries.slice(0, 30).map(e => `
+              <tr>
+                <td>${e.ts || '—'}</td>
+                <td><span class="pill ${e.action || ''}">${e.action || '—'}</span></td>
+                <td>${e.reason || ''}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+  } catch (e) {
+    document.getElementById('restartHistory').innerHTML = '<div class="err-banner">' + e.message + '</div>';
+  }
+}
+
+async function manualRestart(force) {
+  const out = document.getElementById('manualRestartResult');
+  if (!confirm(force ? 'FORCE restart? This skips position checks and may interrupt open trades.' : 'Request safe restart? (will run on next 5-min watcher tick if no positions are open)')) return;
+  out.innerHTML = '<div class="hint">Requesting…</div>';
+  try {
+    const r = await fetch('/api/manual-restart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force }),
+    });
+    const j = await r.json();
+    if (r.ok && j.success) {
+      out.innerHTML = `<div class="ok-banner">✓ ${j.note}</div>`;
+    } else if (j.error === 'positions_open') {
+      out.innerHTML = `<div class="warn-banner">⚠ ${j.detail}</div>`;
+    } else {
+      out.innerHTML = `<div class="err-banner">✗ ${j.error || 'request failed'}</div>`;
+    }
+    setTimeout(refreshRestartHistory, 800);
+  } catch (e) {
+    out.innerHTML = `<div class="err-banner">${e.message}</div>`;
+  }
+}
+
+// ── Log tail ──
+async function refreshLogs() {
+  try {
+    const r = await fetch('/api/scalper-logs?scalper=virtual&limit=200');
+    const j = await r.json();
+    document.getElementById('logTbCount').textContent = `${j.tracebacks || 0} tb`;
+    document.getElementById('logSkipCount').textContent = `${j.skips || 0} skip`;
+    document.getElementById('logTotalCount').textContent = `${j.count || 0} lines`;
+    const lines = j.lines || [];
+    if (lines.length === 0) {
+      document.getElementById('logArea').innerHTML = '<div class="empty">No non-heartbeat log lines yet. Will populate when the next crash/skip/error occurs.</div>';
+    } else {
+      document.getElementById('logArea').innerHTML = lines.map(l => {
+        const cls = /Traceback|Error|Exception/i.test(l.text) ? 'tb'
+                  : /skipped by filter|🔪/i.test(l.text) ? 'skip'
+                  : 'info';
+        return `<div class="log-line ${cls}">${escapeHtml(l.text)}</div>`;
+      }).join('');
+    }
+  } catch (e) {
+    document.getElementById('logArea').innerHTML = `<div class="err-banner">${e.message}</div>`;
+  }
+}
+
+function escapeHtml(s) { return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+
+// ── Redis validation ──
+async function validateKey() {
+  const key = document.getElementById('validateKey').value;
+  const out = document.getElementById('validateResult');
+  out.innerHTML = '<div class="hint">Scanning…</div>';
+  try {
+    const r = await fetch('/api/redis-validate?key=' + encodeURIComponent(key));
+    const j = await r.json();
+    if (j.error) { out.innerHTML = `<div class="err-banner">${j.error}</div>`; return; }
+    const malf = j.malformed || [];
+    const banner = malf.length === 0
+      ? `<div class="ok-banner">✓ All ${j.total} entries are valid JSON (${j.valid} OK).</div>`
+      : `<div class="err-banner">🚨 ${malf.length} MALFORMED entries found out of ${j.total}. THESE WILL CRASH THE PYTHON LOOP.</div>`;
+    if (malf.length === 0) { out.innerHTML = banner; return; }
+    out.innerHTML = `
+      ${banner}
+      <table>
+        <thead><tr><th>Field</th><th>Error</th><th>Sample (first 200 chars)</th><th>Action</th></tr></thead>
+        <tbody>
+          ${malf.map(m => `
+            <tr>
+              <td><strong>${escapeHtml(m.field)}</strong></td>
+              <td style="color: var(--bad); font-size: 11px;">${escapeHtml(m.error)}</td>
+              <td style="font: 10px/1.4 monospace; color: var(--muted); max-width: 400px; word-break: break-all;">${escapeHtml(m.sample)}</td>
+              <td><button class="danger" onclick="purgeEntry('${key}', '${escapeHtml(m.field)}')">🗑 Purge</button></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  } catch (e) {
+    out.innerHTML = `<div class="err-banner">${e.message}</div>`;
+  }
+}
+
+async function purgeEntry(key, field) {
+  if (!confirm(`Permanently delete ${key}["${field}"]? This frees the Python json.loads crash but loses any state in that entry.`)) return;
+  try {
+    const r = await fetch('/api/redis-purge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, field }),
+    });
+    const j = await r.json();
+    if (j.success) {
+      alert(`✓ Purged ${key}["${field}"]`);
+      validateKey();
+    } else {
+      alert(`✗ ${j.error}`);
+    }
+  } catch (e) { alert('Error: ' + e.message); }
+}
+
+refreshLogs();
+refreshRestartHistory();
+setInterval(() => { refreshLogs(); refreshRestartHistory(); }, 10000);
+</script>
+
+</body>
+</html>

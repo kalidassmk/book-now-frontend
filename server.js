@@ -3990,6 +3990,185 @@ app.get('/api/scalper-health', async (req, res) => {
     }
 });
 
+// iter 30 fe (2026-05-16): Virtual Scalper diagnostics + safe restart
+//
+// User: "kindly add proper logs for easy trace the virtual scalper down …
+// we need avoid 4 hours restart, we can hold 4 hours restart as of now,
+// we will find the exact fix"
+//
+// Host scripts in ~/booknow-cron/ feed:
+//   • VIRTUAL:LOG_TAIL          last 200 non-heartbeat Virtual log lines
+//   • VIRTUAL:RESTART_HISTORY   last 50 smart-restart decisions
+//   • VIRTUAL:LAST_RESTART_TS   epoch of last successful restart (cooldown)
+//
+// These endpoints surface them + add JSON-validation/purge for the
+// suspect signal-source hashes (FAST_MOVE, RW_BASE_PRICE, BASE_CURRENT_INC_%).
+
+app.get('/api/scalper-logs', async (req, res) => {
+    try {
+        const scalper = (req.query.scalper || 'virtual').toLowerCase();
+        const limit = Math.min(parseInt(req.query.limit || '100', 10), 200);
+        // Today only — scalper logs aren't long-running enough to bother with date scan
+        const key = scalper === 'virtual' ? 'VIRTUAL:LOG_TAIL'
+                  : scalper === 'fast'    ? 'FAST:LOG_TAIL'
+                  : null;
+        if (!key) return res.status(400).json({ error: 'scalper must be virtual or fast' });
+        const lines = await redis.lrange(key, 0, limit - 1);
+        // Quick categorisation
+        const tracebacks = lines.filter(l => /Traceback|Error|Exception/i.test(l)).length;
+        const skips = lines.filter(l => /skipped by filter|🔪/i.test(l)).length;
+        res.json({
+            scalper, count: lines.length, tracebacks, skips,
+            lines: lines.map((l, i) => ({ idx: i, text: l })),
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/scalper-restart-history', async (req, res) => {
+    try {
+        const raw = await redis.lrange('VIRTUAL:RESTART_HISTORY', 0, 49);
+        const entries = raw.map(r => {
+            // Format: "ts|action|reason"
+            const [ts, action, reason] = r.split('|');
+            return { ts, action, reason };
+        });
+        // Stats
+        const summary = {
+            total: entries.length,
+            restarts: entries.filter(e => e.action === 'restart').length,
+            skip_healthy: entries.filter(e => e.action === 'skip_healthy').length,
+            skip_positions: entries.filter(e => e.action === 'skip_positions_open').length,
+            skip_cooldown: entries.filter(e => e.action === 'skip_cooldown').length,
+        };
+        res.json({ summary, entries });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Validate JSON in every entry of a Redis hash. Used to find malformed
+// entries that crash the Python json.loads() call in virtual_scalp_executor.
+app.get('/api/redis-validate', async (req, res) => {
+    const key = req.query.key;
+    if (!key) return res.status(400).json({ error: 'key required' });
+    // Whitelist to prevent abuse (only inspect known-relevant keys)
+    const ALLOWED = new Set([
+        'FAST_MOVE', 'RW_BASE_PRICE', 'BASE_CURRENT_INC_%',
+        'SCALPER:LADDER_STATES', 'VIRTUAL:LADDER_STATES', 'PATTERN_BOT:OPEN',
+        'BINANCE:OPEN_ORDERS:ALL',
+    ]);
+    if (!ALLOWED.has(key)) return res.status(400).json({ error: `key not in whitelist: ${[...ALLOWED].join(', ')}` });
+
+    try {
+        const type = await redis.type(key);
+        const out = { key, type, malformed: [], total: 0, valid: 0 };
+        if (type === 'hash') {
+            const fields = await redis.hkeys(key);
+            out.total = fields.length;
+            for (const f of fields) {
+                const v = await redis.hget(key, f);
+                if (v == null) continue;
+                try {
+                    JSON.parse(v);
+                    out.valid++;
+                } catch (e) {
+                    out.malformed.push({
+                        field: f,
+                        sample: String(v).slice(0, 200),
+                        error: e.message,
+                    });
+                }
+            }
+        } else if (type === 'string') {
+            out.total = 1;
+            const v = await redis.get(key);
+            try { JSON.parse(v); out.valid++; }
+            catch (e) { out.malformed.push({ field: '(root)', sample: String(v).slice(0, 200), error: e.message }); }
+        } else if (type === 'list') {
+            const len = await redis.llen(key);
+            out.total = len;
+            const sample = await redis.lrange(key, 0, Math.min(len, 100) - 1);
+            sample.forEach((v, i) => {
+                try { JSON.parse(v); out.valid++; }
+                catch (e) { out.malformed.push({ field: `[${i}]`, sample: String(v).slice(0, 200), error: e.message }); }
+            });
+        }
+        res.json(out);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Safely purge a single hash field (or list index) that was identified as
+// malformed. Required because the JSON crash will recur on every restart
+// until the bad entry is removed from the source.
+app.post('/api/redis-purge', async (req, res) => {
+    const { key, field, list_index } = req.body || {};
+    const ALLOWED = new Set(['FAST_MOVE', 'RW_BASE_PRICE', 'BASE_CURRENT_INC_%']);
+    if (!key || !ALLOWED.has(key)) {
+        return res.status(400).json({ error: `key must be one of: ${[...ALLOWED].join(', ')}` });
+    }
+    if (!field && list_index === undefined) {
+        return res.status(400).json({ error: 'field (for hash) or list_index (for list) required' });
+    }
+    try {
+        const type = await redis.type(key);
+        if (type === 'hash') {
+            const existed = await redis.hexists(key, field);
+            if (!existed) return res.status(404).json({ error: `field ${field} not found in ${key}` });
+            await redis.hdel(key, field);
+            return res.json({ success: true, key, field, removed: true });
+        } else if (type === 'list') {
+            // Set the offending index to a tombstone, then LREM
+            // (Redis can't directly delete by index; use a unique tombstone)
+            const tombstone = `__PURGED_${Date.now()}__`;
+            await redis.lset(key, list_index, tombstone);
+            await redis.lrem(key, 1, tombstone);
+            return res.json({ success: true, key, list_index, removed: true });
+        }
+        res.status(400).json({ error: `unsupported type: ${type}` });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Manual safe-restart endpoint (mirrors the smart-restart script logic but
+// callable from the dashboard).
+app.post('/api/manual-restart', async (req, res) => {
+    const force = !!req.body?.force;
+    try {
+        const [fastPos, virtPos, ptrnPos] = await Promise.all([
+            redis.hlen('SCALPER:LADDER_STATES'),
+            redis.hlen('VIRTUAL:LADDER_STATES'),
+            redis.hlen('PATTERN_BOT:OPEN'),
+        ]);
+        const totalOpen = fastPos + virtPos + ptrnPos;
+        if (totalOpen > 0 && !force) {
+            return res.status(409).json({
+                error: 'positions_open',
+                detail: `${totalOpen} positions open (${fastPos}F + ${virtPos}V + ${ptrnPos}P). Pass force=true to override.`,
+                fast: fastPos, virtual: virtPos, pattern: ptrnPos,
+            });
+        }
+        // Write request marker — the host smart-restart cron will pick it up
+        // on its next 5-min run, OR the operator can SSH and run it. Without
+        // host shell access we can't actually restart booknow-backend from
+        // inside the frontend container.
+        const ts = Date.now();
+        await redis.set('VIRTUAL:MANUAL_RESTART_REQUEST', String(ts), 'EX', 300);
+        res.json({
+            success: true,
+            note: 'Manual restart requested. The host smart-restart watcher (every 5min) will execute on next tick. To restart immediately, SSH to the host and run: ~/booknow-cron/smart-restart.sh',
+            positions_at_request: { fast: fastPos, virtual: virtPos, pattern: ptrnPos },
+            requested_at: ts,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // iter 27 fe (2026-05-16): Limit-Offset Strategy editor
 //
 // User: "today we can enable limit order buy 1 off set -0.01% and -0.02%
