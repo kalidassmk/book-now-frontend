@@ -1049,6 +1049,19 @@ const DEFAULT_TRADING_CONFIG = {
     pendingAutoCancelMaxPerHour: 10,   // soft ceiling on auto-cancels per hour
     pendingAutoCancelCooldownSec: 300, // skip a symbol for 5 min after cancel
     pendingAutoCancelAgeBufferSec: 60, // require staleMin + 60s before action
+
+    // iter 25 fe (2026-05-16): Cancel-Recovery worker. Rescues orders that
+    // the Python scalper's pending_pump_dump_cancel logic killed too early
+    // (RENDER case: price came back to the limit within 50s of cancel).
+    // Default OFF + paperMode ON — recovery is intrinsically riskier so
+    // operator must audit a few cycles before going live.
+    pendingRecoveryEnabled: false,
+    pendingRecoveryPaperMode: true,
+    pendingRecoveryMinTouchPct: 0.20,  // price came within 0.20% of limit
+    pendingRecoveryMaxAbovePct: 0.30,  // current at most 0.30% above limit
+    pendingRecoveryWindowSec: 300,     // only act within 5 min of cancel
+    pendingRecoveryMaxPerHour: 3,      // strict ceiling — recovery is risky
+    pendingRecoveryCooldownSec: 1800,  // 30 min symbol cooldown
 };
 
 app.get('/api/v1/config', async (req, res) => {
@@ -3282,6 +3295,103 @@ app.get('/api/auto-cancel/log', async (req, res) => {
     }
 });
 
+// iter 25 fe (2026-05-16): Cancel-Recovery worker control endpoints.
+// Surfaces config / status / quota / cooldowns / audit log for the
+// pending-recovery-worker. User journey: turn enabled=true while
+// paperMode=true, let it observe RENDER-style cancels for a day, audit the
+// "would have recovered" entries, then flip paperMode off to go live.
+app.get('/api/recovery/status', async (req, res) => {
+    try {
+        const cfgRaw = await redis.get(CONFIG_KEY);
+        const cfg = { ...DEFAULT_TRADING_CONFIG, ...(cfgRaw ? JSON.parse(cfgRaw) : {}) };
+        const status = await redis.hgetall('PENDING_RECOVERY:STATUS') || {};
+        const bucket = Math.floor(Date.now() / 3600000);
+        const used = parseInt((await redis.get(`PENDING_RECOVERY:HOUR_BUCKET:${bucket}`)) || '0', 10);
+        const cdKeys = await redis.keys('PENDING_RECOVERY:COOLDOWN:*');
+        const cooldowns = await Promise.all(cdKeys.map(async (k) => ({
+            symbol: k.replace('PENDING_RECOVERY:COOLDOWN:', ''),
+            ttl_sec: await redis.ttl(k),
+        })));
+        res.json({
+            config: {
+                enabled: !!cfg.pendingRecoveryEnabled,
+                paper_mode: cfg.pendingRecoveryPaperMode ?? true,
+                min_touch_pct: cfg.pendingRecoveryMinTouchPct ?? 0.20,
+                max_above_pct: cfg.pendingRecoveryMaxAbovePct ?? 0.30,
+                window_sec: cfg.pendingRecoveryWindowSec ?? 300,
+                max_per_hour: cfg.pendingRecoveryMaxPerHour ?? 3,
+                cooldown_sec: cfg.pendingRecoveryCooldownSec ?? 1800,
+            },
+            status: {
+                last_poll_ts: status.last_poll_ts ? +status.last_poll_ts : null,
+                last_candidates: status.last_candidates ? +status.last_candidates : 0,
+                last_recover_count: status.last_recover_count ? +status.last_recover_count : 0,
+                last_action_ts: status.last_action_ts ? +status.last_action_ts : null,
+                last_error: status.last_error || null,
+            },
+            quota: {
+                used_this_hour: used,
+                limit_per_hour: cfg.pendingRecoveryMaxPerHour ?? 3,
+            },
+            cooldowns,
+            recoverable_reasons: ['pending_pump_dump_cancel', 'manual_cancel'],
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/recovery/toggle', async (req, res) => {
+    try {
+        const { enabled, paper_mode, min_touch_pct, max_above_pct, max_per_hour, cooldown_sec } = req.body || {};
+        const existingRaw = await redis.get(CONFIG_KEY);
+        const existing = existingRaw ? JSON.parse(existingRaw) : {};
+        const merged = { ...DEFAULT_TRADING_CONFIG, ...existing };
+        if (typeof enabled === 'boolean') merged.pendingRecoveryEnabled = enabled;
+        if (typeof paper_mode === 'boolean') merged.pendingRecoveryPaperMode = paper_mode;
+        if (typeof min_touch_pct === 'number' && min_touch_pct >= 0) merged.pendingRecoveryMinTouchPct = min_touch_pct;
+        if (typeof max_above_pct === 'number' && max_above_pct >= 0) merged.pendingRecoveryMaxAbovePct = max_above_pct;
+        if (typeof max_per_hour === 'number' && max_per_hour > 0) merged.pendingRecoveryMaxPerHour = max_per_hour;
+        if (typeof cooldown_sec === 'number' && cooldown_sec >= 0) merged.pendingRecoveryCooldownSec = cooldown_sec;
+        await redis.set(CONFIG_KEY, JSON.stringify(merged));
+        res.json({
+            success: true,
+            enabled: merged.pendingRecoveryEnabled,
+            paper_mode: merged.pendingRecoveryPaperMode,
+            min_touch_pct: merged.pendingRecoveryMinTouchPct,
+            max_above_pct: merged.pendingRecoveryMaxAbovePct,
+            max_per_hour: merged.pendingRecoveryMaxPerHour,
+            cooldown_sec: merged.pendingRecoveryCooldownSec,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/recovery/log', async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit || '50', 10);
+        const raw = await redis.lrange('PENDING_RECOVERY:LOG', 0, limit - 1);
+        const entries = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+        const today = new Date().toISOString().slice(0, 10);
+        const todayEntries = entries.filter(e => new Date(e.ts).toISOString().slice(0, 10) === today);
+        const summary = {
+            total: entries.length,
+            today: todayEntries.length,
+            paper_recovered: todayEntries.filter(e => e.outcome === 'paper_recovered').length,
+            live_recovered: todayEntries.filter(e => e.outcome === 'recovered').length,
+            skip_no_near_miss: todayEntries.filter(e => e.outcome === 'skip_no_near_miss').length,
+            skip_too_far_above: todayEntries.filter(e => e.outcome === 'skip_too_far_above').length,
+            skip_eligibility_red: todayEntries.filter(e => e.outcome === 'skip_eligibility_red').length,
+            skip_cooldown: todayEntries.filter(e => e.outcome === 'skip_cooldown').length,
+            failed: todayEntries.filter(e => e.outcome === 'recovery_failed' || e.outcome === 'error').length,
+        };
+        res.json({ summary, entries });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // iter 17 fe: Pattern Bot endpoints
 app.get('/api/pattern-bot/status', async (req, res) => {
     try {
@@ -4726,6 +4836,9 @@ const patternBot = require('./pattern-bot-worker');
 // iter 24 fe (2026-05-16): Pending-order auto-cancel worker
 const pendingAutoCancel = require('./pending-monitor-worker');
 
+// iter 25 fe (2026-05-16): Cancel-recovery worker
+const pendingRecovery = require('./pending-recovery-worker');
+
 server.listen(PORT, () => {
     console.log(`\n🚀 BookNow Fast Dashboard → http://localhost:${PORT}`);
     console.log(`📡 Polling Redis every ${POLL_MS}ms\n`);
@@ -4748,4 +4861,13 @@ server.listen(PORT, () => {
             console.error('[auto-cancel] failed to start:', e.message);
         }
     }, 6000);
+
+    // Start recovery worker 7s after boot
+    setTimeout(() => {
+        try {
+            pendingRecovery.start({ redis, port: PORT });
+        } catch (e) {
+            console.error('[recovery] failed to start:', e.message);
+        }
+    }, 7000);
 });

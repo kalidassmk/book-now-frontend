@@ -143,6 +143,35 @@
   <div id="acLog"><div class="empty">Loading…</div></div>
 </div>
 
+<!-- Recovery worker control (iter25) -->
+<div class="card">
+  <h2>♻️ Cancel-Recovery worker
+    <span class="count" id="rcStatePill">loading…</span>
+  </h2>
+  <div style="background: var(--bg); border-left: 3px solid var(--warn); padding: 10px 14px; border-radius: 6px; font-size: 12px; color: var(--muted); margin-bottom: 12px;">
+    Rescues orders the Python scalper cancels too early (the RENDER case: price came back to limit within seconds of cancel).
+    On each <code>pending_pump_dump_cancel</code> or <code>manual_cancel</code>, checks if price came within tolerance of the limit,
+    current price is still in range, and Adaptive Gate is not RED. Re-issues via <code>/api/buy</code> (Spring engine — different
+    code path from the Python scalper, so the bad cancel logic won't fire again on the recovery).
+  </div>
+  <div class="toolbar">
+    <label><input type="checkbox" id="rcEnabled" /> <strong>Enable recovery</strong></label>
+    <label><input type="checkbox" id="rcPaperMode" checked /> Paper-mode (log only)</label>
+    <label>Touch within (%) <input id="rcMinTouch" type="number" step="0.05" value="0.20" min="0" max="2" style="width: 70px;" /></label>
+    <label>Current ≤ above (%) <input id="rcMaxAbove" type="number" step="0.05" value="0.30" min="0" max="2" style="width: 70px;" /></label>
+    <label>Max/hour <input id="rcMaxHour" type="number" value="3" min="1" max="20" style="width: 60px;" /></label>
+    <label>Cooldown (sec) <input id="rcCooldown" type="number" value="1800" min="60" style="width: 80px;" /></label>
+    <button onclick="saveRecoveryConfig()">💾 Save</button>
+  </div>
+  <div id="rcStatus" style="margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px;"></div>
+</div>
+
+<!-- Recovery audit log -->
+<div class="card">
+  <h2>📋 Recovery log <span class="count" id="rcLogCount">—</span></h2>
+  <div id="rcLog"><div class="empty">Loading…</div></div>
+</div>
+
 <!-- Strip -->
 <div id="strip" class="strip">
   <div class="tile"><div class="label">Pending orders</div><div class="value" id="totCount">—</div></div>
@@ -467,12 +496,168 @@ async function saveAutoCancelConfig() {
   }
 }
 
+// ── Cancel-Recovery worker (iter25) ──
+async function refreshRecovery() {
+  try {
+    const r = await fetch('/api/recovery/status');
+    const j = await r.json();
+    const c = j.config || {};
+    const s = j.status || {};
+    const q = j.quota || {};
+
+    const inputs = {
+      rcEnabled: { checked: !!c.enabled },
+      rcPaperMode: { checked: !!c.paper_mode },
+      rcMinTouch: { value: c.min_touch_pct },
+      rcMaxAbove: { value: c.max_above_pct },
+      rcMaxHour: { value: c.max_per_hour },
+      rcCooldown: { value: c.cooldown_sec },
+    };
+    for (const [id, val] of Object.entries(inputs)) {
+      const el = document.getElementById(id);
+      if (document.activeElement !== el) {
+        if ('checked' in val) el.checked = val.checked;
+        if ('value' in val) el.value = val.value;
+      }
+    }
+
+    const pill = document.getElementById('rcStatePill');
+    if (!c.enabled) {
+      pill.textContent = 'DISABLED';
+      pill.style.color = 'var(--muted)';
+    } else if (c.paper_mode) {
+      pill.textContent = '📝 PAPER MODE';
+      pill.style.color = 'var(--warn)';
+    } else {
+      pill.innerHTML = '<span class="live-dot"></span> LIVE';
+      pill.style.color = 'var(--good)';
+    }
+
+    const lastPoll = s.last_poll_ts ? Math.round((Date.now() - s.last_poll_ts) / 1000) + 's ago' : '—';
+    const lastAction = s.last_action_ts ? new Date(s.last_action_ts).toLocaleTimeString() : '—';
+    const cdHtml = (j.cooldowns || []).length
+      ? (j.cooldowns.map(cd => `<span class="pill" style="background: var(--panel); color: var(--muted); margin-right: 4px;">${cd.symbol} (${Math.round(cd.ttl_sec/60)}m)</span>`).join(''))
+      : '<span class="mute">none</span>';
+
+    document.getElementById('rcStatus').innerHTML = `
+      <div class="stat" style="background: var(--bg); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--line);">
+        <div class="k" style="font-size: 10px; color: var(--muted); text-transform: uppercase;">Last poll</div>
+        <div class="v" style="font-size: 14px; font-weight: 600; margin-top: 3px;">${lastPoll}</div>
+      </div>
+      <div class="stat" style="background: var(--bg); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--line);">
+        <div class="k" style="font-size: 10px; color: var(--muted); text-transform: uppercase;">Candidates last cycle</div>
+        <div class="v" style="font-size: 14px; font-weight: 600; margin-top: 3px;">${s.last_candidates || 0}</div>
+      </div>
+      <div class="stat" style="background: var(--bg); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--line);">
+        <div class="k" style="font-size: 10px; color: var(--muted); text-transform: uppercase;">Recovered last cycle</div>
+        <div class="v" style="font-size: 14px; font-weight: 600; margin-top: 3px;">${s.last_recover_count || 0}</div>
+      </div>
+      <div class="stat" style="background: var(--bg); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--line);">
+        <div class="k" style="font-size: 10px; color: var(--muted); text-transform: uppercase;">Quota this hour</div>
+        <div class="v" style="font-size: 14px; font-weight: 600; margin-top: 3px;">${q.used_this_hour || 0} / ${q.limit_per_hour || 3}</div>
+      </div>
+      <div class="stat" style="background: var(--bg); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--line);">
+        <div class="k" style="font-size: 10px; color: var(--muted); text-transform: uppercase;">Last action</div>
+        <div class="v" style="font-size: 14px; font-weight: 600; margin-top: 3px;">${lastAction}</div>
+      </div>
+      <div class="stat" style="background: var(--bg); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--line);">
+        <div class="k" style="font-size: 10px; color: var(--muted); text-transform: uppercase;">Symbol cooldowns</div>
+        <div class="v" style="font-size: 12px; margin-top: 3px;">${cdHtml}</div>
+      </div>
+      ${s.last_error ? `<div class="stat" style="background: rgba(231,76,60,.10); padding: 10px 12px; border-radius: 6px; grid-column: 1/-1;">
+        <div class="k" style="font-size: 10px; color: var(--bad); text-transform: uppercase;">Last error</div>
+        <div class="v" style="font-size: 12px; margin-top: 3px; color: var(--bad);">${s.last_error}</div>
+      </div>` : ''}
+    `;
+
+    // Recovery audit log
+    const lr = await fetch('/api/recovery/log?limit=30');
+    const lj = await lr.json();
+    const entries = lj.entries || [];
+    const ls = lj.summary || {};
+    document.getElementById('rcLogCount').textContent =
+      `${ls.today || 0} today (${ls.paper_recovered || 0} paper-recover, ${ls.live_recovered || 0} live-recover, ${(ls.skip_no_near_miss||0)+(ls.skip_too_far_above||0)+(ls.skip_eligibility_red||0)+(ls.skip_cooldown||0)} skipped)`;
+    if (entries.length === 0) {
+      document.getElementById('rcLog').innerHTML = '<div class="empty">No recovery actions logged yet.</div>';
+    } else {
+      document.getElementById('rcLog').innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Symbol</th>
+              <th>Reason</th>
+              <th>Limit</th>
+              <th>Min low</th>
+              <th>Touched %</th>
+              <th>Current</th>
+              <th>Above %</th>
+              <th>Elig.</th>
+              <th>Outcome</th>
+              <th>Re-issue $</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${entries.map(e => `
+              <tr>
+                <td>${new Date(e.ts).toLocaleString()}</td>
+                <td><strong>${e.symbol || ''}</strong></td>
+                <td><span class="pill" style="background: var(--panel); color: var(--muted);">${e.exit_reason || ''}</span></td>
+                <td>$${(e.limit_price || 0).toFixed(8)}</td>
+                <td>${e.min_low ? '$' + e.min_low.toFixed(8) : '—'}</td>
+                <td class="${(e.closest_approach_pct||0) >= 0 ? 'pos' : 'neg'}">${e.closest_approach_pct == null ? '—' : (e.closest_approach_pct >= 0 ? 'hit ' : '') + e.closest_approach_pct.toFixed(3) + '%'}</td>
+                <td>${e.current_price ? '$' + e.current_price.toFixed(8) : '—'}</td>
+                <td class="${(e.current_vs_limit_pct||0) <= 0 ? 'pos' : (e.current_vs_limit_pct||0) > 0.3 ? 'neg' : 'warn'}">${e.current_vs_limit_pct == null ? '—' : '+' + e.current_vs_limit_pct.toFixed(3) + '%'}</td>
+                <td><span class="pill ${e.eligibility_level || ''}">${e.eligibility_level || '—'}</span></td>
+                <td><span class="pill ${(e.outcome === 'recovered' || e.outcome === 'paper_recovered') ? 'RIDE' : 'CANCEL'}">${e.outcome || ''}</span></td>
+                <td>${e.recovery_price ? '$' + e.recovery_price.toFixed(8) : '—'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+  } catch (e) {
+    document.getElementById('rcStatus').innerHTML = '<div class="error">' + e.message + '</div>';
+  }
+}
+
+async function saveRecoveryConfig() {
+  const enabled = document.getElementById('rcEnabled').checked;
+  const paper_mode = document.getElementById('rcPaperMode').checked;
+  const min_touch_pct = parseFloat(document.getElementById('rcMinTouch').value) || 0.20;
+  const max_above_pct = parseFloat(document.getElementById('rcMaxAbove').value) || 0.30;
+  const max_per_hour = parseInt(document.getElementById('rcMaxHour').value, 10) || 3;
+  const cooldown_sec = parseInt(document.getElementById('rcCooldown').value, 10) || 1800;
+
+  if (enabled && !paper_mode) {
+    if (!confirm(`⚠️ LIVE RECOVERY MODE\n\nWhen the bot cancels orders too early, the worker will AUTOMATICALLY re-issue a fresh LIMIT via the Spring engine (separate from Python scalper).\n\nMax ${max_per_hour}/hour. Touch tolerance ${min_touch_pct}%. Current must be ≤ ${max_above_pct}% above original limit.\n\nContinue?`)) return;
+  }
+  try {
+    const r = await fetch('/api/recovery/toggle', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled, paper_mode, min_touch_pct, max_above_pct, max_per_hour, cooldown_sec }),
+    });
+    const j = await r.json();
+    if (j.success) {
+      alert(`Saved. Recovery: ${j.enabled ? (j.paper_mode ? 'PAPER MODE' : 'LIVE') : 'DISABLED'}`);
+      refreshRecovery();
+    } else {
+      alert('Save failed: ' + (j.error || 'unknown'));
+    }
+  } catch (e) {
+    alert('Save error: ' + e.message);
+  }
+}
+
 refreshList();
 refreshAutoCancel();
+refreshRecovery();
 setInterval(() => {
   if (document.getElementById('autoRefresh').checked) {
     refreshList();
     refreshAutoCancel();
+    refreshRecovery();
   }
 }, 10000);
 </script>
