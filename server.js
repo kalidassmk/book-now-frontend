@@ -4042,6 +4042,9 @@ app.get('/api/scalper-logs', async (req, res) => {
     try {
         const scalper = (req.query.scalper || 'virtual').toLowerCase();
         const limit = Math.min(parseInt(req.query.limit || '100', 10), 200);
+        // iter30 v6: time-window filter — show only lines newer than this many minutes.
+        // 0 or absent = show all. Helps user see CURRENT errors, not historical.
+        const sinceMin = parseInt(req.query.since_min || '0', 10);
         const key = scalper === 'virtual' ? 'VIRTUAL:LOG_TAIL'
                   : scalper === 'fast'    ? 'FAST:LOG_TAIL'
                   : null;
@@ -4092,6 +4095,15 @@ app.get('/api/scalper-logs', async (req, res) => {
             dedupedLines.push(l);
         }
 
+        // iter30 v6: apply time-window filter if requested
+        const totalBeforeFilter = dedupedLines.length;
+        let filteredLines = dedupedLines;
+        if (sinceMin > 0) {
+            const cutoffSec = sinceMin * 60;
+            filteredLines = dedupedLines.filter(l => l.age_sec != null && l.age_sec <= cutoffSec);
+        }
+        const hiddenHistorical = totalBeforeFilter - filteredLines.length;
+
         // "Last event" freshness — use the newest line's parsed age
         const lastEventEpochRaw = await redis.get('VIRTUAL:LOG_LAST_EVENT_EPOCH').catch(() => null);
         const lastEventEpoch = lastEventEpochRaw ? parseInt(lastEventEpochRaw, 10) : null;
@@ -4108,10 +4120,11 @@ app.get('/api/scalper-logs', async (req, res) => {
                 : lastEventAgeSec < 300 ? `🔴 New activity ${lastEventAgeSec}s ago`
                 : lastEventAgeSec < 3600 ? `🟡 Last event ${Math.round(lastEventAgeSec/60)}m ago`
                 : `🟢 Stable for ${(lastEventAgeSec/3600).toFixed(1)}h — no recent events`,
-            // iter30 v5: SORTED by age (newest first) + DEDUPED so the same
-            // line never appears twice. Eliminates display ordering bugs
-            // from the underlying Redis list.
-            lines: dedupedLines.slice(0, limit),
+            // iter30 v5/v6: SORTED by age (newest first), DEDUPED, optionally
+            // filtered to last `since_min` minutes (default = all).
+            since_min: sinceMin || null,
+            hidden_historical: hiddenHistorical,
+            lines: filteredLines.slice(0, limit),
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -4173,6 +4186,27 @@ app.get('/api/micro-signal-distribution', async (req, res) => {
                     ? `✓ ${withSignal} coins have non-NEUTRAL signals. Virtual Scalper has buy candidates to evaluate.`
                     : `⚠ Mostly NEUTRAL with no clear buy candidates right now (normal during quiet market hours).`,
         });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// iter30 v6: clear the log tail history (Redis list only — log FILE untouched).
+// Lets the operator reset the dashboard view when historical noise piles up.
+app.post('/api/scalper-logs/clear', async (req, res) => {
+    try {
+        const scalper = (req.body?.scalper || 'virtual').toLowerCase();
+        const key = scalper === 'virtual' ? 'VIRTUAL:LOG_TAIL'
+                  : scalper === 'fast'    ? 'FAST:LOG_TAIL'
+                  : null;
+        if (!key) return res.status(400).json({ error: 'scalper must be virtual or fast' });
+        await redis.del(key);
+        // Also reset the file-line watermark so the next log-tailer run
+        // captures everything fresh from the file (avoiding gaps).
+        if (scalper === 'virtual') {
+            await redis.del('VIRTUAL:LOG_FILE_LINE');
+        }
+        res.json({ success: true, key, note: 'Log tail cleared. Next cron tick (within 1 min) will repopulate from the file.' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

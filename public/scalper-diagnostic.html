@@ -111,15 +111,24 @@
   <div id="restartHistory"><div class="empty">Loading…</div></div>
 </div>
 
-<!-- Virtual Scalper log tail -->
+<!-- Virtual Scalper log tail (iter30 v6) -->
 <div class="card">
   <h2>📡 Virtual Scalper log tail
     <span class="pill tb" id="logTbCount">0 tb</span>
     <span class="pill skip" id="logSkipCount">0 skip</span>
     <span class="pill info" id="logTotalCount">0 lines</span>
     <span style="flex: 1;"></span>
-    <span class="hint">Updated every minute from docker logs. Last 200 non-heartbeat lines.</span>
+    <label class="hint">Show only:</label>
+    <select id="sinceFilter" onchange="refreshLogs()" style="font-size: 11px; padding: 3px 6px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 4px;">
+      <option value="15">Last 15 min</option>
+      <option value="30" selected>Last 30 min</option>
+      <option value="60">Last 1 hour</option>
+      <option value="240">Last 4 hours</option>
+      <option value="0">All (historical)</option>
+    </select>
+    <button onclick="purgeLogTail()" class="alt" style="font-size: 11px; padding: 4px 10px;" title="Clear the Redis log list — keeps the log file intact, just removes accumulated dashboard history">🧹 Clear history</button>
   </h2>
+  <div id="historicalNote" class="hint" style="margin-bottom: 6px;"></div>
   <div class="log-area" id="logArea"><div class="empty">Loading…</div></div>
 </div>
 
@@ -264,12 +273,24 @@ function ageBadge(sec) {
 
 async function refreshLogs() {
   try {
-    const r = await fetch('/api/scalper-logs?scalper=virtual&limit=200');
+    const sinceMin = document.getElementById('sinceFilter')?.value || '30';
+    const r = await fetch('/api/scalper-logs?scalper=virtual&limit=200&since_min=' + sinceMin);
     const j = await r.json();
     document.getElementById('logTbCount').textContent = `${j.tracebacks || 0} tb`;
     document.getElementById('logSkipCount').textContent = `${j.skips || 0} skip`;
     document.getElementById('logTotalCount').textContent = `${j.count || 0} lines`;
     const lines = j.lines || [];
+    // iter30 v6: show "N older entries hidden" note
+    const noteEl = document.getElementById('historicalNote');
+    if (j.hidden_historical > 0) {
+      noteEl.textContent = `Hiding ${j.hidden_historical} older line(s) (window = ${j.since_min}m). Change dropdown above to see more.`;
+      noteEl.style.color = 'var(--muted)';
+    } else if (j.since_min) {
+      noteEl.textContent = `Showing all entries within last ${j.since_min}m window.`;
+      noteEl.style.color = 'var(--good)';
+    } else {
+      noteEl.textContent = '';
+    }
 
     // iter30 v4: stability banner at top of log area
     let stabilityHtml = '';
@@ -332,6 +353,22 @@ async function validateKey() {
     `;
   } catch (e) {
     out.innerHTML = `<div class="err-banner">${e.message}</div>`;
+  }
+}
+
+async function purgeLogTail() {
+  if (!confirm('Clear the accumulated log tail history? The actual log file is untouched — this only resets what the dashboard remembers. New events will appear within 1 min.')) return;
+  try {
+    const r = await fetch('/api/scalper-logs/clear', { method: 'POST' });
+    const j = await r.json();
+    if (j.success) {
+      alert('✓ Log history cleared. New events will start populating.');
+      refreshLogs();
+    } else {
+      alert('✗ Failed: ' + (j.error || 'unknown'));
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
   }
 }
 
