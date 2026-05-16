@@ -145,7 +145,10 @@ async function pollOnce() {
 
     for (const o of orders) {
         const a = o.analysis || {};
-        if (a.action !== 'CANCEL') continue;
+        // Accept any action whose classification is in the whitelist — this
+        // includes REPRICE (action='REPRICE' but classification='DRIFTED_REPRICE')
+        // and the explicit CANCEL classifications. Filtering only by class
+        // matches user's "no manual intervention" intent.
         if (!AUTO_CANCEL_CLASSIFICATIONS.has(a.classification)) continue;
 
         evaluated++;
