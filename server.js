@@ -3835,6 +3835,179 @@ app.get('/api/active-positions', async (req, res) => {
     }
 });
 
+// iter 27 fe (2026-05-16): Limit-Offset Strategy editor
+//
+// User: "today we can enable limit order buy 1 off set -0.01% and -0.02%
+// and -0.03%, please add the existing limit order buy off set logic,
+// which scenario we can buy the coin with -0.03% and the new logic"
+//
+// Surfaces the iter43 tier config (CALM/NORMAL/VOLATILE/X_VOLATILE) as
+// editable, with presets + live per-coin preview. Saves to TRADING_CONFIG;
+// the Python scalper picks up new values on its next signal evaluation.
+
+function classifyTier(range1hPct, settings) {
+    if (range1hPct < (settings.adaptiveTierCalmMaxPct ?? 1)) return 'CALM';
+    if (range1hPct < (settings.adaptiveTierNormalMaxPct ?? 2)) return 'NORMAL';
+    if (range1hPct < (settings.adaptiveTierVolatileMaxPct ?? 4)) return 'VOLATILE';
+    return 'X_VOLATILE';
+}
+
+function offsetForTier(tier, settings) {
+    switch (tier) {
+        case 'CALM':       return {
+            buy1: settings.adaptiveBuy1OffsetCalm ?? 0.15,
+            buy2: settings.adaptiveBuy2OffsetCalm ?? 0.50,
+            tp:   settings.adaptiveTpTargetCalm ?? 0.15,
+        };
+        case 'NORMAL':     return {
+            buy1: settings.adaptiveBuy1OffsetNormal ?? 0.30,
+            buy2: settings.adaptiveBuy2OffsetNormal ?? 0.80,
+            tp:   settings.adaptiveTpTargetNormal ?? 0.20,
+        };
+        case 'VOLATILE':   return {
+            buy1: settings.adaptiveBuy1OffsetVolatile ?? 0.70,
+            buy2: settings.adaptiveBuy2OffsetVolatile ?? 1.50,
+            tp:   settings.adaptiveTpTargetVolatile ?? 0.30,
+        };
+        case 'X_VOLATILE': return {
+            buy1: settings.adaptiveBuy1OffsetXVolatile ?? 1.50,
+            buy2: settings.adaptiveBuy2OffsetXVolatile ?? 2.50,
+            tp:   settings.adaptiveTpTargetXVolatile ?? 0.50,
+        };
+    }
+}
+
+// Allowed keys for the strategy editor — guards POST against arbitrary writes.
+const STRATEGY_KEYS = [
+    'adaptiveTierCalmMaxPct', 'adaptiveTierNormalMaxPct', 'adaptiveTierVolatileMaxPct',
+    'adaptiveBuy1OffsetCalm', 'adaptiveBuy1OffsetNormal', 'adaptiveBuy1OffsetVolatile', 'adaptiveBuy1OffsetXVolatile',
+    'adaptiveBuy2OffsetCalm', 'adaptiveBuy2OffsetNormal', 'adaptiveBuy2OffsetVolatile', 'adaptiveBuy2OffsetXVolatile',
+    'adaptiveTpTargetCalm', 'adaptiveTpTargetNormal', 'adaptiveTpTargetVolatile', 'adaptiveTpTargetXVolatile',
+];
+
+app.get('/api/offset-strategy/current', async (req, res) => {
+    try {
+        const cfgRaw = await redis.get(CONFIG_KEY);
+        const cfg = { ...DEFAULT_TRADING_CONFIG, ...(cfgRaw ? JSON.parse(cfgRaw) : {}) };
+        const out = {};
+        STRATEGY_KEYS.forEach(k => { out[k] = cfg[k]; });
+        out.adaptiveEntryEnabled = !!cfg.adaptiveEntryEnabled;
+        res.json({ config: out });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Preview what the offset strategy WOULD do for a set of symbols given
+// candidate settings (without saving). Helps the operator see the impact
+// before committing.
+app.get('/api/offset-strategy/preview', async (req, res) => {
+    try {
+        const cfgRaw = await redis.get(CONFIG_KEY);
+        const live = { ...DEFAULT_TRADING_CONFIG, ...(cfgRaw ? JSON.parse(cfgRaw) : {}) };
+        // Read optional override settings from query (JSON-encoded)
+        let candidate = { ...live };
+        if (req.query.settings) {
+            try {
+                const overrides = JSON.parse(req.query.settings);
+                for (const k of STRATEGY_KEYS) {
+                    if (overrides[k] !== undefined) candidate[k] = parseFloat(overrides[k]);
+                }
+            } catch (_) {}
+        }
+        // Symbols: explicit list, or sensible default mix
+        const symbolsParam = (req.query.symbols || 'BTCUSDT,ETHUSDT,SOLUSDT,DOGEUSDT,SUIUSDT,CHZUSDT,DEXEUSDT,RENDERUSDT,PENDLEUSDT,LINKUSDT').split(',').map(s => s.trim()).filter(Boolean);
+
+        // Fetch ticker + 1h kline (range) per symbol in parallel
+        const rows = await Promise.all(symbolsParam.map(async (sym) => {
+            try {
+                const [t, kl] = await Promise.all([
+                    fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${sym}`).then(r => r.json()).catch(() => null),
+                    fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=2`).then(r => r.json()).catch(() => null),
+                ]);
+                if (!t || !t.price) return { symbol: sym, error: 'ticker fetch failed' };
+                const price = parseFloat(t.price);
+                let range1hPct = 0;
+                if (Array.isArray(kl) && kl.length) {
+                    const k = kl[kl.length - 1];
+                    const h = parseFloat(k[2]), l = parseFloat(k[3]);
+                    range1hPct = l > 0 ? (h - l) / l * 100 : 0;
+                }
+                const liveTier = classifyTier(range1hPct, live);
+                const liveOff  = offsetForTier(liveTier, live);
+                const newTier  = classifyTier(range1hPct, candidate);
+                const newOff   = offsetForTier(newTier, candidate);
+                return {
+                    symbol: sym,
+                    current_price: price,
+                    range_1h_pct: +range1hPct.toFixed(2),
+                    live: {
+                        tier: liveTier,
+                        buy1_offset_pct: liveOff.buy1,
+                        buy1_price: +(price * (1 - liveOff.buy1 / 100)).toFixed(10),
+                        tp_target_usdt: liveOff.tp,
+                    },
+                    candidate: {
+                        tier: newTier,
+                        buy1_offset_pct: newOff.buy1,
+                        buy1_price: +(price * (1 - newOff.buy1 / 100)).toFixed(10),
+                        tp_target_usdt: newOff.tp,
+                    },
+                    changed: liveTier !== newTier || liveOff.buy1 !== newOff.buy1 || liveOff.tp !== newOff.tp,
+                };
+            } catch (e) {
+                return { symbol: sym, error: e.message };
+            }
+        }));
+
+        res.json({
+            ts: Date.now(),
+            live_settings: Object.fromEntries(STRATEGY_KEYS.map(k => [k, live[k]])),
+            candidate_settings: Object.fromEntries(STRATEGY_KEYS.map(k => [k, candidate[k]])),
+            previews: rows,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Save new settings. Validates monotonicity (calm < normal < volatile) and
+// reasonable bounds. Returns the merged config.
+app.post('/api/offset-strategy/save', async (req, res) => {
+    try {
+        const overrides = req.body || {};
+        const cfgRaw = await redis.get(CONFIG_KEY);
+        const existing = cfgRaw ? JSON.parse(cfgRaw) : {};
+        const merged = { ...DEFAULT_TRADING_CONFIG, ...existing };
+        for (const k of STRATEGY_KEYS) {
+            if (overrides[k] !== undefined) {
+                const v = parseFloat(overrides[k]);
+                if (isNaN(v) || v < 0 || v > 100) {
+                    return res.status(400).json({ error: `Invalid value for ${k}: ${overrides[k]}` });
+                }
+                merged[k] = v;
+            }
+        }
+        // Validation: tier thresholds must be strictly increasing
+        if (!(merged.adaptiveTierCalmMaxPct < merged.adaptiveTierNormalMaxPct &&
+              merged.adaptiveTierNormalMaxPct < merged.adaptiveTierVolatileMaxPct)) {
+            return res.status(400).json({ error: 'Tier thresholds must be increasing: CALM < NORMAL < VOLATILE' });
+        }
+        // Buy offsets typically loosen as volatility grows — soft warning not error
+        const buy1Order = [merged.adaptiveBuy1OffsetCalm, merged.adaptiveBuy1OffsetNormal,
+                           merged.adaptiveBuy1OffsetVolatile, merged.adaptiveBuy1OffsetXVolatile];
+        const monotonic = buy1Order.every((v, i, a) => i === 0 || v >= a[i-1]);
+        await redis.set(CONFIG_KEY, JSON.stringify(merged));
+        res.json({
+            success: true,
+            saved: Object.fromEntries(STRATEGY_KEYS.map(k => [k, merged[k]])),
+            warning: monotonic ? null : 'Buy-1 offsets are not monotonically increasing across tiers. This is unusual — a more-volatile coin getting a tighter offset is risky. Saved anyway.',
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // iter 17 fe: Pattern Bot endpoints
 app.get('/api/pattern-bot/status', async (req, res) => {
     try {

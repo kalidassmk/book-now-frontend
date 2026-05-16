@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Book-Now — Limit Offset Strategy</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --panel-2: #1a232e; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --neutral: #8b949e; --pink: #ff6b9d; --purple: #b07ee0;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  .sub { color: var(--muted); margin-bottom: 18px; font-size: 13px; }
+  .topnav { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .topnav a { display: inline-block; padding: 6px 14px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 600; }
+  .topnav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .topnav a:not(.active):hover { color: var(--text); border-color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 14px; }
+  .card h2 { margin: 0 0 14px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+
+  /* Presets */
+  .preset-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+  .preset { padding: 8px 14px; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 12px; }
+  .preset:hover { border-color: var(--accent); color: var(--accent); }
+  .preset.aggressive { border-left: 3px solid var(--pink); }
+  .preset.calm { border-left: 3px solid var(--good); }
+  .preset.default { border-left: 3px solid var(--accent); }
+  .preset.wide { border-left: 3px solid var(--warn); }
+
+  /* Tier editor */
+  table.tiers { width: 100%; border-collapse: collapse; }
+  table.tiers th { text-align: left; padding: 8px 10px; background: var(--panel-2); color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .4px; border-bottom: 1px solid var(--line); }
+  table.tiers td { padding: 8px 10px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  table.tiers tr:hover td { background: var(--panel-2); }
+  .tier-name { font-weight: 700; padding: 3px 8px; border-radius: 3px; font-size: 11px; }
+  .tier-name.CALM { background: rgba(46,204,113,.18); color: var(--good); }
+  .tier-name.NORMAL { background: rgba(41,182,246,.18); color: var(--accent); }
+  .tier-name.VOLATILE { background: rgba(241,196,15,.18); color: var(--warn); }
+  .tier-name.X_VOLATILE { background: rgba(231,76,60,.18); color: var(--bad); }
+  input.editor { width: 70px; padding: 5px 8px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 4px; font: 12px monospace; text-align: right; }
+  input.editor:focus { outline: none; border-color: var(--accent); }
+  .row-controls { padding: 16px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button.primary { padding: 9px 18px; background: var(--accent); color: #fff; border: 0; border-radius: 6px; cursor: pointer; font-weight: 700; font-size: 13px; }
+  button.primary:hover { filter: brightness(1.1); }
+  button.alt { padding: 9px 18px; background: var(--panel-2); border: 1px solid var(--line); color: var(--text); border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 12px; }
+
+  /* Preview table */
+  table.preview { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.preview th { text-align: left; padding: 6px 10px; background: var(--panel-2); color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .4px; border-bottom: 1px solid var(--line); }
+  table.preview td { padding: 8px 10px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  table.preview tr.changed td { background: rgba(241,196,15,.06); }
+  .delta-pos { color: var(--good); }
+  .delta-neg { color: var(--bad); }
+  .delta-eq { color: var(--muted); }
+
+  /* Scenarios card */
+  .scenario { padding: 12px 14px; background: var(--panel-2); border-radius: 6px; margin-bottom: 8px; border-left: 3px solid var(--accent); }
+  .scenario .name { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+  .scenario .name .pill { font-size: 10px; padding: 2px 7px; background: var(--bg); border-radius: 3px; margin-left: 6px; color: var(--muted); }
+  .scenario .when { font-size: 12px; margin-bottom: 6px; }
+  .scenario .why { font-size: 11px; color: var(--muted); line-height: 1.5; }
+  .scenario.tier1 { border-left-color: var(--good); }
+  .scenario.tier2 { border-left-color: var(--accent); }
+  .scenario.tier3 { border-left-color: var(--warn); }
+  .scenario.tier4 { border-left-color: var(--bad); }
+
+  .pill { display: inline-block; padding: 2px 7px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+  .empty { padding: 30px; text-align: center; color: var(--muted); font-style: italic; }
+  .error { padding: 14px; background: rgba(231,76,60,.10); color: var(--bad); border-radius: 6px; }
+  .hint { color: var(--muted); font-size: 11px; }
+  .ok-banner { padding: 10px 14px; background: rgba(46,204,113,.10); border-left: 3px solid var(--good); border-radius: 6px; color: var(--good); font-size: 12px; }
+  .warn-banner { padding: 10px 14px; background: rgba(241,196,15,.10); border-left: 3px solid var(--warn); border-radius: 6px; color: var(--warn); font-size: 12px; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/">📊 Monitor</a>
+  <a href="/active-monitors.html">🎛️ Active Monitors</a>
+  <a href="/pending-monitor.html">⏳ Pending Monitor</a>
+  <a href="/offset-strategy.html" class="active">⚙️ Offset Strategy</a>
+  <a href="/adaptive-eligibility.html">✅ Adaptive Gate</a>
+  <a href="/adaptive-offset.html">🎯 Adaptive Offset</a>
+  <a href="/limit-buy-replay.html">🔄 Limit Replay</a>
+  <a href="/filter-candidate.html">🧪 Filter Tester</a>
+  <a href="/bounce-watch.html">⤴️ Bounce Watch</a>
+  <a href="/early-pump.html">🚀 Early Pump</a>
+  <a href="/pattern-bot.html">🤖 Pattern Bot</a>
+  <a href="/decision-trace.html">🔍 Decision Trace</a>
+</nav>
+
+<h1>⚙️ Limit Offset Strategy</h1>
+<div class="sub">
+  Edit the Buy 1 / Buy 2 / TP target per volatility tier. Bot reads on next signal — no restart needed.
+  <strong>Ultra-tight presets</strong> use −0.01% to −0.05% offsets for calm-market days. Pick a preset, see live impact, then save.
+</div>
+
+<!-- Scenarios reference -->
+<div class="card">
+  <h2>📖 When to use each tightness level</h2>
+  <div class="scenario tier1">
+    <div class="name">−0.01% / −0.02% (Ultra-tight) <span class="pill">CALM market</span></div>
+    <div class="when">When 1h range &lt; 0.5% AND coin is in a strong uptrend</div>
+    <div class="why">Fill nearly guaranteed because price barely moves. Trade-off: less price improvement, you'll buy slightly above the very best price. Good for chasing momentum entries when you don't want to miss the boat. Watch the spread — if it's wide, tighter limit may still not fill quickly.</div>
+  </div>
+  <div class="scenario tier2">
+    <div class="name">−0.03% / −0.05% (Tight) <span class="pill">Calm-Normal</span></div>
+    <div class="when">When 1h range 0.5–1.0% AND volume is healthy</div>
+    <div class="why">Small but real chance the dip won't fully reach a wider limit. Balanced: better entry than ultra-tight, still likely to fill. Today's most common setting for the major pairs.</div>
+  </div>
+  <div class="scenario tier3">
+    <div class="name">−0.15% / −0.30% (Conservative, current default)<span class="pill">Mixed</span></div>
+    <div class="when">When 1h range 1–2% (current default for CALM and NORMAL)</div>
+    <div class="why">Designed for slightly wavy markets. Better entry price but more cancels due to drift (the RENDER/ZAMA case). Good balance for unpredictable days.</div>
+  </div>
+  <div class="scenario tier4">
+    <div class="name">−0.70% / −1.50% (Wide) <span class="pill">VOLATILE</span></div>
+    <div class="when">When 1h range &gt; 2% (current default for VOLATILE and X_VOLATILE)</div>
+    <div class="why">Required for choppy coins — tighter limits miss most of the time. Trade-off: bigger drawdown if the trade goes against you. Hard stop at −1.5% keeps losses bounded.</div>
+  </div>
+</div>
+
+<!-- Presets -->
+<div class="card">
+  <h2>🎚️ Presets</h2>
+  <div class="preset-row">
+    <button class="preset calm" onclick="applyPreset('ultra_tight_today')">Ultra-Tight Today (−0.01 / −0.02 / −0.03 / −0.05)</button>
+    <button class="preset calm" onclick="applyPreset('tight_calm_day')">Tight Calm Day (−0.05 / −0.10 / −0.30 / −1.00)</button>
+    <button class="preset default" onclick="applyPreset('production_default')">Production Default (current: −0.15 / −0.30 / −0.70 / −1.50)</button>
+    <button class="preset aggressive" onclick="applyPreset('aggressive_chase')">Aggressive Chase (−0.05 / −0.15 / −0.50 / −1.20)</button>
+    <button class="preset wide" onclick="applyPreset('wide_volatile_day')">Wide Volatile Day (−0.25 / −0.60 / −1.20 / −2.50)</button>
+  </div>
+  <div class="hint" style="margin-top: 6px;">Presets only update the form fields below. Click <strong>Save to bot</strong> to apply.</div>
+</div>
+
+<!-- Tier editor -->
+<div class="card">
+  <h2>🛠️ Tier configuration <span id="changedFlag" style="color: var(--warn); font-size: 11px;"></span></h2>
+  <table class="tiers">
+    <thead>
+      <tr>
+        <th>Tier</th>
+        <th>1h range &lt;</th>
+        <th>Buy 1 offset</th>
+        <th>Buy 2 offset</th>
+        <th>TP target (USDT net)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="tier-name CALM">CALM</span></td>
+        <td><input class="editor" id="adaptiveTierCalmMaxPct" type="number" step="0.05" /> %</td>
+        <td><input class="editor" id="adaptiveBuy1OffsetCalm" type="number" step="0.01" /> %</td>
+        <td><input class="editor" id="adaptiveBuy2OffsetCalm" type="number" step="0.01" /> %</td>
+        <td>$ <input class="editor" id="adaptiveTpTargetCalm" type="number" step="0.01" /></td>
+      </tr>
+      <tr>
+        <td><span class="tier-name NORMAL">NORMAL</span></td>
+        <td><input class="editor" id="adaptiveTierNormalMaxPct" type="number" step="0.05" /> %</td>
+        <td><input class="editor" id="adaptiveBuy1OffsetNormal" type="number" step="0.01" /> %</td>
+        <td><input class="editor" id="adaptiveBuy2OffsetNormal" type="number" step="0.01" /> %</td>
+        <td>$ <input class="editor" id="adaptiveTpTargetNormal" type="number" step="0.01" /></td>
+      </tr>
+      <tr>
+        <td><span class="tier-name VOLATILE">VOLATILE</span></td>
+        <td><input class="editor" id="adaptiveTierVolatileMaxPct" type="number" step="0.05" /> %</td>
+        <td><input class="editor" id="adaptiveBuy1OffsetVolatile" type="number" step="0.01" /> %</td>
+        <td><input class="editor" id="adaptiveBuy2OffsetVolatile" type="number" step="0.01" /> %</td>
+        <td>$ <input class="editor" id="adaptiveTpTargetVolatile" type="number" step="0.01" /></td>
+      </tr>
+      <tr>
+        <td><span class="tier-name X_VOLATILE">X_VOLATILE</span></td>
+        <td><em class="hint">otherwise</em></td>
+        <td><input class="editor" id="adaptiveBuy1OffsetXVolatile" type="number" step="0.01" /> %</td>
+        <td><input class="editor" id="adaptiveBuy2OffsetXVolatile" type="number" step="0.01" /> %</td>
+        <td>$ <input class="editor" id="adaptiveTpTargetXVolatile" type="number" step="0.01" /></td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="row-controls">
+    <button class="primary" onclick="saveSettings()">💾 Save to bot</button>
+    <button class="alt" onclick="loadLive()">↺ Reset to live</button>
+    <button class="alt" onclick="runPreview()">🔄 Refresh preview</button>
+    <span class="hint" style="flex: 1;">Tier thresholds must be increasing (CALM &lt; NORMAL &lt; VOLATILE).</span>
+  </div>
+  <div id="saveResult"></div>
+</div>
+
+<!-- Preview -->
+<div class="card">
+  <h2>🔍 Live preview for top coins <span class="hint" id="previewTs">—</span></h2>
+  <div id="previewResult"><div class="empty">Loading preview…</div></div>
+</div>
+
+<script>
+const KEYS = [
+  'adaptiveTierCalmMaxPct','adaptiveTierNormalMaxPct','adaptiveTierVolatileMaxPct',
+  'adaptiveBuy1OffsetCalm','adaptiveBuy1OffsetNormal','adaptiveBuy1OffsetVolatile','adaptiveBuy1OffsetXVolatile',
+  'adaptiveBuy2OffsetCalm','adaptiveBuy2OffsetNormal','adaptiveBuy2OffsetVolatile','adaptiveBuy2OffsetXVolatile',
+  'adaptiveTpTargetCalm','adaptiveTpTargetNormal','adaptiveTpTargetVolatile','adaptiveTpTargetXVolatile',
+];
+
+const PRESETS = {
+  ultra_tight_today: {
+    adaptiveTierCalmMaxPct: 0.5,  adaptiveTierNormalMaxPct: 1.0,  adaptiveTierVolatileMaxPct: 2.0,
+    adaptiveBuy1OffsetCalm: 0.01, adaptiveBuy1OffsetNormal: 0.02, adaptiveBuy1OffsetVolatile: 0.03, adaptiveBuy1OffsetXVolatile: 0.05,
+    adaptiveBuy2OffsetCalm: 0.10, adaptiveBuy2OffsetNormal: 0.20, adaptiveBuy2OffsetVolatile: 0.40, adaptiveBuy2OffsetXVolatile: 0.80,
+    adaptiveTpTargetCalm: 0.10,   adaptiveTpTargetNormal: 0.15,   adaptiveTpTargetVolatile: 0.20,   adaptiveTpTargetXVolatile: 0.30,
+  },
+  tight_calm_day: {
+    adaptiveTierCalmMaxPct: 1.0,  adaptiveTierNormalMaxPct: 2.0,  adaptiveTierVolatileMaxPct: 4.0,
+    adaptiveBuy1OffsetCalm: 0.05, adaptiveBuy1OffsetNormal: 0.10, adaptiveBuy1OffsetVolatile: 0.30, adaptiveBuy1OffsetXVolatile: 1.00,
+    adaptiveBuy2OffsetCalm: 0.20, adaptiveBuy2OffsetNormal: 0.40, adaptiveBuy2OffsetVolatile: 0.80, adaptiveBuy2OffsetXVolatile: 1.80,
+    adaptiveTpTargetCalm: 0.12,   adaptiveTpTargetNormal: 0.18,   adaptiveTpTargetVolatile: 0.25,   adaptiveTpTargetXVolatile: 0.40,
+  },
+  production_default: {
+    adaptiveTierCalmMaxPct: 1.0,  adaptiveTierNormalMaxPct: 2.0,  adaptiveTierVolatileMaxPct: 4.0,
+    adaptiveBuy1OffsetCalm: 0.15, adaptiveBuy1OffsetNormal: 0.30, adaptiveBuy1OffsetVolatile: 0.70, adaptiveBuy1OffsetXVolatile: 1.50,
+    adaptiveBuy2OffsetCalm: 0.50, adaptiveBuy2OffsetNormal: 0.80, adaptiveBuy2OffsetVolatile: 1.50, adaptiveBuy2OffsetXVolatile: 2.50,
+    adaptiveTpTargetCalm: 0.15,   adaptiveTpTargetNormal: 0.20,   adaptiveTpTargetVolatile: 0.30,   adaptiveTpTargetXVolatile: 0.50,
+  },
+  aggressive_chase: {
+    adaptiveTierCalmMaxPct: 1.0,  adaptiveTierNormalMaxPct: 2.0,  adaptiveTierVolatileMaxPct: 4.0,
+    adaptiveBuy1OffsetCalm: 0.05, adaptiveBuy1OffsetNormal: 0.15, adaptiveBuy1OffsetVolatile: 0.50, adaptiveBuy1OffsetXVolatile: 1.20,
+    adaptiveBuy2OffsetCalm: 0.25, adaptiveBuy2OffsetNormal: 0.55, adaptiveBuy2OffsetVolatile: 1.20, adaptiveBuy2OffsetXVolatile: 2.20,
+    adaptiveTpTargetCalm: 0.10,   adaptiveTpTargetNormal: 0.15,   adaptiveTpTargetVolatile: 0.25,   adaptiveTpTargetXVolatile: 0.40,
+  },
+  wide_volatile_day: {
+    adaptiveTierCalmMaxPct: 1.0,  adaptiveTierNormalMaxPct: 2.0,  adaptiveTierVolatileMaxPct: 4.0,
+    adaptiveBuy1OffsetCalm: 0.25, adaptiveBuy1OffsetNormal: 0.60, adaptiveBuy1OffsetVolatile: 1.20, adaptiveBuy1OffsetXVolatile: 2.50,
+    adaptiveBuy2OffsetCalm: 0.70, adaptiveBuy2OffsetNormal: 1.30, adaptiveBuy2OffsetVolatile: 2.50, adaptiveBuy2OffsetXVolatile: 4.00,
+    adaptiveTpTargetCalm: 0.20,   adaptiveTpTargetNormal: 0.30,   adaptiveTpTargetVolatile: 0.45,   adaptiveTpTargetXVolatile: 0.80,
+  },
+};
+
+function currentFormValues() {
+  const out = {};
+  for (const k of KEYS) {
+    const el = document.getElementById(k);
+    if (!el) continue;
+    const v = parseFloat(el.value);
+    if (!isNaN(v)) out[k] = v;
+  }
+  return out;
+}
+
+function setForm(values) {
+  for (const k of KEYS) {
+    const el = document.getElementById(k);
+    if (el && values[k] !== undefined) el.value = values[k];
+  }
+  flagChanges();
+  runPreview();
+}
+
+function applyPreset(name) {
+  const p = PRESETS[name];
+  if (!p) return;
+  setForm(p);
+}
+
+let _liveValues = {};
+function flagChanges() {
+  const cur = currentFormValues();
+  let changed = false;
+  for (const k of KEYS) {
+    if (cur[k] !== _liveValues[k]) { changed = true; break; }
+  }
+  document.getElementById('changedFlag').textContent = changed ? '● unsaved changes' : '';
+}
+
+async function loadLive() {
+  try {
+    const r = await fetch('/api/offset-strategy/current');
+    const j = await r.json();
+    _liveValues = { ...j.config };
+    for (const k of KEYS) {
+      const el = document.getElementById(k);
+      if (el && _liveValues[k] !== undefined) el.value = _liveValues[k];
+    }
+    flagChanges();
+    runPreview();
+  } catch (e) {
+    document.getElementById('saveResult').innerHTML = '<div class="error">' + e.message + '</div>';
+  }
+}
+
+async function runPreview() {
+  const cur = currentFormValues();
+  const out = document.getElementById('previewResult');
+  try {
+    const r = await fetch('/api/offset-strategy/preview?settings=' + encodeURIComponent(JSON.stringify(cur)));
+    const j = await r.json();
+    document.getElementById('previewTs').textContent = 'updated ' + new Date(j.ts).toLocaleTimeString();
+    const rows = (j.previews || []).map(p => {
+      if (p.error) return `<tr><td colspan="9" class="empty">${p.symbol}: ${p.error}</td></tr>`;
+      const dBuy = p.candidate.buy1_offset_pct - p.live.buy1_offset_pct;
+      const dCls = dBuy > 0 ? 'delta-neg' : dBuy < 0 ? 'delta-pos' : 'delta-eq';
+      return `
+        <tr class="${p.changed ? 'changed' : ''}">
+          <td><strong>${p.symbol}</strong></td>
+          <td>$${p.current_price.toFixed(8)}</td>
+          <td>${p.range_1h_pct}%</td>
+          <td><span class="tier-name ${p.live.tier}">${p.live.tier}</span></td>
+          <td>−${p.live.buy1_offset_pct}%</td>
+          <td>$${p.live.buy1_price.toFixed(8)}</td>
+          <td><span class="tier-name ${p.candidate.tier}">${p.candidate.tier}</span></td>
+          <td>−${p.candidate.buy1_offset_pct}%</td>
+          <td>$${p.candidate.buy1_price.toFixed(8)}</td>
+          <td class="${dCls}">${dBuy >= 0 ? '+' : ''}${dBuy.toFixed(2)}%</td>
+        </tr>
+      `;
+    }).join('');
+    out.innerHTML = `
+      <div style="overflow-x: auto;">
+      <table class="preview">
+        <thead>
+          <tr>
+            <th>Symbol</th><th>Last</th><th>1h range</th>
+            <th>Live tier</th><th>Live offset</th><th>Live limit $</th>
+            <th>NEW tier</th><th>NEW offset</th><th>NEW limit $</th>
+            <th>Δ offset</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      </div>
+      <div class="hint" style="margin-top: 8px;">Yellow rows = settings would change what the bot does. Δ &lt; 0 means tighter (closer to current price = more likely to fill).</div>
+    `;
+  } catch (e) {
+    out.innerHTML = '<div class="error">' + e.message + '</div>';
+  }
+}
+
+async function saveSettings() {
+  const cur = currentFormValues();
+  const out = document.getElementById('saveResult');
+  out.innerHTML = '<div class="hint">Saving…</div>';
+  try {
+    const r = await fetch('/api/offset-strategy/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cur),
+    });
+    const j = await r.json();
+    if (j.success) {
+      _liveValues = { ...cur };
+      let html = '<div class="ok-banner">✓ Saved. Bot reads new tier offsets on next signal evaluation.</div>';
+      if (j.warning) html += '<div class="warn-banner" style="margin-top: 8px;">⚠ ' + j.warning + '</div>';
+      out.innerHTML = html;
+      flagChanges();
+      runPreview();
+    } else {
+      out.innerHTML = '<div class="error">' + (j.error || 'Save failed') + '</div>';
+    }
+  } catch (e) {
+    out.innerHTML = '<div class="error">' + e.message + '</div>';
+  }
+}
+
+// Listen for any input changes to re-flag
+document.querySelectorAll('input.editor').forEach(el => {
+  el.addEventListener('input', () => { flagChanges(); });
+  el.addEventListener('change', () => { runPreview(); });
+});
+
+loadLive();
+</script>
+
+</body>
+</html>
