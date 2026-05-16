@@ -3835,6 +3835,161 @@ app.get('/api/active-positions', async (req, res) => {
     }
 });
 
+// iter 29 fe (2026-05-16): Scalper Health Monitor
+//
+// User: "kindly check why virtual scalper is not buying any coin"
+//
+// Diagnosis: Virtual Scalper container is up + heartbeating, but the buy
+// pipeline has been dead for hours. Frontend can't fix the Python issue,
+// but it can surface the broken state immediately so the operator sees it.
+//
+// Health = freshness of activity per scalper:
+//   - Active positions count (from ladder state hashes)
+//   - Today's outcomes (filled + unfilled, by scalper_origin)
+//   - Time since last outcome (in minutes — if > 6h, alert)
+//   - Container heartbeat inferred via "is there any state at all?"
+async function gatherScalperOutcomes(date) {
+    const stream = redis.scanStream({ match: `METRICS:OUTCOME:${date}:*`, count: 100 });
+    const keys = [];
+    stream.on('data', (b) => keys.push(...b));
+    await new Promise(r => stream.on('end', r));
+    const byOrigin = { FAST: [], VIRTUAL: [] };
+    for (const k of keys) {
+        const o = await redis.hgetall(k);
+        if (!o || !o.symbol) continue;
+        const origin = (o.scalper_origin || '').toUpperCase();
+        if (!byOrigin[origin]) continue;
+        byOrigin[origin].push({
+            symbol: o.symbol,
+            buy_ts: parseInt(o.buy_ts || '0', 10),
+            exit_ts: parseInt(o.exit_ts || '0', 10),
+            filled: parseInt(o.filled || '0', 10),
+            exited: parseInt(o.exited || '0', 10),
+            tp_hit: parseInt(o.tp_hit || '0', 10),
+            pnl: parseFloat(o.pnl_usdt || '0'),
+            exit_reason: o.exit_reason || null,
+        });
+    }
+    return byOrigin;
+}
+
+function summariseScalper(outcomes, activePositions) {
+    const fills = outcomes.filter(o => o.filled === 1);
+    const wins = fills.filter(o => o.tp_hit === 1);
+    const losses = fills.filter(o => o.exit_reason === 'stop_loss' || o.exit_reason === 'hard_stop');
+    const cancels = outcomes.filter(o => o.filled === 0 && o.exited === 1);
+    const pnl = fills.reduce((s, o) => s + (o.pnl || 0), 0);
+    const lastBuy = outcomes.reduce((m, o) => Math.max(m, o.buy_ts || 0), 0);
+    const lastExit = outcomes.reduce((m, o) => Math.max(m, o.exit_ts || 0), 0);
+    const lastTs = Math.max(lastBuy, lastExit);
+    return {
+        active_positions: activePositions,
+        today_total_outcomes: outcomes.length,
+        today_fills: fills.length,
+        today_wins: wins.length,
+        today_losses: losses.length,
+        today_cancels: cancels.length,
+        today_total_pnl_usdt: +pnl.toFixed(4),
+        last_activity_ts: lastTs || null,
+        last_activity_age_min: lastTs ? Math.round((Date.now() - lastTs) / 60000) : null,
+    };
+}
+
+app.get('/api/scalper-health', async (req, res) => {
+    try {
+        const today = new Date().toISOString().slice(0, 10);
+        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+        // Today's outcomes per scalper
+        const todayOutcomes = await gatherScalperOutcomes(today);
+        // Yesterday's last activity (fallback for "long quiet day")
+        const yesterdayOutcomes = await gatherScalperOutcomes(yesterday);
+
+        // Active ladders per scalper
+        const [fastLadders, virtualLadders] = await Promise.all([
+            redis.hgetall('SCALPER:LADDER_STATES'),
+            redis.hgetall('VIRTUAL:LADDER_STATES'),
+        ]);
+        const fastActive = Object.keys(fastLadders || {}).length;
+        const virtualActive = Object.keys(virtualLadders || {}).length;
+
+        const fastSummary = summariseScalper(todayOutcomes.FAST, fastActive);
+        const virtualSummary = summariseScalper(todayOutcomes.VIRTUAL, virtualActive);
+
+        // For Virtual: if no activity today, find last yesterday activity
+        if (!virtualSummary.last_activity_ts && yesterdayOutcomes.VIRTUAL.length > 0) {
+            const lastY = yesterdayOutcomes.VIRTUAL.reduce((m, o) =>
+                Math.max(m, o.buy_ts || 0, o.exit_ts || 0), 0);
+            virtualSummary.last_activity_ts = lastY || null;
+            virtualSummary.last_activity_age_min = lastY ? Math.round((Date.now() - lastY) / 60000) : null;
+        }
+        if (!fastSummary.last_activity_ts && yesterdayOutcomes.FAST.length > 0) {
+            const lastY = yesterdayOutcomes.FAST.reduce((m, o) =>
+                Math.max(m, o.buy_ts || 0, o.exit_ts || 0), 0);
+            fastSummary.last_activity_ts = lastY || null;
+            fastSummary.last_activity_age_min = lastY ? Math.round((Date.now() - lastY) / 60000) : null;
+        }
+
+        // Alert logic per scalper
+        // Critical: no outcomes in 6+ hours (360 min) AND there ARE signals today
+        const signalsTodayCount = await redis.llen(`METRICS:SIGNAL:${today}`).catch(() => 0);
+        const annotate = (s, name) => {
+            const alerts = [];
+            if (signalsTodayCount > 0 && s.today_total_outcomes === 0) {
+                alerts.push({
+                    level: 'critical',
+                    code: 'no_outcomes_with_signals',
+                    text: `${signalsTodayCount} signals fired today but ${name} has 0 outcomes — buy pipeline broken`,
+                });
+            }
+            if (s.last_activity_age_min !== null && s.last_activity_age_min > 360) {
+                alerts.push({
+                    level: 'warn',
+                    code: 'stale_activity',
+                    text: `Last activity ${(s.last_activity_age_min/60).toFixed(1)}h ago`,
+                });
+            }
+            if (s.last_activity_age_min === null) {
+                alerts.push({
+                    level: 'critical',
+                    code: 'never_active',
+                    text: 'No activity in any window — scalper may be dead',
+                });
+            }
+            // Health score: 0-100
+            let score = 100;
+            if (alerts.some(a => a.level === 'critical')) score = 20;
+            else if (alerts.some(a => a.level === 'warn')) score = 60;
+            return { ...s, alerts, health_score: score };
+        };
+
+        // Pattern Bot data
+        const patternCfg = JSON.parse((await redis.get(CONFIG_KEY)) || '{}');
+        const patternStatus = await redis.hgetall('PATTERN_BOT:STATUS') || {};
+        const patternOpenRaw = await redis.hgetall('PATTERN_BOT:OPEN') || {};
+        const patternActive = Object.keys(patternOpenRaw).length;
+        const patternBot = {
+            enabled: !!patternCfg.patternBotEnabled,
+            paper_mode: !!patternCfg.patternBotPaperMode,
+            active_positions: patternActive,
+            last_poll_ts: patternStatus.last_poll_ts ? +patternStatus.last_poll_ts : null,
+            last_poll_age_min: patternStatus.last_poll_ts ? Math.round((Date.now() - +patternStatus.last_poll_ts) / 60000) : null,
+            last_executed: patternStatus.last_executed ? +patternStatus.last_executed : 0,
+        };
+
+        res.json({
+            ts: Date.now(),
+            date: today,
+            signals_today: signalsTodayCount,
+            fast_scalper: annotate(fastSummary, 'Fast Scalper'),
+            virtual_scalper: annotate(virtualSummary, 'Virtual Scalper'),
+            pattern_bot: patternBot,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message, stack: err.stack });
+    }
+});
+
 // iter 27 fe (2026-05-16): Limit-Offset Strategy editor
 //
 // User: "today we can enable limit order buy 1 off set -0.01% and -0.02%

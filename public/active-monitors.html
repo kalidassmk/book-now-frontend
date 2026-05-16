@@ -122,6 +122,17 @@
   <span style="color: var(--muted);">●</span> IDLE/DISABLED
 </div>
 
+<!-- Scalper health strip (iter29) -->
+<div class="card" id="healthCard">
+  <h2 style="margin: 0 0 12px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 600;">
+    🏥 Scalper Health
+    <span id="healthAlerts" style="color: var(--bad); font-size: 11px; margin-left: 10px;"></span>
+  </h2>
+  <div id="healthStrip" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px;">
+    <div class="empty">Loading…</div>
+  </div>
+</div>
+
 <div class="card">
   <div class="toolbar">
     <button onclick="refresh()">🔄 Refresh</button>
@@ -227,9 +238,110 @@ async function refresh() {
   }
 }
 
+// iter29: Scalper health strip
+function ageStrFromMin(min) {
+  if (min == null) return '—';
+  if (min < 60) return min + 'm';
+  if (min < 1440) return (min/60).toFixed(1) + 'h';
+  return (min/1440).toFixed(1) + 'd';
+}
+
+function renderScalperCard(name, icon, s, paperMode) {
+  const score = s.health_score == null ? 100 : s.health_score;
+  const color = score >= 80 ? 'var(--good)' : score >= 50 ? 'var(--warn)' : 'var(--bad)';
+  const pnlClass = (s.today_total_pnl_usdt || 0) > 0 ? 'pos' : (s.today_total_pnl_usdt || 0) < 0 ? 'neg' : 'mute';
+  const ageColor = (s.last_activity_age_min == null) ? 'var(--bad)'
+                 : (s.last_activity_age_min > 360 ? 'var(--bad)'
+                 : (s.last_activity_age_min > 60 ? 'var(--warn)' : 'var(--good)'));
+  const alertsHtml = (s.alerts || []).map(a => `
+    <div style="margin-top: 6px; padding: 6px 10px; background: ${a.level === 'critical' ? 'rgba(231,76,60,.15)' : 'rgba(241,196,15,.15)'};
+                border-left: 3px solid ${a.level === 'critical' ? 'var(--bad)' : 'var(--warn)'};
+                border-radius: 4px; font-size: 11px; color: ${a.level === 'critical' ? 'var(--bad)' : 'var(--warn)'};">
+      ${a.level === 'critical' ? '🚨' : '⚠️'} ${a.text}
+    </div>
+  `).join('');
+  return `
+    <div style="background: var(--panel-2); border: 1px solid var(--line); border-left: 4px solid ${color}; border-radius: 8px; padding: 12px 14px;">
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+        <span style="font-size: 18px;">${icon}</span>
+        <span style="font-weight: 700; font-size: 14px;">${name}</span>
+        ${paperMode != null ? `<span style="font-size: 10px; padding: 2px 6px; border-radius: 3px; background: var(--panel); color: var(--muted);">${paperMode ? 'PAPER' : 'LIVE'}</span>` : ''}
+        <span style="flex: 1;"></span>
+        <span style="font-size: 11px; padding: 2px 8px; border-radius: 3px; background: ${color}; color: ${score >= 50 ? '#0c1116' : '#fff'};">${score}</span>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 11px;">
+        <div><span style="color: var(--muted);">Active</span> <strong>${s.active_positions || 0}</strong></div>
+        <div><span style="color: var(--muted);">Last activity</span> <strong style="color: ${ageColor};">${ageStrFromMin(s.last_activity_age_min)}</strong></div>
+        <div><span style="color: var(--muted);">Today fills</span> <strong>${s.today_fills || 0}</strong></div>
+        <div><span style="color: var(--muted);">Today cancels</span> <strong>${s.today_cancels || 0}</strong></div>
+        <div><span style="color: var(--muted);">Wins / Losses</span> <strong style="color: var(--good);">${s.today_wins || 0}</strong> / <strong style="color: var(--bad);">${s.today_losses || 0}</strong></div>
+        <div><span style="color: var(--muted);">Today P&amp;L</span> <strong class="${pnlClass}">${s.today_total_pnl_usdt >= 0 ? '+' : ''}$${(s.today_total_pnl_usdt || 0).toFixed(2)}</strong></div>
+      </div>
+      ${alertsHtml}
+    </div>
+  `;
+}
+
+function renderPatternCard(p) {
+  const color = p.last_poll_age_min == null ? 'var(--bad)' :
+                p.last_poll_age_min > 5 ? 'var(--warn)' : 'var(--good)';
+  return `
+    <div style="background: var(--panel-2); border: 1px solid var(--line); border-left: 4px solid ${color}; border-radius: 8px; padding: 12px 14px;">
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+        <span style="font-size: 18px;">🤖</span>
+        <span style="font-weight: 700; font-size: 14px;">Pattern Bot</span>
+        <span style="font-size: 10px; padding: 2px 6px; border-radius: 3px; background: var(--panel); color: var(--muted);">${p.paper_mode ? 'PAPER' : 'LIVE'}</span>
+        <span style="flex: 1;"></span>
+        <span style="font-size: 11px; padding: 2px 8px; border-radius: 3px; background: ${p.enabled ? 'rgba(46,204,113,.2)' : 'rgba(231,76,60,.2)'}; color: ${p.enabled ? 'var(--good)' : 'var(--bad)'};">${p.enabled ? 'ON' : 'OFF'}</span>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 11px;">
+        <div><span style="color: var(--muted);">Active</span> <strong>${p.active_positions || 0}</strong></div>
+        <div><span style="color: var(--muted);">Last poll</span> <strong style="color: ${color};">${ageStrFromMin(p.last_poll_age_min)}</strong></div>
+        <div><span style="color: var(--muted);">Executed today</span> <strong>${p.last_executed || 0}</strong></div>
+      </div>
+    </div>
+  `;
+}
+
+async function refreshHealth() {
+  try {
+    const r = await fetch('/api/scalper-health');
+    const j = await r.json();
+    if (j.error) {
+      document.getElementById('healthStrip').innerHTML = '<div class="error">' + j.error + '</div>';
+      return;
+    }
+    const alertCount = (j.fast_scalper.alerts || []).length + (j.virtual_scalper.alerts || []).length;
+    document.getElementById('healthAlerts').textContent =
+      alertCount > 0 ? `⚠ ${alertCount} alert${alertCount > 1 ? 's' : ''} below` : '';
+    document.getElementById('healthStrip').innerHTML =
+      renderScalperCard('Fast Scalper', '⚡', j.fast_scalper, null) +
+      renderScalperCard('Virtual Scalper', '🪞', j.virtual_scalper, null) +
+      renderPatternCard(j.pattern_bot) +
+      `<div style="background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;">
+         <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+           <span style="font-size: 18px;">📡</span>
+           <span style="font-weight: 700; font-size: 14px;">Signal Feed</span>
+         </div>
+         <div style="font-size: 11px;">
+           <div><span style="color: var(--muted);">Signals fired today</span> <strong>${j.signals_today || 0}</strong></div>
+           <div style="margin-top: 4px; color: var(--muted); font-size: 10px;">
+             Total signals dispatched to all scalpers today. If a scalper has 0 outcomes but feed > 0, alert fires.
+           </div>
+         </div>
+       </div>`;
+  } catch (e) {
+    document.getElementById('healthStrip').innerHTML = '<div class="error">' + e.message + '</div>';
+  }
+}
+
 refresh();
+refreshHealth();
 setInterval(() => {
-  if (document.getElementById('autoRefresh').checked) refresh();
+  if (document.getElementById('autoRefresh').checked) {
+    refresh();
+    refreshHealth();
+  }
 }, 5000);
 </script>
 
