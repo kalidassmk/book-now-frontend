@@ -4042,7 +4042,6 @@ app.get('/api/scalper-logs', async (req, res) => {
     try {
         const scalper = (req.query.scalper || 'virtual').toLowerCase();
         const limit = Math.min(parseInt(req.query.limit || '100', 10), 200);
-        // Today only — scalper logs aren't long-running enough to bother with date scan
         const key = scalper === 'virtual' ? 'VIRTUAL:LOG_TAIL'
                   : scalper === 'fast'    ? 'FAST:LOG_TAIL'
                   : null;
@@ -4051,9 +4050,41 @@ app.get('/api/scalper-logs', async (req, res) => {
         // Quick categorisation
         const tracebacks = lines.filter(l => /Traceback|Error|Exception/i.test(l)).length;
         const skips = lines.filter(l => /skipped by filter|🔪/i.test(l)).length;
+
+        // iter30 v4 (2026-05-16): per-line age + freshness summary
+        // Parse "HH:MM:SS" prefix on each line, compute age assuming UTC today.
+        const now = new Date();
+        const nowSecOfDay = now.getUTCHours() * 3600 + now.getUTCMinutes() * 60 + now.getUTCSeconds();
+        const enrichedLines = lines.map((l, i) => {
+            const m = l.match(/^(\d{2}):(\d{2}):(\d{2})/) || l.match(/(\d{2}):(\d{2}):(\d{2})/);
+            let ageSec = null;
+            if (m) {
+                const lineSecOfDay = +m[1] * 3600 + +m[2] * 60 + +m[3];
+                // If line time > now, it's likely from yesterday (clock wraparound)
+                ageSec = lineSecOfDay <= nowSecOfDay
+                    ? nowSecOfDay - lineSecOfDay
+                    : (86400 - lineSecOfDay) + nowSecOfDay;
+            }
+            return { idx: i, text: l, age_sec: ageSec };
+        });
+
+        // "Last event" freshness — use the newest line's parsed age
+        const lastEventEpochRaw = await redis.get('VIRTUAL:LOG_LAST_EVENT_EPOCH').catch(() => null);
+        const lastEventEpoch = lastEventEpochRaw ? parseInt(lastEventEpochRaw, 10) : null;
+        const lastEventAgeSec = lastEventEpoch ? Math.round(Date.now() / 1000 - lastEventEpoch) : null;
+
         res.json({
             scalper, count: lines.length, tracebacks, skips,
-            lines: lines.map((l, i) => ({ idx: i, text: l })),
+            last_event_age_sec: lastEventAgeSec,
+            last_event_age_label: lastEventAgeSec == null ? 'no events yet'
+                : lastEventAgeSec < 60 ? `${lastEventAgeSec}s ago`
+                : lastEventAgeSec < 3600 ? `${Math.round(lastEventAgeSec / 60)}m ago`
+                : `${(lastEventAgeSec / 3600).toFixed(1)}h ago`,
+            stability_note: lastEventAgeSec == null ? null
+                : lastEventAgeSec < 300 ? `🔴 New activity ${lastEventAgeSec}s ago`
+                : lastEventAgeSec < 3600 ? `🟡 Last event ${Math.round(lastEventAgeSec/60)}m ago`
+                : `🟢 Stable for ${(lastEventAgeSec/3600).toFixed(1)}h — no recent events`,
+            lines: enrichedLines,
         });
     } catch (err) {
         res.status(500).json({ error: err.message });

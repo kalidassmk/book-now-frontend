@@ -251,6 +251,17 @@ async function manualRestart(force) {
 }
 
 // ── Log tail ──
+function ageBadge(sec) {
+  if (sec == null) return '';
+  let txt, color;
+  if (sec < 60)        { txt = sec + 's ago';                       color = 'var(--bad)';   }
+  else if (sec < 300)  { txt = Math.round(sec/60) + 'm ago';        color = 'var(--bad)';   }
+  else if (sec < 3600) { txt = Math.round(sec/60) + 'm ago';        color = 'var(--warn)';  }
+  else if (sec < 86400){ txt = (sec/3600).toFixed(1) + 'h ago';     color = 'var(--muted)'; }
+  else                 { txt = '>24h ago';                          color = 'var(--muted)'; }
+  return `<span style="font-size: 9px; color: ${color}; margin-right: 6px; font-family: monospace;">${txt}</span>`;
+}
+
 async function refreshLogs() {
   try {
     const r = await fetch('/api/scalper-logs?scalper=virtual&limit=200');
@@ -259,14 +270,27 @@ async function refreshLogs() {
     document.getElementById('logSkipCount').textContent = `${j.skips || 0} skip`;
     document.getElementById('logTotalCount').textContent = `${j.count || 0} lines`;
     const lines = j.lines || [];
+
+    // iter30 v4: stability banner at top of log area
+    let stabilityHtml = '';
+    if (j.stability_note) {
+      const bannerColor = j.stability_note.startsWith('🔴') ? 'var(--bad)'
+                        : j.stability_note.startsWith('🟡') ? 'var(--warn)'
+                        : 'var(--good)';
+      stabilityHtml = `<div style="padding: 8px 12px; background: ${bannerColor === 'var(--good)' ? 'rgba(46,204,113,.10)' : bannerColor === 'var(--warn)' ? 'rgba(241,196,15,.10)' : 'rgba(231,76,60,.10)'};
+                       border-left: 3px solid ${bannerColor}; border-radius: 4px; font-size: 12px; color: ${bannerColor}; margin-bottom: 10px;">
+        ${j.stability_note} (lines are dedupted — same entry never appears twice)
+      </div>`;
+    }
+
     if (lines.length === 0) {
-      document.getElementById('logArea').innerHTML = '<div class="empty">No non-heartbeat log lines yet. Will populate when the next crash/skip/error occurs.</div>';
+      document.getElementById('logArea').innerHTML = stabilityHtml + '<div class="empty">No non-heartbeat log lines yet.</div>';
     } else {
-      document.getElementById('logArea').innerHTML = lines.map(l => {
+      document.getElementById('logArea').innerHTML = stabilityHtml + lines.map(l => {
         const cls = /Traceback|Error|Exception/i.test(l.text) ? 'tb'
                   : /skipped by filter|🔪/i.test(l.text) ? 'skip'
                   : 'info';
-        return `<div class="log-line ${cls}">${escapeHtml(l.text)}</div>`;
+        return `<div class="log-line ${cls}">${ageBadge(l.age_sec)}${escapeHtml(l.text)}</div>`;
       }).join('');
     }
   } catch (e) {
