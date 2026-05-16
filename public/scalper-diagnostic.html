@@ -123,6 +123,16 @@
   <div class="log-area" id="logArea"><div class="empty">Loading…</div></div>
 </div>
 
+<!-- Micro-signal distribution (the REAL reason for no buys) -->
+<div class="card">
+  <h2>📊 Micro-signal distribution (the actual reason Virtual Scalper isn't buying)
+    <span class="hint">Source: ANALYSIS_020_TIMELINE — what the upstream analyzer is emitting</span>
+  </h2>
+  <div id="microSignalInterpretation"></div>
+  <div id="microSignalDist" style="margin-top: 10px;"></div>
+  <div id="microSignalSamples" style="margin-top: 12px;"></div>
+</div>
+
 <!-- Redis JSON validation -->
 <div class="card">
   <h2>🧪 Redis JSON validation
@@ -131,9 +141,12 @@
   <div class="toolbar">
     <label style="font-size: 11px; color: var(--muted);">Key:</label>
     <select id="validateKey">
+      <option value="ANALYSIS_020_TIMELINE">⭐ ANALYSIS_020_TIMELINE — Virtual Scalper signal source (407 entries)</option>
       <option value="FAST_MOVE">FAST_MOVE (391 entries)</option>
       <option value="RW_BASE_PRICE">RW_BASE_PRICE (416 entries)</option>
       <option value="BASE_CURRENT_INC_%">BASE_CURRENT_INC_% (419 entries)</option>
+      <option value="VIRTUAL_POSITIONS:MICRO">VIRTUAL_POSITIONS:MICRO</option>
+      <option value="VIRTUAL_HISTORY:MICRO">VIRTUAL_HISTORY:MICRO</option>
       <option value="SCALPER:LADDER_STATES">SCALPER:LADDER_STATES</option>
       <option value="VIRTUAL:LADDER_STATES">VIRTUAL:LADDER_STATES</option>
       <option value="PATTERN_BOT:OPEN">PATTERN_BOT:OPEN</option>
@@ -316,9 +329,83 @@ async function purgeEntry(key, field) {
   } catch (e) { alert('Error: ' + e.message); }
 }
 
+// iter30 v3: micro-signal distribution (the actual reason for no buys)
+async function refreshMicroSignals() {
+  try {
+    const r = await fetch('/api/micro-signal-distribution');
+    const j = await r.json();
+    if (j.error) {
+      document.getElementById('microSignalInterpretation').innerHTML = `<div class="err-banner">${j.error}</div>`;
+      return;
+    }
+    // Interpretation banner
+    const bannerClass = j.interpretation?.startsWith('🚨') ? 'err-banner'
+                      : j.interpretation?.startsWith('✓') ? 'ok-banner'
+                      : 'warn-banner';
+    document.getElementById('microSignalInterpretation').innerHTML =
+      `<div class="${bannerClass}">${j.interpretation}</div>`;
+
+    // Distribution
+    const dist = j.signal_distribution || {};
+    const total = Object.values(dist).reduce((s, n) => s + n, 0);
+    const tilesHtml = Object.entries(dist)
+      .sort((a, b) => b[1] - a[1])
+      .map(([sig, count]) => {
+        const pct = total > 0 ? (count / total * 100).toFixed(1) : '0';
+        const color = sig === 'NEUTRAL' ? 'var(--muted)' :
+                     sig === 'BULLISH' || sig === 'BUY' ? 'var(--good)' :
+                     sig === 'BEARISH' || sig === 'SELL' ? 'var(--bad)' :
+                     'var(--accent)';
+        return `
+          <div class="summary-tile" style="border-left: 3px solid ${color};">
+            <div class="label">${sig}</div>
+            <div class="value" style="color: ${color};">${count}</div>
+            <div style="font-size: 11px; color: var(--muted);">${pct}% of ${total}</div>
+          </div>`;
+      }).join('');
+
+    document.getElementById('microSignalDist').innerHTML = `
+      <div class="summary-grid">${tilesHtml}</div>
+      <div class="hint" style="margin-top: 8px;">
+        ${j.fresh_coins}/${j.total_coins} coins have data &lt; 2 min old.
+        Oldest entry: ${Math.round(j.oldest_age_sec / 60)} min ago.
+        Parse errors: ${j.parse_errors}.
+      </div>
+    `;
+
+    // Non-NEUTRAL samples
+    const samples = j.non_neutral_samples || [];
+    if (samples.length > 0) {
+      document.getElementById('microSignalSamples').innerHTML = `
+        <h3 style="font-size: 12px; color: var(--muted); margin: 12px 0 6px;">Non-NEUTRAL coins (buy candidates Virtual Scalper would consider)</h3>
+        <table>
+          <thead><tr><th>Symbol</th><th>Signal</th><th>Price</th><th>Status</th><th>Confidence</th><th>Last update</th></tr></thead>
+          <tbody>
+            ${samples.map(s => `
+              <tr>
+                <td><strong>${s.symbol}</strong></td>
+                <td><span class="pill ok">${s.micro_signal}</span></td>
+                <td>$${(s.price || 0).toFixed(8)}</td>
+                <td>${s.status || '—'}</td>
+                <td>${s.prediction_confidence || 0}</td>
+                <td style="font-size: 10px; color: var(--muted);">${s.time}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    } else {
+      document.getElementById('microSignalSamples').innerHTML = '';
+    }
+  } catch (e) {
+    document.getElementById('microSignalInterpretation').innerHTML = `<div class="err-banner">${e.message}</div>`;
+  }
+}
+
 refreshLogs();
 refreshRestartHistory();
-setInterval(() => { refreshLogs(); refreshRestartHistory(); }, 10000);
+refreshMicroSignals();
+setInterval(() => { refreshLogs(); refreshRestartHistory(); refreshMicroSignals(); }, 10000);
 </script>
 
 </body>

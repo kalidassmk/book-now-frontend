@@ -4060,6 +4060,66 @@ app.get('/api/scalper-logs', async (req, res) => {
     }
 });
 
+// iter30 v3 (2026-05-16): Micro-signal distribution.
+// Surfaces the REAL reason Virtual Scalper isn't buying: ALL coins in
+// the ANALYSIS_020_TIMELINE hash report micro_signal=NEUTRAL most of
+// the time. If we see 100% NEUTRAL, that's an upstream analyzer issue,
+// not a Virtual Scalper bug.
+app.get('/api/micro-signal-distribution', async (req, res) => {
+    try {
+        const all = await redis.hgetall('ANALYSIS_020_TIMELINE');
+        const counts = {};
+        const sample = { non_neutral: [], stable_only: [] };
+        let parseErrors = 0, total = 0, withSignal = 0;
+        const now = Date.now() / 1000;
+        let freshCount = 0;
+        let oldest_age_sec = 0;
+
+        for (const [sym, json] of Object.entries(all || {})) {
+            total++;
+            let timeline;
+            try { timeline = JSON.parse(json); } catch (_) { parseErrors++; continue; }
+            if (!Array.isArray(timeline) || timeline.length === 0) continue;
+            const last = timeline[timeline.length - 1];
+            const sig = last?.micro_signal || 'UNKNOWN';
+            counts[sig] = (counts[sig] || 0) + 1;
+            if (sig !== 'NEUTRAL' && sample.non_neutral.length < 20) {
+                sample.non_neutral.push({
+                    symbol: sym,
+                    micro_signal: sig,
+                    price: last.price,
+                    status: last.status,
+                    prediction_confidence: last.prediction_confidence,
+                    time: last.time,
+                });
+                withSignal++;
+            }
+            // Freshness check
+            const ts = last.timestamp || 0;
+            const age = ts > 0 ? now - ts : Infinity;
+            if (age < 120) freshCount++;
+            if (age > oldest_age_sec) oldest_age_sec = age;
+        }
+
+        res.json({
+            ts: Date.now(),
+            total_coins: total,
+            parse_errors: parseErrors,
+            fresh_coins: freshCount,
+            oldest_age_sec: Math.round(oldest_age_sec),
+            signal_distribution: counts,
+            non_neutral_samples: sample.non_neutral,
+            interpretation: counts.NEUTRAL === total
+                ? `🚨 All ${total} coins are NEUTRAL — upstream analyzer is not finding any signals. Virtual Scalper has nothing to buy. Check the micro_signal analyzer process.`
+                : withSignal > 0
+                    ? `✓ ${withSignal} coins have non-NEUTRAL signals. Virtual Scalper has buy candidates to evaluate.`
+                    : `⚠ Mostly NEUTRAL with no clear buy candidates right now (normal during quiet market hours).`,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get('/api/scalper-restart-history', async (req, res) => {
     try {
         const raw = await redis.lrange('VIRTUAL:RESTART_HISTORY', 0, 49);
@@ -4092,6 +4152,8 @@ app.get('/api/redis-validate', async (req, res) => {
         'FAST_MOVE', 'RW_BASE_PRICE', 'BASE_CURRENT_INC_%',
         'SCALPER:LADDER_STATES', 'VIRTUAL:LADDER_STATES', 'PATTERN_BOT:OPEN',
         'BINANCE:OPEN_ORDERS:ALL',
+        // iter30 fix: the ACTUAL Virtual Scalper signal source
+        'ANALYSIS_020_TIMELINE', 'VIRTUAL_POSITIONS:MICRO', 'VIRTUAL_HISTORY:MICRO',
     ]);
     if (!ALLOWED.has(key)) return res.status(400).json({ error: `key not in whitelist: ${[...ALLOWED].join(', ')}` });
 
