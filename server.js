@@ -2884,12 +2884,21 @@ function classifyPendingBuy({ signalPrice, limitPrice, signalTs, klines, current
         classification = 'PUMP_AND_DUMP';
         action = 'CANCEL';
         headline = `Pump-and-dump pattern: +${peakPct.toFixed(2)}% pump then −${pullbackPct.toFixed(2)}% pullback from peak, momentum ${m3pct.toFixed(2)}%/3m, ${ll} lower lows in last 5m. If this fills the limit, expect further losses. Cancel.`;
-    } else if (ageMin >= TH.staleMin && peakPct >= TH.repriceMinPeak && pullbackPct >= 0.10 && pullbackPct <= 0.50) {
+    } else if (
+        ageMin >= TH.staleMin &&
+        peakPct >= TH.repriceMinPeak &&
+        pullbackPct >= 0.10 && pullbackPct <= 0.50 &&
+        // Only suggest reprice if current is meaningfully farther above limit
+        // than the original offset — otherwise the new limit price would equal
+        // the old one (no-op). This filters out cases where pullback already
+        // brought price back near signal.
+        limitDistPct > originalOffsetPct * 1.4
+    ) {
+        const newLimit = +(currentPrice * (1 - originalOffsetPct / 100)).toFixed(10);
         classification = 'DRIFTED_REPRICE';
         action = 'REPRICE';
-        const newLimit = +(currentPrice * (1 - originalOffsetPct / 100)).toFixed(10);
         suggested = { new_offset_pct: +originalOffsetPct.toFixed(3), new_limit_price: newLimit };
-        headline = `Coin drifted +${peakPct.toFixed(2)}% then started a healthy pullback (${pullbackPct.toFixed(2)}% from peak). Original limit is now too far below. Reprice to $${newLimit.toFixed(8)} (−${originalOffsetPct.toFixed(2)}% from current $${currentPrice.toFixed(8)}).`;
+        headline = `Coin drifted +${peakPct.toFixed(2)}% then started a healthy pullback (${pullbackPct.toFixed(2)}% from peak). Current is ${limitDistPct.toFixed(2)}% above limit — original $${limitPrice.toFixed(8)} is now too far below. Reprice to $${newLimit.toFixed(8)} (−${originalOffsetPct.toFixed(2)}% from current $${currentPrice.toFixed(8)}).`;
     } else if (ageMin >= TH.staleMin && peakPct >= TH.staleMaxPeak && pullbackPct < 0.10 && m3pct >= -0.10) {
         classification = 'DRIFTED_UP';
         action = 'CANCEL';
@@ -2898,10 +2907,26 @@ function classifyPendingBuy({ signalPrice, limitPrice, signalTs, klines, current
         classification = 'STALE_FLAT';
         action = 'CANCEL';
         headline = `Order has been pending ${ageMin.toFixed(0)}m. Coin barely moved (peak +${peakPct.toFixed(2)}%, range ${peakToTroughPct.toFixed(2)}%). Signal is dead — cancel and free the slot.`;
-    } else {
+    } else if (
+        // Active-pullback hold: price is actively heading toward the limit
+        // (negative momentum AND we're closer to limit than to signal).
+        m3pct < 0 && limitDistPct < originalOffsetPct * 0.6
+    ) {
+        classification = 'PULLBACK_INCOMING';
+        action = 'RIDE';
+        headline = `Active pullback toward limit: 3m momentum ${m3pct.toFixed(2)}%, only ${limitDistPct.toFixed(2)}% above limit. Fill likely on the next dip — let it ride.`;
+    } else if (ageMin < TH.staleMin) {
         classification = 'HEALTHY_WAIT';
         action = 'RIDE';
-        headline = `No alarm signals. Peak +${peakPct.toFixed(2)}%, current ${limitDistPct.toFixed(2)}% above limit, age ${ageMin.toFixed(0)}m. Dip may still come — let the order ride.`;
+        headline = `Order is fresh (${ageMin.toFixed(0)}m of ${TH.staleMin}m staleness budget). Peak +${peakPct.toFixed(2)}%, current ${limitDistPct.toFixed(2)}% above limit. Give it time.`;
+    } else {
+        // Default for "old enough but ambiguous" — coin moved a bit, then
+        // returned, no clear pullback toward limit. ZAMA-class scenario.
+        // User's preference is to cancel and chase a fresher signal rather
+        // than let a slot sit idle waiting on stale interest.
+        classification = 'DRIFTED_NO_DIP';
+        action = 'CANCEL';
+        headline = `Coin moved +${peakPct.toFixed(2)}% then mostly returned (pullback ${pullbackPct.toFixed(2)}%), and the limit at $${limitPrice.toFixed(8)} has not been touched in ${ageMin.toFixed(0)}m. 3m momentum ${m3pct.toFixed(2)}% — no clear dip incoming. Cancel and free the slot for a fresher signal.`;
     }
 
     return {
