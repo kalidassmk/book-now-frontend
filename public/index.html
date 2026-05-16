@@ -2,23 +2,16 @@
 <html lang="en">
 <head>
   <!--
-    public/index.html
-    ──────────────────────────────────────────────────────────────────────────
-    BookNow Fast Trade Scanner — Main page shell.
-
-    Service control buttons (topbar):
-      ⏹ Stop      → POST /api/service/stop
-      🗑 Clear     → POST /api/redis/flush
-      ▶ Start     → POST /api/service/start
-
-    This file is ONLY structure and resource loading.
-    No inline styles. No inline scripts.
-    All logic lives in public/js/*.js
-    All styles live in public/css/dashboard.css
+    public/index.html — Scanner page (iter28 refactor 2026-05-16).
+    Now uses the unified topnav. Hidden legacy elements (stat pills, logo,
+    bot-positions strip) preserved as no-op spans so existing JS doesn't
+    break. Useful surfaces kept: scanner table, trading terminal, side
+    tabs (positions / orders / history / wallet), service controls,
+    coin-analysis modal.
   -->
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>BookNow — Fast Trade Scanner</title>
+  <title>BookNow — Scanner</title>
 
   <!-- Fonts -->
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
@@ -27,104 +20,108 @@
   <link rel="stylesheet" href="/css/dashboard.css"/>
   <link rel="stylesheet" href="/css/scanner-sort.css"/>
   <link rel="stylesheet" href="/css/premium.css"/>
+
+  <!-- iter28 refactor: unified-nav styling to match other dashboards -->
+  <style>
+    body { background: #0c1116; color: #e6edf3; font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 0; }
+    .scanner-topwrap { padding: 14px 18px 0; background: #0c1116; }
+    .topnav { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+    .topnav a, .topnav button.nav-item {
+      display: inline-block; padding: 6px 14px; border-radius: 6px;
+      background: #141b24; border: 1px solid #1f2933; color: #8b949e;
+      text-decoration: none; font-size: 12px; font-weight: 600;
+      cursor: pointer; font-family: inherit;
+    }
+    .topnav a.active, .topnav button.nav-item.active {
+      background: #29b6f6; color: #fff; border-color: #29b6f6;
+    }
+    .topnav a:not(.active):hover, .topnav button.nav-item:not(.active):hover {
+      color: #e6edf3; border-color: #8b949e;
+    }
+    .cmd-bar {
+      display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+      padding: 8px 12px; background: #141b24; border: 1px solid #1f2933;
+      border-radius: 8px; margin-bottom: 12px; font-size: 12px;
+    }
+    .cmd-bar .live-badge { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+    .cmd-bar .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #2ecc71; }
+    .cmd-bar .live-dot.disconnected { background: #e74c3c; }
+    .cmd-bar .stat-pill { display: flex; gap: 6px; align-items: baseline; padding: 2px 10px; background: rgba(0,0,0,.2); border-radius: 4px; }
+    .cmd-bar .stat-pill .sp-label { font-size: 10px; color: #8b949e; text-transform: uppercase; letter-spacing: .4px; }
+    .cmd-bar .stat-pill .sp-val { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .cmd-bar .sep { width: 1px; height: 20px; background: #1f2933; }
+    .cmd-bar .svc-btn {
+      padding: 5px 12px; background: transparent; border: 1px solid #1f2933;
+      color: #8b949e; border-radius: 4px; cursor: pointer; font-size: 11px;
+      font-weight: 600; display: inline-flex; align-items: center; gap: 4px;
+    }
+    .cmd-bar .svc-btn:hover { color: #e6edf3; border-color: #8b949e; }
+    .cmd-bar .svc-btn.svc-start { color: #2ecc71; border-color: rgba(46,204,113,.4); }
+    .cmd-bar .svc-btn.svc-stop  { color: #e74c3c; border-color: rgba(231,76,60,.4); }
+    .cmd-bar .svc-btn.svc-flush { color: #f1c40f; border-color: rgba(241,196,15,.4); }
+    .cmd-bar .svc-status { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #8b949e; }
+    .cmd-bar .svc-dot { width: 8px; height: 8px; border-radius: 50%; background: #8b949e; }
+    .cmd-bar .svc-dot.running { background: #2ecc71; }
+    .cmd-bar .svc-dot.stopped { background: #e74c3c; }
+    /* Hide legacy elements that JS still references but UI doesn't need */
+    .hidden-legacy { display: none !important; }
+  </style>
 </head>
 <body>
 
 <!-- ════════════════════════════════════════════════════════════════════════════
-     TOPBAR — Live status, stat pills, connection indicator
+     Unified topnav + compact command bar
      ════════════════════════════════════════════════════════════════════════════ -->
-<div class="topbar">
+<div class="scanner-topwrap">
+  <nav class="topnav">
+    <a href="/">📊 Monitor</a>
+    <a href="/active-monitors.html">🎛️ Active Monitors</a>
+    <a href="/offset-strategy.html">⚙️ Offset Strategy</a>
+    <a href="/pending-monitor.html">⏳ Pending Monitor</a>
+    <a href="/adaptive-eligibility.html">✅ Adaptive Gate</a>
+    <a href="/adaptive-offset.html">🎯 Adaptive Offset</a>
+    <a href="/limit-buy-replay.html">🔄 Limit Replay</a>
+    <a href="/filter-candidate.html">🧪 Filter Tester</a>
+    <a href="/bounce-watch.html">⤴️ Bounce Watch</a>
+    <a href="/early-pump.html">🚀 Early Pump</a>
+    <a href="/pattern-bot.html">🤖 Pattern Bot</a>
+    <a href="/decision-trace.html">🔍 Decision Trace</a>
+    <a href="/metrics.html">📈 Metrics</a>
+    <a href="/spot.html">📋 Spot</a>
+    <button class="nav-item active" onclick="ui.goto('home')">🏠 Scanner</button>
+  </nav>
 
-  <!-- Logo -->
-  <div class="logo">
-    <div class="logo-icon">⚡</div>
-    <h1>Fast Trade Scanner</h1>
-  </div>
+  <!-- Command bar: live status, key stats, service controls -->
+  <div class="cmd-bar">
+    <div class="live-badge">
+      <div class="live-dot" id="live-dot"></div>
+      <span id="live-label">Connecting</span>
+      <span id="live-ts-header" style="font-family:monospace;font-size:10px;color:#8b949e"></span>
+    </div>
+    <div class="sep"></div>
+    <div class="stat-pill"><span class="sp-label">Movers</span><span class="sp-val" id="s-count">0</span></div>
+    <div class="stat-pill"><span class="sp-label">Positions</span><span class="sp-val" id="s-pos">0</span></div>
+    <div class="stat-pill"><span class="sp-label">P&amp;L</span><span class="sp-val" id="s-pnl">$0.00</span></div>
+    <div class="stat-pill"><span class="sp-label">Wallet</span><span class="sp-val" id="s-wallet-count">0</span></div>
+    <div class="stat-pill"><span class="sp-label">Auto</span><span class="sp-val" id="s-auto">OFF</span></div>
+    <div class="sep" style="flex: 1; background: transparent;"></div>
 
-  <!-- Stat: fast mover count -->
-  <div class="stat-pill">
-    <span class="sp-label">Fast Movers</span>
-    <span class="sp-val yellow blinking" id="s-count">0</span>
-    <span style="font-size:10px;color:var(--muted)" id="s-total-fast"></span>
-  </div>
-
-  <!-- Stat: open positions -->
-  <div class="stat-pill">
-    <span class="sp-label">Positions</span>
-    <span class="sp-val blue" id="s-pos">0</span>
-  </div>
-
-  <!-- Stat: realized P&L -->
-  <div class="stat-pill">
-    <span class="sp-label">P&amp;L</span>
-    <span class="sp-val" id="s-pnl">$0.00</span>
-  </div>
-
-  <!-- Stat: wallet -->
-  <div class="stat-pill">
-    <span class="sp-label">Wallet</span>
-    <span class="sp-val purple" id="s-wallet-count">0</span>
-  </div>
-
-  <!-- Stat: auto-trade status -->
-  <div class="stat-pill">
-    <span class="sp-label">Auto</span>
-    <span class="sp-val" id="s-auto">OFF</span>
-  </div>
-
-  <!-- ── Service control bar ── -->
-  <div class="svc-bar">
-    <!-- Navigation (iter 25: added Spot — Binance WebSocket movers table). -->
-    <nav class="app-nav">
-      <a class="nav-item" href="/" style="text-decoration: none;">📊 Monitor</a>
-      <button class="nav-item active" onclick="ui.goto('home')">🏠 Scanner</button>
-      <a class="nav-item" href="/metrics.html" style="text-decoration: none;">📈 Metrics</a>
-      <a class="nav-item" href="/spot.html" style="text-decoration: none;">📋 Spot</a>
-    </nav>
-
-    <div class="sep-v"></div>
-
-    <!-- STOP Spring Boot -->
-    <button id="btn-svc-stop" class="svc-btn svc-stop" onclick="stopSpringService()"
-            title="Stop the Spring Boot trading service">
-      <span class="svc-icon">⏹</span>
-      <span class="svc-label">Stop</span>
-    </button>
-
-    <!-- CLEAR Redis -->
-    <button id="btn-flush-redis" class="svc-btn svc-flush" onclick="clearRedisCache()"
-            title="Delete all Redis keys (FLUSHALL) and restart the connection">
-      <span id="flush-icon" class="svc-icon">🗑️</span>
-      <span id="flush-label" class="svc-label">Clear Cache</span>
-    </button>
-
-    <!-- START Spring Boot -->
-    <button id="btn-svc-start" class="svc-btn svc-start" onclick="startSpringService()"
-            title="Start the Spring Boot trading service">
-      <span class="svc-icon">▶</span>
-      <span class="svc-label">Start</span>
-    </button>
-
-    <!-- Service running indicator -->
+    <!-- Service controls -->
+    <button id="btn-svc-start" class="svc-btn svc-start" onclick="startSpringService()" title="Start the Spring Boot trading service">▶ Start</button>
+    <button id="btn-svc-stop" class="svc-btn svc-stop" onclick="stopSpringService()" title="Stop the Spring Boot trading service">⏹ Stop</button>
+    <button id="btn-flush-redis" class="svc-btn svc-flush" onclick="clearRedisCache()" title="FLUSHALL Redis and restart connection">🗑 Clear</button>
     <div class="svc-status" id="svc-status" title="Spring Boot service status">
       <span class="svc-dot" id="svc-dot"></span>
       <span id="svc-status-label">Unknown</span>
     </div>
-
-    <!-- Currency Toggle -->
-    <button class="svc-btn svc-flush" onclick="toggleCurrency()" style="margin-left:12px;padding:2px 10px;border-radius:4px" title="Toggle between USDT and INR display">
-      <span id="currency-label">USDT Mode</span>
-    </button>
   </div>
-
-  <!-- Live connection indicator (right-aligned) -->
-  <div class="live-badge">
-    <div class="live-dot" id="live-dot"></div>
-    <span id="live-label">Connecting</span>
-    <span id="live-ts-header" style="margin-left:6px;font-family:var(--mono);font-size:10px;color:var(--muted)"></span>
-  </div>
-
 </div>
+
+<!-- Legacy elements preserved for JS hooks (hidden) -->
+<span class="hidden-legacy" id="s-total-fast"></span>
+<span class="hidden-legacy" id="currency-label">USDT Mode</span>
+<span class="hidden-legacy" id="flush-icon"></span>
+<span class="hidden-legacy" id="flush-label"></span>
 
 <script>
   // iter 24: dropped 'intelligence' route — page was deleted (was a noisy
@@ -183,58 +180,51 @@
 </script>
 
 <div id="view-home">
-  <!-- ════════════════════════════════════════════════════════════════════════════
-       BOT POSITIONS STRIP — Horizontal list of active bot trades
-       ════════════════════════════════════════════════════════════════════════════ -->
-  <div class="bot-strip-header">
-    <span class="bot-strip-title">🤖 Bot Positions</span>
-    <span class="bot-strip-count" id="bot-pos-count">0 active</span>
-    <span class="bot-strip-hint">← scroll →</span>
-  </div>
-  <div class="bot-strip" id="bot-positions">
-    <!-- Bot position cards injected here -->
-  </div>
+  <!-- iter28: bot positions strip removed (lives on /active-monitors now).
+       Bot position IDs preserved in hidden span for JS that still touches them. -->
+  <span class="hidden-legacy" id="bot-pos-count"></span>
+  <span class="hidden-legacy" id="bot-positions"></span>
 
   <div class="grid">
 
       <!-- ── LEFT: Fast-mover scanner ── -->
       <div class="left">
 
-        <!-- Auto-trade configuration bar -->
+        <!-- iter28 simplified auto-trade config bar — dropped Profit %, Top N.
+             Operator uses Profit $ exclusively; Top N is a display setting
+             that rarely changes. -->
         <div class="auto-bar">
-      <label class="toggle">
+      <label class="toggle" title="Enable bot auto-buy on scanner signals">
         <input type="checkbox" id="ck-auto" onchange="saveConfig()"/>
         <span class="slider"></span>
       </label>
+      <span style="font-size:11px;color:var(--muted)">Auto</span>
 
       <div class="sep"></div>
 
-      <label>Buy USDT</label>
-      <input type="number" id="cfg-buy-amount" value="50" min="10" max="1000" step="1" onchange="saveConfig()"/>
+      <label>Buy $</label>
+      <input type="number" id="cfg-buy-amount" value="48" min="10" max="1000" step="1" onchange="saveConfig()" title="USDT size per leg"/>
 
-      <label>Profit %</label>
-      <input type="number" id="cfg-profit" value="0.7" min="0" max="20" step="0.1" onchange="saveConfig()"/>
-
-      <label>Profit $</label>
-      <input type="number" id="cfg-profit-amount" value="0.15" min="0" max="100" step="0.01" onchange="saveConfig()"/>
+      <label>TP $</label>
+      <input type="number" id="cfg-profit-amount" value="0.15" min="0" max="100" step="0.01" onchange="saveConfig()" title="Take-profit target in USDT (net)"/>
 
       <label>Stop %</label>
-      <input type="number" id="cfg-stop" value="0.8" min="0.1" max="10" step="0.1" onchange="saveConfig()"/>
+      <input type="number" id="cfg-stop" value="1.5" min="0.1" max="10" step="0.1" onchange="saveConfig()" title="Hard stop % from average buy"/>
 
       <label>Max Pos</label>
-      <input type="number" id="cfg-maxpos" value="5" min="1" max="20" step="1" onchange="saveConfig()"/>
-
-      <label>Top N</label>
-      <input type="number" id="cfg-limit" value="10" min="1" max="50" step="1" onchange="saveConfig()" title="Max coins to display"/>
+      <input type="number" id="cfg-maxpos" value="1" min="1" max="20" step="1" onchange="saveConfig()" title="Max concurrent ladders"/>
 
       <div class="sep"></div>
 
-      <label>Mode</label>
       <label class="toggle" title="OFF = Simulation, ON = Live trading">
         <input type="checkbox" id="ck-live" onchange="saveConfig()"/>
         <span class="slider"></span>
       </label>
       <span id="mode-badge" class="mode-badge mode-sim">SIM</span>
+
+      <!-- Hidden legacy inputs (JS reads, no longer surfaced) -->
+      <input type="number" id="cfg-profit" value="0.6" class="hidden-legacy"/>
+      <input type="number" id="cfg-limit" value="10" class="hidden-legacy"/>
 
     </div>
 
@@ -605,39 +595,16 @@
         Current is at <strong id="gauge-pct">—</strong> of the 2-month range
       </div>
 
-      <!-- Intelligence Engine section -->
-      <div class="modal-section-title">🧠 Intelligence Engine</div>
-      <div class="modal-price-grid">
-        <div class="mpg-item">
-          <span class="mpg-lbl">Market Regime</span>
-          <span id="q-regime" class="mpg-val" style="color:var(--neon-cyan)">PENDING</span>
-        </div>
-        <div class="mpg-item">
-          <span class="mpg-lbl">Fakeout Risk</span>
-          <span id="q-fakeout" class="mpg-val">LOW</span>
-        </div>
-      </div>
-
-      <!-- News Analysis section -->
-      <div class="modal-section-title" id="m-news-title" style="display:none">📰 News & Sentiment</div>
-      <div class="modal-vol-grid" id="m-news-grid" style="display:none">
-        <div class="mvg-item">
-          <span class="mvg-lbl">News Sentiment</span>
-          <span id="m-news-sentiment" class="mvg-val">—</span>
-        </div>
-        <div class="mvg-item">
-          <span class="mvg-lbl">News Score</span>
-          <span id="m-news-score" class="mvg-val">—</span>
-        </div>
-        <div class="mvg-item">
-          <span class="mvg-lbl">Articles</span>
-          <span id="m-news-articles" class="mvg-val">—</span>
-        </div>
-        <div class="mvg-item">
-          <span class="mvg-lbl">Signal</span>
-          <span id="m-news-signal" class="mvg-val" style="font-weight:bold">—</span>
-        </div>
-      </div>
+      <!-- iter28: Intelligence Engine + News sections removed (not used).
+           IDs preserved hidden so any lingering JS writes don't error. -->
+      <span class="hidden-legacy" id="q-regime"></span>
+      <span class="hidden-legacy" id="q-fakeout"></span>
+      <span class="hidden-legacy" id="m-news-title"></span>
+      <span class="hidden-legacy" id="m-news-grid"></span>
+      <span class="hidden-legacy" id="m-news-sentiment"></span>
+      <span class="hidden-legacy" id="m-news-score"></span>
+      <span class="hidden-legacy" id="m-news-articles"></span>
+      <span class="hidden-legacy" id="m-news-signal"></span>
 
       <!-- Volume section -->
       <div class="modal-section-title">📦 Volume Analysis</div>
