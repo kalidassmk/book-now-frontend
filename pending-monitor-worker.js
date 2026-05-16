@@ -38,12 +38,16 @@
 const CONFIG_KEY = 'TRADING_CONFIG';
 const POLL_INTERVAL_MS = 30 * 1000;
 
-// Only auto-cancel these — all clearly say "this order will not have a
-// good outcome". DRIFTED_REPRICE is deliberately excluded (operator review).
+// Auto-cancel these classifications. Operator explicitly requested full
+// autonomy ("no manual intervention"), so DRIFTED_REPRICE is included —
+// the cancel frees the slot for a fresher signal. The iter25 recovery
+// worker guards against false-positive cancels (won't re-issue if price
+// has drifted above the limit zone). Together they cover the spectrum.
 const AUTO_CANCEL_CLASSIFICATIONS = new Set([
     'MISSED_BOAT',
     'PUMP_AND_DUMP',
     'DRIFTED_UP',
+    'DRIFTED_REPRICE',    // added 2026-05-16 — autonomy
     'STALE_FLAT',
     'DRIFTED_NO_DIP',
 ]);
