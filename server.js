@@ -3986,25 +3986,28 @@ app.get('/api/scalper-health', async (req, res) => {
             redis.get('VIRTUAL:RESTARTS_24H').catch(() => null),
         ]);
         const lastRestartTs = parseInt((await redis.get('VIRTUAL:LAST_RESTART_TS').catch(() => null)) || '0', 10);
+        const supCrashesN = parseInt(supCrashes24h || '0', 10);
 
-        // If supervisor has been crashing repeatedly, flag Virtual Scalper
-        // as the SYMPTOM but supervisor as the ROOT CAUSE.
-        if (parseInt(supCrashes24h || '0', 10) >= 3) {
-            virtualSummary.alerts = virtualSummary.alerts || [];
-            virtualSummary.alerts.push({
+        // Apply annotate first so we have base alerts, then append supervisor
+        // root-cause alert. Must mutate AFTER annotate returns the new object.
+        const fastAnnotated = annotate(fastSummary, 'Fast Scalper');
+        const virtualAnnotated = annotate(virtualSummary, 'Virtual Scalper');
+        if (supCrashesN >= 3) {
+            virtualAnnotated.alerts = virtualAnnotated.alerts || [];
+            virtualAnnotated.alerts.unshift({
                 level: 'critical',
                 code: 'supervisor_unstable',
-                text: `Supervisor crashed ${supCrashes24h}× in 24h (Python bug in supervisor.py:236 "rc unbound") — kills Virtual Scalper mid-cycle`,
+                text: `🚨 ROOT CAUSE: Python supervisor crashed ${supCrashesN}× in 24h (supervisor.py:236 — UnboundLocalError on 'rc'). Kills Virtual Scalper mid-buy every ~3 min.`,
             });
-            virtualSummary.health_score = 10;
+            virtualAnnotated.health_score = 10;
         }
 
         res.json({
             ts: Date.now(),
             date: today,
             signals_today: signalsTodayCount,
-            fast_scalper: annotate(fastSummary, 'Fast Scalper'),
-            virtual_scalper: annotate(virtualSummary, 'Virtual Scalper'),
+            fast_scalper: fastAnnotated,
+            virtual_scalper: virtualAnnotated,
             pattern_bot: patternBot,
             supervisor: {
                 crashes_24h: parseInt(supCrashes24h || '0', 10),
