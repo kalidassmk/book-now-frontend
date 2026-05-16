@@ -1040,6 +1040,15 @@ const DEFAULT_TRADING_CONFIG = {
     patternBotStopPct: 1.5,            // -1.5% cat-stop (tighter than iter39's 2.5%)
     patternBotMaxFreshSec: 60,         // detection must be < 60s old to trade
     patternBotTimeoutMin: 240,         // 4h max hold then close at market
+    // iter 24 fe (2026-05-16): Pending-order Auto-Cancel worker. Default OFF
+    // for safety — operator must explicitly enable. When first enabled,
+    // paperMode logs would-be cancels without hitting Binance so the
+    // operator can audit a few cycles before going live.
+    pendingAutoCancelEnabled: false,
+    pendingAutoCancelPaperMode: true,
+    pendingAutoCancelMaxPerHour: 10,   // soft ceiling on auto-cancels per hour
+    pendingAutoCancelCooldownSec: 300, // skip a symbol for 5 min after cancel
+    pendingAutoCancelAgeBufferSec: 60, // require staleMin + 60s before action
 };
 
 app.get('/api/v1/config', async (req, res) => {
@@ -3180,6 +3189,99 @@ app.get('/api/pending-orders', async (req, res) => {
     }
 });
 
+// iter 24 fe (2026-05-16): Auto-cancel worker control endpoints.
+// User wants the bot to cancel stale pending orders without manual
+// intervention. The worker (pending-monitor-worker.js) handles execution;
+// these endpoints expose status / toggle / audit log to the dashboard.
+app.get('/api/auto-cancel/status', async (req, res) => {
+    try {
+        const cfgRaw = await redis.get(CONFIG_KEY);
+        const cfg = { ...DEFAULT_TRADING_CONFIG, ...(cfgRaw ? JSON.parse(cfgRaw) : {}) };
+        const status = await redis.hgetall('PENDING_AUTO_CANCEL:STATUS') || {};
+        // Current-hour usage
+        const bucket = Math.floor(Date.now() / 3600000);
+        const used = parseInt((await redis.get(`PENDING_AUTO_CANCEL:HOUR_BUCKET:${bucket}`)) || '0', 10);
+        // Active per-symbol cooldowns
+        const cdKeys = await redis.keys('PENDING_AUTO_CANCEL:COOLDOWN:*');
+        const cooldowns = await Promise.all(cdKeys.map(async (k) => ({
+            symbol: k.replace('PENDING_AUTO_CANCEL:COOLDOWN:', ''),
+            ttl_sec: await redis.ttl(k),
+        })));
+        res.json({
+            config: {
+                enabled: !!cfg.pendingAutoCancelEnabled,
+                paper_mode: cfg.pendingAutoCancelPaperMode ?? true,
+                max_per_hour: cfg.pendingAutoCancelMaxPerHour ?? 10,
+                cooldown_sec: cfg.pendingAutoCancelCooldownSec ?? 300,
+                age_buffer_sec: cfg.pendingAutoCancelAgeBufferSec ?? 60,
+            },
+            status: {
+                last_poll_ts: status.last_poll_ts ? +status.last_poll_ts : null,
+                last_run_count: status.last_run_count ? +status.last_run_count : 0,
+                last_cancel_count: status.last_cancel_count ? +status.last_cancel_count : 0,
+                last_action_ts: status.last_action_ts ? +status.last_action_ts : null,
+                last_error: status.last_error || null,
+            },
+            quota: {
+                used_this_hour: used,
+                limit_per_hour: cfg.pendingAutoCancelMaxPerHour ?? 10,
+            },
+            cooldowns,
+            whitelist: ['MISSED_BOAT', 'PUMP_AND_DUMP', 'DRIFTED_UP', 'STALE_FLAT', 'DRIFTED_NO_DIP'],
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/auto-cancel/toggle', async (req, res) => {
+    try {
+        const { enabled, paper_mode, max_per_hour, cooldown_sec } = req.body || {};
+        const existingRaw = await redis.get(CONFIG_KEY);
+        const existing = existingRaw ? JSON.parse(existingRaw) : {};
+        const merged = { ...DEFAULT_TRADING_CONFIG, ...existing };
+        if (typeof enabled === 'boolean') merged.pendingAutoCancelEnabled = enabled;
+        if (typeof paper_mode === 'boolean') merged.pendingAutoCancelPaperMode = paper_mode;
+        if (typeof max_per_hour === 'number' && max_per_hour > 0) merged.pendingAutoCancelMaxPerHour = max_per_hour;
+        if (typeof cooldown_sec === 'number' && cooldown_sec >= 0) merged.pendingAutoCancelCooldownSec = cooldown_sec;
+        await redis.set(CONFIG_KEY, JSON.stringify(merged));
+        res.json({
+            success: true,
+            enabled: merged.pendingAutoCancelEnabled,
+            paper_mode: merged.pendingAutoCancelPaperMode,
+            max_per_hour: merged.pendingAutoCancelMaxPerHour,
+            cooldown_sec: merged.pendingAutoCancelCooldownSec,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/auto-cancel/log', async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit || '50', 10);
+        const raw = await redis.lrange('PENDING_AUTO_CANCEL:LOG', 0, limit - 1);
+        const entries = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+        // Quick summary
+        const today = new Date().toISOString().slice(0, 10);
+        const todayEntries = entries.filter(e => new Date(e.ts).toISOString().slice(0, 10) === today);
+        const summary = {
+            total: entries.length,
+            today: todayEntries.length,
+            paper: todayEntries.filter(e => e.mode === 'paper').length,
+            live: todayEntries.filter(e => e.mode === 'live' && e.outcome === 'cancelled').length,
+            failed: todayEntries.filter(e => e.outcome === 'cancel_failed' || e.outcome === 'error').length,
+            by_classification: {},
+        };
+        todayEntries.forEach(e => {
+            summary.by_classification[e.classification] = (summary.by_classification[e.classification] || 0) + 1;
+        });
+        res.json({ summary, entries });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // iter 17 fe: Pattern Bot endpoints
 app.get('/api/pattern-bot/status', async (req, res) => {
     try {
@@ -4621,6 +4723,9 @@ redisAnalyse.connect().catch(() => { });
 // iter 17 fe (2026-05-15): Pattern Bot worker
 const patternBot = require('./pattern-bot-worker');
 
+// iter 24 fe (2026-05-16): Pending-order auto-cancel worker
+const pendingAutoCancel = require('./pending-monitor-worker');
+
 server.listen(PORT, () => {
     console.log(`\n🚀 BookNow Fast Dashboard → http://localhost:${PORT}`);
     console.log(`📡 Polling Redis every ${POLL_MS}ms\n`);
@@ -4633,4 +4738,14 @@ server.listen(PORT, () => {
             console.error('[pattern-bot] failed to start:', e.message);
         }
     }, 5000);
+
+    // Start auto-cancel worker 6s after boot — runs even when disabled in
+    // config (it short-circuits inside pollOnce), so status is always live.
+    setTimeout(() => {
+        try {
+            pendingAutoCancel.start({ redis, port: PORT });
+        } catch (e) {
+            console.error('[auto-cancel] failed to start:', e.message);
+        }
+    }, 6000);
 });

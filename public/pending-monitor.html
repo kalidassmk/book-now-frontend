@@ -115,7 +115,32 @@
   Watches every active Buy 1 LIMIT order. For each: tracks % up from signal, % drop from peak,
   momentum + volume trend, then classifies as <span class="pill RIDE">RIDE</span>
   <span class="pill REPRICE">REPRICE</span> <span class="pill CANCEL">CANCEL</span>
-  <span class="pill WAIT">WAIT</span>. One-click cancel uses the same endpoint the dashboard already uses.
+  <span class="pill WAIT">WAIT</span>. Auto-cancel worker (below) lets the bot act on CANCEL verdicts without you.
+</div>
+
+<!-- Auto-cancel control panel (iter24) -->
+<div class="card">
+  <h2>🤖 Auto-cancel worker
+    <span class="count" id="acStatePill">loading…</span>
+  </h2>
+  <div class="toolbar">
+    <label><input type="checkbox" id="acEnabled" /> <strong>Enable auto-cancel</strong></label>
+    <label><input type="checkbox" id="acPaperMode" checked /> Paper-mode (log only)</label>
+    <label>Max/hour <input id="acMaxHour" type="number" value="10" min="1" max="50" style="width: 60px;" /></label>
+    <label>Symbol cooldown (sec) <input id="acCooldown" type="number" value="300" min="0" style="width: 80px;" /></label>
+    <button onclick="saveAutoCancelConfig()">💾 Save</button>
+    <span style="flex: 1;"></span>
+    <span class="hint">Auto-cancel acts on these classifications only: MISSED_BOAT, PUMP_AND_DUMP, DRIFTED_UP, STALE_FLAT, DRIFTED_NO_DIP. Never on RIDE / REPRICE / AT_LIMIT.</span>
+  </div>
+  <div id="acStatus" class="grid" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-top: 12px; display: grid; gap: 10px;">
+    <!-- filled by renderAutoCancelStatus -->
+  </div>
+</div>
+
+<!-- Audit log -->
+<div class="card">
+  <h2>📋 Auto-cancel log <span class="count" id="acLogCount">—</span></h2>
+  <div id="acLog"><div class="empty">Loading…</div></div>
 </div>
 
 <!-- Strip -->
@@ -292,9 +317,163 @@ function loadZamaCase() {
   runWhatIf();
 }
 
+// ── Auto-cancel worker controls ──
+async function refreshAutoCancel() {
+  try {
+    const r = await fetch('/api/auto-cancel/status');
+    const j = await r.json();
+    const c = j.config || {};
+    const s = j.status || {};
+    const q = j.quota || {};
+
+    // Sync inputs (avoid clobbering user typing if they have focus)
+    const enInp = document.getElementById('acEnabled');
+    const pmInp = document.getElementById('acPaperMode');
+    const mhInp = document.getElementById('acMaxHour');
+    const cdInp = document.getElementById('acCooldown');
+    if (document.activeElement !== enInp) enInp.checked = !!c.enabled;
+    if (document.activeElement !== pmInp) pmInp.checked = !!c.paper_mode;
+    if (document.activeElement !== mhInp) mhInp.value = c.max_per_hour;
+    if (document.activeElement !== cdInp) cdInp.value = c.cooldown_sec;
+
+    // State pill
+    const pill = document.getElementById('acStatePill');
+    if (!c.enabled) {
+      pill.textContent = 'DISABLED';
+      pill.style.color = 'var(--muted)';
+    } else if (c.paper_mode) {
+      pill.textContent = '📝 PAPER MODE';
+      pill.style.color = 'var(--warn)';
+    } else {
+      pill.innerHTML = '<span class="live-dot"></span> LIVE';
+      pill.style.color = 'var(--good)';
+    }
+
+    // Status tiles
+    const lastPoll = s.last_poll_ts ? Math.round((Date.now() - s.last_poll_ts) / 1000) + 's ago' : '—';
+    const lastAction = s.last_action_ts ? new Date(s.last_action_ts).toLocaleTimeString() : '—';
+    const cdHtml = (j.cooldowns || []).length
+      ? (j.cooldowns.map(cd => `<span class="pill" style="background: var(--panel); color: var(--muted); margin-right: 4px;">${cd.symbol} (${cd.ttl_sec}s)</span>`).join(''))
+      : '<span class="mute">none</span>';
+
+    document.getElementById('acStatus').innerHTML = `
+      <div class="stat" style="background: var(--bg); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--line);">
+        <div class="k" style="font-size: 10px; color: var(--muted); text-transform: uppercase;">Last poll</div>
+        <div class="v" style="font-size: 14px; font-weight: 600; margin-top: 3px;">${lastPoll}</div>
+      </div>
+      <div class="stat" style="background: var(--bg); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--line);">
+        <div class="k" style="font-size: 10px; color: var(--muted); text-transform: uppercase;">Evaluated last cycle</div>
+        <div class="v" style="font-size: 14px; font-weight: 600; margin-top: 3px;">${s.last_run_count || 0}</div>
+      </div>
+      <div class="stat" style="background: var(--bg); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--line);">
+        <div class="k" style="font-size: 10px; color: var(--muted); text-transform: uppercase;">Cancelled last cycle</div>
+        <div class="v" style="font-size: 14px; font-weight: 600; margin-top: 3px;">${s.last_cancel_count || 0}</div>
+      </div>
+      <div class="stat" style="background: var(--bg); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--line);">
+        <div class="k" style="font-size: 10px; color: var(--muted); text-transform: uppercase;">Quota this hour</div>
+        <div class="v" style="font-size: 14px; font-weight: 600; margin-top: 3px;">${q.used_this_hour || 0} / ${q.limit_per_hour || 10}</div>
+      </div>
+      <div class="stat" style="background: var(--bg); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--line);">
+        <div class="k" style="font-size: 10px; color: var(--muted); text-transform: uppercase;">Last action</div>
+        <div class="v" style="font-size: 14px; font-weight: 600; margin-top: 3px;">${lastAction}</div>
+      </div>
+      <div class="stat" style="background: var(--bg); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--line);">
+        <div class="k" style="font-size: 10px; color: var(--muted); text-transform: uppercase;">Symbol cooldowns</div>
+        <div class="v" style="font-size: 12px; margin-top: 3px;">${cdHtml}</div>
+      </div>
+      ${s.last_error ? `<div class="stat" style="background: rgba(231,76,60,.10); padding: 10px 12px; border-radius: 6px; grid-column: 1/-1;">
+        <div class="k" style="font-size: 10px; color: var(--bad); text-transform: uppercase;">Last error</div>
+        <div class="v" style="font-size: 12px; margin-top: 3px; color: var(--bad);">${s.last_error}</div>
+      </div>` : ''}
+    `;
+
+    // Audit log
+    const lr = await fetch('/api/auto-cancel/log?limit=30');
+    const lj = await lr.json();
+    const entries = lj.entries || [];
+    document.getElementById('acLogCount').textContent =
+      `${lj.summary?.today || 0} today (${lj.summary?.paper || 0} paper, ${lj.summary?.live || 0} live, ${lj.summary?.failed || 0} failed)`;
+    if (entries.length === 0) {
+      document.getElementById('acLog').innerHTML = '<div class="empty">No auto-cancel actions logged yet.</div>';
+    } else {
+      document.getElementById('acLog').innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Symbol</th>
+              <th>Class.</th>
+              <th>Mode</th>
+              <th>Outcome</th>
+              <th>Tier</th>
+              <th>Age</th>
+              <th>Peak %</th>
+              <th>Pullback %</th>
+              <th>Limit</th>
+              <th>Headline</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${entries.map(e => `
+              <tr>
+                <td>${new Date(e.ts).toLocaleString()}</td>
+                <td><strong>${e.symbol}</strong></td>
+                <td><span class="pill ${e.classification}">${e.classification}</span></td>
+                <td><span class="pill ${e.mode === 'paper' ? 'REPRICE' : 'CANCEL'}">${e.mode}</span></td>
+                <td><span class="pill ${e.outcome === 'cancelled' || e.outcome === 'paper_logged' ? 'RIDE' : 'CANCEL'}">${e.outcome}</span></td>
+                <td>${e.tier || '—'}</td>
+                <td>${(e.age_min || 0).toFixed(0)}m</td>
+                <td>+${(e.peak_pct || 0).toFixed(2)}%</td>
+                <td>${(e.pullback_pct || 0).toFixed(2)}%</td>
+                <td>$${(e.limit_price || 0).toFixed(8)}</td>
+                <td style="max-width: 320px; color: var(--muted); font-size: 11px;">${e.headline || ''}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+  } catch (e) {
+    document.getElementById('acStatus').innerHTML = '<div class="error">' + e.message + '</div>';
+  }
+}
+
+async function saveAutoCancelConfig() {
+  const enabled = document.getElementById('acEnabled').checked;
+  const paper_mode = document.getElementById('acPaperMode').checked;
+  const max_per_hour = parseInt(document.getElementById('acMaxHour').value, 10) || 10;
+  const cooldown_sec = parseInt(document.getElementById('acCooldown').value, 10) || 300;
+
+  // Big confirmation when turning OFF paper mode (going live)
+  if (enabled && !paper_mode) {
+    if (!confirm(`⚠️ LIVE MODE\n\nAuto-cancel will start hitting Binance to cancel real orders.\nMax ${max_per_hour}/hour, ${cooldown_sec}s symbol cooldown.\n\nContinue?`)) {
+      return;
+    }
+  }
+  try {
+    const r = await fetch('/api/auto-cancel/toggle', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled, paper_mode, max_per_hour, cooldown_sec }),
+    });
+    const j = await r.json();
+    if (j.success) {
+      alert(`Saved. Auto-cancel: ${j.enabled ? (j.paper_mode ? 'PAPER MODE' : 'LIVE') : 'DISABLED'}`);
+      refreshAutoCancel();
+    } else {
+      alert('Save failed: ' + (j.error || 'unknown'));
+    }
+  } catch (e) {
+    alert('Save error: ' + e.message);
+  }
+}
+
 refreshList();
+refreshAutoCancel();
 setInterval(() => {
-  if (document.getElementById('autoRefresh').checked) refreshList();
+  if (document.getElementById('autoRefresh').checked) {
+    refreshList();
+    refreshAutoCancel();
+  }
 }, 10000);
 </script>
 
