@@ -2980,6 +2980,24 @@ function _stripNp(s) {
     return parseFloat(String(s || '').replace(/np\.float64\(/, '').replace(/\)$/, ''));
 }
 
+// Find the live Binance open BUY LIMIT for a symbol. The bot reliably
+// populates BINANCE:OPEN_ORDERS:ALL; per-symbol keys are not always set.
+// Try per-symbol first, fall back to ALL filtered.
+async function findOpenBuyLimit(binanceSym) {
+    try {
+        const symRaw = await redis.get(`BINANCE:OPEN_ORDERS:${binanceSym}`);
+        const symArr = symRaw ? JSON.parse(symRaw) : [];
+        const fromSym = symArr.find(x => x.side === 'BUY' && x.type === 'LIMIT');
+        if (fromSym) return fromSym;
+    } catch (_) {}
+    try {
+        const allRaw = await redis.get('BINANCE:OPEN_ORDERS:ALL');
+        const allArr = allRaw ? JSON.parse(allRaw) : [];
+        return allArr.find(x => (x.symbol === binanceSym) && x.side === 'BUY' && x.type === 'LIMIT') || null;
+    } catch (_) {}
+    return null;
+}
+
 // Locate the most recent OUTCOME record across the last 2 days that matches
 // the given binance symbol — used as fallback when no order_id is supplied.
 async function findRecentOutcomeForSymbol(binanceSym) {
@@ -3081,13 +3099,11 @@ app.get('/api/pending-buy-analysis', async (req, res) => {
         });
 
         // Look up the matching Binance open order id for one-click cancel.
+        // The bot only reliably populates BINANCE:OPEN_ORDERS:ALL; per-symbol
+        // keys can be empty. Try per-symbol first, fall back to ALL filtered.
         let openOrder = null;
         if (isLive) {
-            try {
-                const raw = await redis.get(`BINANCE:OPEN_ORDERS:${binanceSym}`);
-                const orders = raw ? JSON.parse(raw) : [];
-                openOrder = orders.find(o => o.side === 'BUY' && o.type === 'LIMIT') || null;
-            } catch (_) {}
+            openOrder = await findOpenBuyLimit(binanceSym);
         }
 
         res.json({
@@ -3169,13 +3185,8 @@ app.get('/api/pending-orders', async (req, res) => {
                         signalPrice: o.signal_price, limitPrice: o.limit_price, signalTs: o.signal_ts,
                         klines: klines || [], currentPrice, tier: tierInfo.tier, now,
                     });
-                    // Match to live open order
-                    let openOrder = null;
-                    try {
-                        const raw = await redis.get(`BINANCE:OPEN_ORDERS:${binanceSym}`);
-                        const arr = raw ? JSON.parse(raw) : [];
-                        openOrder = arr.find(x => x.side === 'BUY' && x.type === 'LIMIT') || null;
-                    } catch (_) {}
+                    // Match to live open order (per-symbol then ALL fallback)
+                    const openOrder = await findOpenBuyLimit(binanceSym);
                     return {
                         ...o,
                         tier: tierInfo.tier,
