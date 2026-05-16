@@ -3392,6 +3392,438 @@ app.get('/api/recovery/log', async (req, res) => {
     }
 });
 
+// iter 26 fe (2026-05-16): Active-Position Monitors
+//
+// User: "i need to see the 9 monitors run on every filled position in the
+// UI, so easily i can see it in front end what is happening"
+//
+// Pulls SCALPER:LADDER_STATES + VIRTUAL:LADDER_STATES, enriches each with
+// live price + BTC trend + cfg, then computes the state of every monitor
+// the Python scalper runs on a filled position:
+//
+//   PRE-FILL (state == PENDING_BUY_1):
+//     P1  pending pump/dump cancel       (Python bot built-in)
+//     P2  limit-buy timeout              (60-min hard ceiling)
+//     P3  iter23 classifier verdict      (FE auto-cancel input)
+//
+//   POST-FILL (state == BUY_1_FILLED / ACTIVE / ACTIVE_2):
+//     M1  TP at avg                      (target hit → market sell)
+//     M2  Trailing TP                    (peak-trailing tighter exit)
+//     M3  Breakeven exit                 (post-profit retrace guard)
+//     M4  Time exit                      (max-hold ceiling, 4h default)
+//     M5  Hard stop                      (catastrophic price stop)
+//     M6  Liquidity death                (volume collapse + lower-lows)
+//     M7  Active2 monitor                (post-Buy-2 strict grace + tight stops)
+//     M8  Market stress exit             (BTC weakness + vol spike)
+//     M9  Buy 2 staleness                (cancel Buy 2 if stale)
+
+async function fetchBtcTrend(lookbackMin) {
+    // Pulls last lookbackMin × 1m BTC klines, returns drift% from first open
+    // to last close. Used by iter46 market-stress monitor.
+    try {
+        const limit = Math.max(2, Math.min(lookbackMin + 2, 120));
+        const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=${limit}`);
+        if (!r.ok) return null;
+        const ks = await r.json();
+        if (!Array.isArray(ks) || ks.length < 2) return null;
+        const firstOpen = parseFloat(ks[0][1]);
+        const lastClose = parseFloat(ks[ks.length - 1][4]);
+        if (firstOpen <= 0) return null;
+        return {
+            drift_pct: +((lastClose / firstOpen - 1) * 100).toFixed(3),
+            last_price: lastClose,
+            window_min: ks.length,
+        };
+    } catch (_) { return null; }
+}
+
+function computeMonitorStates({ ladder, cfg, currentPrice, btcTrend, klinesRecent, now }) {
+    const out = { phase: 'unknown', monitors: [] };
+    const state = ladder.state || 'UNKNOWN';
+    const symbol = ladder.symbol;
+    const signalPrice = ladder.signal_price || 0;
+    const signalTs = ladder.signal_ts || 0;
+    const ageMin = signalTs ? (now - signalTs) / 60000 : 0;
+    const tier = ladder.dyn_strategy || 'NORMAL';
+
+    // ── Compute filled-position core values ──
+    const fills = [];
+    for (const leg of ['buy_1', 'buy_2', 'buy_3']) {
+        const b = ladder[leg];
+        if (b && b.status === 'filled' && b.fill_price > 0 && b.qty_filled > 0) {
+            fills.push({ label: leg, price: b.fill_price, qty: b.qty_filled, ts: b.fill_ts || 0 });
+        }
+    }
+    const totalQty = fills.reduce((s, f) => s + f.qty, 0);
+    const totalCost = fills.reduce((s, f) => s + f.price * f.qty, 0);
+    const avgBuyPrice = totalQty > 0 ? totalCost / totalQty : 0;
+    const sizeUsdt = totalQty * (avgBuyPrice || 1);
+
+    // Buy 1 fill time for hold-time calculations
+    const buy1Fill = fills.find(f => f.label === 'buy_1');
+    const firstFillTs = buy1Fill ? buy1Fill.ts : 0;
+    const holdMs = firstFillTs ? now - firstFillTs : 0;
+    const holdMin = holdMs / 60000;
+
+    // Unrealized P&L (rough — fees not yet subtracted)
+    const FEE_PER_SIDE = cfg.ladderFeeRatePerSide ?? 0.00075;
+    const grossPnl = avgBuyPrice > 0 ? (currentPrice - avgBuyPrice) * totalQty : 0;
+    const fees = 2 * FEE_PER_SIDE * sizeUsdt;
+    const netPnl = grossPnl - fees;
+    const pnlPct = avgBuyPrice > 0 ? (currentPrice / avgBuyPrice - 1) * 100 : 0;
+
+    out.summary = {
+        symbol, tier, state,
+        signal_price: signalPrice,
+        signal_ts: signalTs,
+        age_min: +ageMin.toFixed(1),
+        avg_buy_price: +avgBuyPrice.toFixed(10),
+        total_qty: +totalQty.toFixed(8),
+        size_usdt: +sizeUsdt.toFixed(2),
+        current_price: +currentPrice.toFixed(10),
+        unrealized_gross_pnl: +grossPnl.toFixed(4),
+        unrealized_net_pnl: +netPnl.toFixed(4),
+        unrealized_pnl_pct: +pnlPct.toFixed(3),
+        hold_min: +holdMin.toFixed(1),
+        fills,
+        peak_since_signal: ladder.peak_since_signal || signalPrice,
+        peak_since_tp: ladder.peak_since_tp || 0,
+        trailing_active: !!ladder.trailing_active,
+        recovered_to_break_even: !!ladder.recovered_to_break_even,
+        below_avg_started_ts: ladder.below_avg_started_ts || 0,
+        total_underwater_ms: ladder.total_underwater_ms || 0,
+    };
+
+    // Phase
+    const filledCount = fills.length;
+    if (state === 'PENDING_BUY_1') out.phase = 'pending_buy_1';
+    else if (state === 'BUY_1_FILLED' || filledCount === 1) out.phase = 'buy_1_filled';
+    else if (state === 'ACTIVE_2' || filledCount === 2) out.phase = 'active_2';
+    else if (state === 'ACTIVE' || filledCount >= 2) out.phase = 'active';
+    else out.phase = state.toLowerCase();
+
+    const mk = (id, name, iter, state_, badge, key_metric, detail) => {
+        out.monitors.push({ id, name, iter, state: state_, badge, key_metric, detail });
+    };
+
+    // ── PRE-FILL phase ──
+    if (out.phase === 'pending_buy_1') {
+        const buy1 = ladder.buy_1 || {};
+        const limitPrice = buy1.target_price || 0;
+        const peak = ladder.peak_since_signal || signalPrice;
+
+        // P1: pending pump/dump cancel (Python bot built-in)
+        const pumpPct = signalPrice > 0 ? (currentPrice - signalPrice) / signalPrice * 100 : 0;
+        const dumpFromPeakPct = peak > 0 ? (peak - currentPrice) / peak * 100 : 0;
+        const pumpTh = cfg.pendingPumpThresholdPct ?? 0.5;
+        const dumpTh = cfg.pendingDumpFromPeakPct ?? 0.5;
+        const minAge = (cfg.pendingMinAgeSeconds ?? 60) / 60;
+        const pumpHit = pumpPct >= pumpTh;
+        const dumpHit = dumpFromPeakPct >= dumpTh;
+        const ageOk = ageMin >= minAge;
+        const wouldFire = ageOk && (pumpHit || dumpHit);
+        mk('p1_pending_pump_dump',
+           'Pending pump/dump cancel',
+           'bot',
+           wouldFire ? 'WOULD_FIRE' : (ageOk ? 'ARMED' : 'WARMING'),
+           wouldFire ? (dumpHit ? 'DUMP TRIGGER' : 'PUMP TRIGGER') : 'OK',
+           `pump ${pumpPct.toFixed(2)}% (≥${pumpTh}%) / dump from peak ${dumpFromPeakPct.toFixed(2)}% (≥${dumpTh}%)`,
+           `Python scalper cancels the limit if either threshold crosses. Age ${ageMin.toFixed(0)}m of ${minAge.toFixed(0)}m warmup.`);
+
+        // P2: limit-buy timeout
+        const timeoutMin = (cfg.limitBuyTimeoutSec ?? 3600) / 60;
+        const remaining = Math.max(0, timeoutMin - ageMin);
+        mk('p2_limit_timeout',
+           'Limit-buy timeout',
+           'bot',
+           remaining <= 0 ? 'EXPIRED' : (remaining < 5 ? 'NEAR_EXPIRY' : 'COUNTING'),
+           remaining <= 0 ? 'EXPIRED' : `${remaining.toFixed(0)}m left`,
+           `age ${ageMin.toFixed(0)}m / max ${timeoutMin.toFixed(0)}m`,
+           'Hard 60-min ceiling — if Buy 1 doesn’t fill, Python bot cancels.');
+
+        // P3: iter23 classifier — caller can fetch separately, here we just stub
+        mk('p3_iter23_classifier',
+           'iter23 classifier verdict',
+           'fe-23',
+           'EXTERNAL',
+           '(see /api/pending-buy-analysis)',
+           'fetched on dashboard',
+           'Live RIDE/CANCEL/REPRICE label that feeds iter24 auto-cancel.');
+
+        return out;
+    }
+
+    // ── POST-FILL phase ──
+    // M1: TP at avg
+    const targetNet = ladder.dyn_tp_target_usdt ?? cfg.ladderTargetNetProfitUsdt ?? 0.15;
+    const tpPct = sizeUsdt > 0 ? (targetNet / sizeUsdt) * 100 + 2 * FEE_PER_SIDE * 100 : 0;
+    const tpPrice = ladder.tp_target_price || (avgBuyPrice > 0 ? avgBuyPrice * (1 + tpPct / 100) : 0);
+    const distToTpPct = tpPrice > 0 ? (tpPrice - currentPrice) / tpPrice * 100 : 0;
+    const tpProgress = tpPrice > avgBuyPrice ? Math.max(0, Math.min(100, (currentPrice - avgBuyPrice) / (tpPrice - avgBuyPrice) * 100)) : 0;
+    mk('m1_tp_at_avg',
+       'Take-profit at average',
+       'iter14',
+       distToTpPct <= 0 ? 'TRIGGERED' : (tpProgress >= 80 ? 'CLOSE' : 'ARMED'),
+       distToTpPct <= 0 ? 'TP HIT' : `${distToTpPct.toFixed(2)}% away`,
+       `target $${tpPrice.toFixed(8)}  (need +$${targetNet.toFixed(2)} net = +${tpPct.toFixed(3)}%)  progress ${tpProgress.toFixed(0)}%`,
+       'Closes the position at market when current price ≥ target.');
+
+    // M2: Trailing TP
+    const trailingEnabled = !!(cfg.ladderTrailingTpEnabled ?? true);
+    const trailingPct = cfg.ladderTrailingTpPct ?? 0.5;
+    const peakSinceTp = ladder.peak_since_tp || 0;
+    const trailingArmed = !!ladder.trailing_active;
+    const trailingStop = peakSinceTp > 0 ? peakSinceTp * (1 - trailingPct / 100) : 0;
+    const trailingDistPct = trailingStop > 0 ? (currentPrice - trailingStop) / trailingStop * 100 : 0;
+    mk('m2_trailing_tp',
+       'Trailing take-profit',
+       'iter14',
+       !trailingEnabled ? 'DISABLED'
+         : trailingArmed
+           ? (trailingDistPct <= 0 ? 'TRIGGERED' : 'TRACKING')
+           : 'STANDBY',
+       trailingArmed
+         ? (trailingDistPct <= 0 ? 'TRAIL HIT' : `${trailingDistPct.toFixed(2)}% above trail`)
+         : 'waiting for TP threshold',
+       `arm: price hits TP; then trails ${trailingPct}% below peak ($${peakSinceTp.toFixed(8)} → stop $${trailingStop.toFixed(8)})`,
+       'Once price reaches TP, switches to trailing mode. Locks gains as price climbs.');
+
+    // M3: Breakeven exit
+    const beEnabled = !!(cfg.ladderBreakevenExitEnabled ?? true);
+    const beBufferPct = cfg.ladderBreakevenBufferPct ?? 0.5;
+    const recovered = !!ladder.recovered_to_break_even;
+    const bePrice = avgBuyPrice > 0 ? avgBuyPrice * (1 + beBufferPct / 100) : 0;
+    const beDistPct = bePrice > 0 ? (currentPrice - bePrice) / bePrice * 100 : 0;
+    mk('m3_breakeven_exit',
+       'Breakeven exit',
+       'iter14',
+       !beEnabled ? 'DISABLED'
+         : recovered
+           ? (beDistPct < 0 ? 'TRIGGERED' : 'ARMED')
+           : 'STANDBY',
+       recovered
+         ? (beDistPct < 0 ? 'BE HIT' : `${beDistPct.toFixed(2)}% above BE`)
+         : 'waiting for profit',
+       `arm: price > avg + ${beBufferPct}%; then sell if price retraces back to $${bePrice.toFixed(8)}`,
+       'After being profitable, exits if price retraces back through breakeven + buffer.');
+
+    // M4: Time exit
+    const teEnabled = !!(cfg.ladderTimeExitEnabled ?? true);
+    const maxHoldSec = cfg.ladderMaxHoldSeconds ?? 14400;
+    const maxHoldMin = maxHoldSec / 60;
+    const remainingMin = Math.max(0, maxHoldMin - holdMin);
+    mk('m4_time_exit',
+       'Time exit',
+       'iter14',
+       !teEnabled ? 'DISABLED'
+         : remainingMin <= 0 ? 'TRIGGERED'
+         : remainingMin < 30 ? 'CLOSE'
+         : 'COUNTING',
+       remainingMin <= 0 ? 'EXPIRED' : `${(remainingMin/60).toFixed(1)}h left`,
+       `held ${holdMin.toFixed(0)}m / max ${maxHoldMin.toFixed(0)}m (${(maxHoldMin/60).toFixed(0)}h)`,
+       'Closes at market if hold time exceeds max. Default 4h.');
+
+    // M5: Hard stop
+    const hsEnabled = !!(cfg.ladderHardStopFromAvgEnabled ?? true);
+    const hsPct = cfg.ladderHardStopFromAvgPct ?? 1.5;
+    const hsPrice = ladder.hard_stop_price || (avgBuyPrice > 0 ? avgBuyPrice * (1 - hsPct / 100) : 0);
+    const hsDistPct = hsPrice > 0 ? (currentPrice - hsPrice) / hsPrice * 100 : 0;
+    mk('m5_hard_stop',
+       'Hard stop',
+       'iter37',
+       !hsEnabled ? 'DISABLED'
+         : hsDistPct <= 0 ? 'TRIGGERED'
+         : hsDistPct < 0.30 ? 'DANGER'
+         : 'ARMED',
+       hsDistPct <= 0 ? 'STOP HIT' : `${hsDistPct.toFixed(2)}% above stop`,
+       `stop $${hsPrice.toFixed(8)} = avg − ${hsPct}%`,
+       'Catastrophic stop. Closes at market if price ≤ avg × (1 − 1.5%).');
+
+    // M6: Liquidity death — partial: we score recent kline behaviour
+    let m6_state = cfg.liquidityDeathExitEnabled ? 'ARMED' : 'DISABLED';
+    let m6_badge = 'OK', m6_detail = '5-factor score evaluated by Python bot every tick';
+    if (klinesRecent && klinesRecent.length >= 5 && cfg.liquidityDeathExitEnabled) {
+        const lookback = klinesRecent.slice(-Math.min(klinesRecent.length, cfg.liquidityDeathLookbackMin ?? 10));
+        const lows = lookback.map(k => parseFloat(k[3]));
+        const closes = lookback.map(k => parseFloat(k[4]));
+        const opens = lookback.map(k => parseFloat(k[1]));
+        const vols = lookback.map(k => parseFloat(k[7] || 0));
+        // lower-lows share
+        let llCount = 0;
+        for (let i = 1; i < lows.length; i++) if (lows[i] < lows[i-1]) llCount++;
+        const llShare = (lookback.length - 1) > 0 ? llCount / (lookback.length - 1) : 0;
+        // red-share
+        const redCount = closes.reduce((s, c, i) => s + (c < opens[i] ? 1 : 0), 0);
+        const redShare = redCount / lookback.length;
+        // vol collapse vs pre_vol_baseline
+        const baseline = ladder.pre_vol_baseline_usdt || 1;
+        const recentAvgVol = vols.reduce((a, b) => a + b, 0) / vols.length;
+        const volRatio = baseline > 0 ? recentAvgVol / baseline : 1;
+        // drop from avg
+        const dropFromAvgPct = avgBuyPrice > 0 ? (avgBuyPrice - currentPrice) / avgBuyPrice * 100 : 0;
+        // catastrophic immediate
+        const catastrophic = dropFromAvgPct >= (cfg.liquidityDeathCatastrophicDropPct ?? 2.5);
+        // stagnation
+        const stagnation = holdMin >= (cfg.liquidityDeathStagnationHoldMin ?? 60) &&
+                           dropFromAvgPct >= 0 &&
+                           dropFromAvgPct <= (cfg.liquidityDeathStagnationMaxDropPct ?? 1);
+        // composite score (mirrors Python heuristic — approximate)
+        let score = 0;
+        if (llShare >= (cfg.liquidityDeathLowerLowsThreshold ?? 0.55)) score += 2;
+        if (redShare >= (cfg.liquidityDeathRedShareThreshold ?? 0.6)) score += 2;
+        if (volRatio <= (cfg.liquidityDeathVolCollapseThreshold ?? 0.7)) score += 2;
+        if (dropFromAvgPct >= (cfg.liquidityDeathMinDropPct ?? 0.3) && holdMin >= (cfg.liquidityDeathMinHoldMin ?? 10)) score += 2;
+        const threshold = cfg.liquidityDeathExitScoreThreshold ?? 6;
+        const fires = catastrophic || stagnation || score >= threshold;
+        if (fires) m6_state = 'WOULD_FIRE';
+        m6_badge = fires ? (catastrophic ? 'CATASTROPHIC' : (stagnation ? 'STAGNATION' : `SCORE ${score}/${threshold}`)) : `score ${score}/${threshold}`;
+        m6_detail = `drop ${dropFromAvgPct.toFixed(2)}% / LL share ${(llShare*100).toFixed(0)}% / red share ${(redShare*100).toFixed(0)}% / vol ratio ${volRatio.toFixed(2)}× / hold ${holdMin.toFixed(0)}m`;
+    }
+    mk('m6_liquidity_death', 'Liquidity-death exit', 'iter39', m6_state, m6_badge, m6_detail,
+       'Multi-factor catastrophic exit: drop% + lower-lows + red candles + vol collapse. Score ≥6/8 fires.');
+
+    // M7: Active2 monitor
+    const active2On = !!cfg.active2MonitorEnabled;
+    const isActive2 = out.phase === 'active_2' || fills.length >= 2;
+    if (!active2On) {
+        mk('m7_active2', 'Active2 monitor', 'iter41', 'DISABLED', 'OFF', 'feature disabled', 'Post-Buy-2 grace + tight breakeven monitor.');
+    } else if (!isActive2) {
+        mk('m7_active2', 'Active2 monitor', 'iter41', 'IDLE', 'waiting Buy 2', 'only activates after Buy 2 fills', 'Becomes active once both Buy 1 and Buy 2 are filled.');
+    } else {
+        const a2GraceMin = cfg.active2GracePeriodMinutes ?? 5;
+        const a2QuickProfit = cfg.active2QuickProfitPct ?? 0.2;
+        const a2TightBuf = cfg.active2TightBreakevenBufferPct ?? 0.15;
+        const a2NoRecov = cfg.active2NoRecoveryDropPct ?? 0.5;
+        const a2HardStop = cfg.active2HardStopPct ?? 1.5;
+        const buy2 = fills.find(f => f.label === 'buy_2');
+        const buy2HoldMin = buy2 ? (now - buy2.ts) / 60000 : 0;
+        const inGrace = buy2HoldMin < a2GraceMin;
+        const profitPct = (currentPrice / avgBuyPrice - 1) * 100;
+        const quickProfitHit = profitPct >= a2QuickProfit;
+        const beAtPrice = avgBuyPrice * (1 + a2TightBuf / 100);
+        const beHit = currentPrice >= beAtPrice;
+        const a2StopPrice = avgBuyPrice * (1 - a2HardStop / 100);
+        const stopHit = currentPrice <= a2StopPrice;
+        const wouldFire = !inGrace && (quickProfitHit || beHit || stopHit);
+        mk('m7_active2', 'Active2 monitor', 'iter41',
+           wouldFire ? 'WOULD_FIRE' : (inGrace ? 'GRACE' : 'TRACKING'),
+           wouldFire
+             ? (stopHit ? 'A2 STOP' : quickProfitHit ? 'QUICK PROFIT' : 'TIGHT BE')
+             : inGrace ? `${(a2GraceMin - buy2HoldMin).toFixed(0)}m grace left` : `+${profitPct.toFixed(2)}%`,
+           `quick-profit +${a2QuickProfit}% / tight-BE +${a2TightBuf}% / hard stop −${a2HardStop}%`,
+           `Only fires post-Buy-2 + grace ${a2GraceMin}m. Tighter exits to reduce DCA-then-bleed losses.`);
+    }
+
+    // M8: Market stress (iter46)
+    const msOn = !!cfg.marketStressExitEnabled;
+    const msMinHold = cfg.marketStressMinHoldMin ?? 30;
+    const msMinDrop = cfg.marketStressMinDropPct ?? 1;
+    const msBtcWeak = cfg.marketStressBtcWeaknessPct ?? 0.5;
+    let m8_state = 'DISABLED', m8_badge = 'OFF', m8_detail = 'feature disabled';
+    if (msOn) {
+        const btcDrift = btcTrend ? btcTrend.drift_pct : null;
+        const positionDropPct = (avgBuyPrice - currentPrice) / avgBuyPrice * 100;
+        const holdOk = holdMin >= msMinHold;
+        const btcWeak = btcDrift !== null && btcDrift <= -msBtcWeak;
+        const positionDown = positionDropPct >= msMinDrop;
+        const wouldFire = holdOk && btcWeak && positionDown;
+        m8_state = wouldFire ? 'WOULD_FIRE' : holdOk ? 'TRACKING' : 'WARMING';
+        m8_badge = wouldFire ? 'STRESS EXIT' :
+                   btcDrift === null ? 'NO BTC DATA' :
+                   `BTC ${btcDrift >= 0 ? '+' : ''}${btcDrift}%`;
+        m8_detail = `BTC ${(cfg.marketStressBtcLookbackMin || 30)}m drift ${btcDrift === null ? '?' : btcDrift + '%'} (need ≤ −${msBtcWeak}%) / position −${positionDropPct.toFixed(2)}% (need ≥ ${msMinDrop}%) / hold ${holdMin.toFixed(0)}m (need ≥ ${msMinHold}m)`;
+    }
+    mk('m8_market_stress', 'Market stress exit', 'iter46', m8_state, m8_badge, m8_detail,
+       'Exits if BTC weakens AND position drops AND we’ve held long enough.');
+
+    // M9: Buy 2 staleness
+    const b2Enabled = !!(cfg.ladderBuy2StalenessEnabled ?? true);
+    const b2StaleMin = cfg.ladderBuy2StalenessMinutes ?? 10;
+    const hasBuy2Filled = fills.find(f => f.label === 'buy_2');
+    const buy2Order = ladder.buy_2;
+    const buy2Pending = !!buy2Order && buy2Order.status === 'pending';
+    if (!b2Enabled) {
+        mk('m9_buy2_stale', 'Buy 2 staleness', 'iter37', 'DISABLED', 'OFF', 'feature disabled', 'Cancels Buy 2 LIMIT if it hasn’t filled within N minutes of Buy 1.');
+    } else if (!buy2Pending) {
+        const status = hasBuy2Filled ? 'Buy 2 filled' : 'no Buy 2';
+        mk('m9_buy2_stale', 'Buy 2 staleness', 'iter37', 'IDLE', status, 'no pending Buy 2', 'Only relevant while Buy 2 is pending.');
+    } else {
+        const sinceBuy1 = buy1Fill ? (now - buy1Fill.ts) / 60000 : 0;
+        const wouldFire = sinceBuy1 >= b2StaleMin;
+        mk('m9_buy2_stale', 'Buy 2 staleness', 'iter37',
+           wouldFire ? 'WOULD_FIRE' : 'COUNTING',
+           wouldFire ? 'STALE' : `${(b2StaleMin - sinceBuy1).toFixed(0)}m left`,
+           `Buy 2 pending ${sinceBuy1.toFixed(0)}m of ${b2StaleMin}m limit`,
+           'Cancels Buy 2 if it sits unfilled too long after Buy 1 fills.');
+    }
+
+    return out;
+}
+
+app.get('/api/active-positions', async (req, res) => {
+    try {
+        const cfgRaw = await redis.get(CONFIG_KEY);
+        const cfg = { ...DEFAULT_TRADING_CONFIG, ...(cfgRaw ? JSON.parse(cfgRaw) : {}) };
+        const [fastRaw, virtualRaw] = await Promise.all([
+            redis.hgetall('SCALPER:LADDER_STATES'),
+            redis.hgetall('VIRTUAL:LADDER_STATES'),
+        ]);
+        const parseLadders = (raw, origin) => Object.entries(raw || {}).map(([sym, v]) => {
+            try { const obj = JSON.parse(v); obj.__origin = origin; return obj; } catch (_) { return null; }
+        }).filter(Boolean);
+        const ladders = [
+            ...parseLadders(fastRaw, 'FAST'),
+            ...parseLadders(virtualRaw, 'VIRTUAL'),
+        ].filter(l => l.state && l.state !== 'CLOSED');
+
+        // Fetch BTC trend once (used by iter46 for all positions)
+        const btcTrend = await fetchBtcTrend(cfg.marketStressBtcLookbackMin || 30);
+
+        const now = Date.now();
+        const out = [];
+        for (let i = 0; i < ladders.length; i += 3) {
+            const batch = ladders.slice(i, i + 3);
+            const br = await Promise.all(batch.map(async (l) => {
+                const binanceSym = (l.symbol || '').replace('/', '');
+                try {
+                    const [tickerJson, klines] = await Promise.all([
+                        fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${binanceSym}`).then(r => r.json()).catch(() => null),
+                        fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1m&limit=15`).then(r => r.json()).catch(() => null),
+                    ]);
+                    const currentPrice = tickerJson && tickerJson.price ? parseFloat(tickerJson.price) : (l.signal_price || 0);
+                    const mon = computeMonitorStates({
+                        ladder: l, cfg, currentPrice,
+                        btcTrend, klinesRecent: Array.isArray(klines) ? klines : [],
+                        now,
+                    });
+                    mon.origin = l.__origin;
+                    return mon;
+                } catch (e) {
+                    return { error: e.message, summary: { symbol: l.symbol, state: l.state }, origin: l.__origin };
+                }
+            }));
+            out.push(...br);
+        }
+        // Sort: pending first (urgent), then by hold time desc
+        out.sort((a, b) => {
+            const phaseRank = { pending_buy_1: 0, buy_1_filled: 1, active: 2, active_2: 3 };
+            const ra = phaseRank[a.phase] ?? 9;
+            const rb = phaseRank[b.phase] ?? 9;
+            if (ra !== rb) return ra - rb;
+            return (b.summary?.hold_min || 0) - (a.summary?.hold_min || 0);
+        });
+
+        res.json({
+            ts: now,
+            count: out.length,
+            btc_trend: btcTrend,
+            positions: out,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message, stack: err.stack });
+    }
+});
+
 // iter 17 fe: Pattern Bot endpoints
 app.get('/api/pattern-bot/status', async (req, res) => {
     try {

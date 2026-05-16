@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Book-Now — Active Position Monitors</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --panel-2: #1a232e; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --neutral: #8b949e; --pink: #ff6b9d; --purple: #b07ee0;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  .sub { color: var(--muted); margin-bottom: 18px; font-size: 13px; }
+  .topnav { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .topnav a { display: inline-block; padding: 6px 14px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 600; }
+  .topnav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .topnav a:not(.active):hover { color: var(--text); border-color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .toolbar button { padding: 8px 16px; background: var(--accent); color: #fff; border: 0; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 12px; }
+  .toolbar label { color: var(--muted); font-size: 12px; }
+  .hint { color: var(--muted); font-size: 11px; }
+
+  .pos-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 14px; overflow: hidden; }
+  .pos-header { padding: 14px 16px; background: var(--panel-2); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .pos-symbol { font-size: 17px; font-weight: 700; }
+  .pos-meta { font-size: 11px; padding: 3px 8px; border-radius: 3px; background: var(--panel); color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .pos-meta.tier { background: rgba(176,126,224,.15); color: var(--purple); }
+  .pos-meta.origin { background: rgba(41,182,246,.15); color: var(--accent); }
+  .pos-meta.phase { background: rgba(46,204,113,.15); color: var(--good); }
+  .pos-meta.phase.pending_buy_1 { background: rgba(241,196,15,.15); color: var(--warn); }
+  .pos-meta.phase.buy_1_filled { background: rgba(41,182,246,.15); color: var(--accent); }
+  .pos-meta.phase.active_2 { background: rgba(176,126,224,.15); color: var(--purple); }
+  .pnl { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; padding: 4px 10px; border-radius: 4px; }
+  .pnl.pos { background: rgba(46,204,113,.15); color: var(--good); }
+  .pnl.neg { background: rgba(231,76,60,.15); color: var(--bad); }
+  .pnl.flat { background: var(--panel); color: var(--muted); }
+
+  .pos-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--bg); }
+  .pos-stats .stat .k { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; }
+  .pos-stats .stat .v { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 3px; }
+
+  .monitors { padding: 14px 16px; }
+  .monitor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 8px; }
+  .monitor { padding: 10px 12px; background: var(--panel-2); border-radius: 6px; border-left: 3px solid var(--line); }
+  .monitor.ARMED       { border-left-color: var(--good); }
+  .monitor.COUNTING    { border-left-color: var(--accent); }
+  .monitor.WARMING     { border-left-color: var(--muted); }
+  .monitor.GRACE       { border-left-color: var(--purple); }
+  .monitor.TRACKING    { border-left-color: var(--accent); }
+  .monitor.STANDBY     { border-left-color: var(--muted); }
+  .monitor.CLOSE       { border-left-color: var(--warn); }
+  .monitor.NEAR_EXPIRY { border-left-color: var(--warn); }
+  .monitor.DANGER      { border-left-color: var(--bad); }
+  .monitor.WOULD_FIRE  { border-left-color: var(--bad); background: rgba(231,76,60,.10); }
+  .monitor.TRIGGERED   { border-left-color: var(--bad); background: rgba(231,76,60,.15); animation: pulse-bg 2s infinite; }
+  .monitor.EXPIRED     { border-left-color: var(--bad); background: rgba(231,76,60,.10); }
+  .monitor.IDLE        { border-left-color: var(--muted); opacity: 0.55; }
+  .monitor.DISABLED    { border-left-color: var(--muted); opacity: 0.4; }
+  .monitor.EXTERNAL    { border-left-color: var(--accent); }
+  @keyframes pulse-bg { 0%, 100% { background: rgba(231,76,60,.15); } 50% { background: rgba(231,76,60,.05); } }
+
+  .monitor .row1 { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+  .monitor .name { font-size: 13px; font-weight: 600; flex: 1; }
+  .monitor .iter { font-size: 9px; padding: 1px 6px; background: var(--panel); color: var(--muted); border-radius: 3px; text-transform: uppercase; letter-spacing: .3px; }
+  .monitor .badge { font-size: 11px; padding: 3px 8px; border-radius: 3px; font-weight: 700; }
+  .monitor.ARMED       .badge { background: rgba(46,204,113,.15); color: var(--good); }
+  .monitor.COUNTING    .badge,
+  .monitor.TRACKING    .badge { background: rgba(41,182,246,.15); color: var(--accent); }
+  .monitor.WARMING     .badge,
+  .monitor.STANDBY     .badge,
+  .monitor.IDLE        .badge,
+  .monitor.DISABLED    .badge { background: var(--panel); color: var(--muted); }
+  .monitor.GRACE       .badge { background: rgba(176,126,224,.15); color: var(--purple); }
+  .monitor.CLOSE       .badge,
+  .monitor.NEAR_EXPIRY .badge,
+  .monitor.DANGER      .badge { background: rgba(241,196,15,.20); color: var(--warn); }
+  .monitor.WOULD_FIRE  .badge,
+  .monitor.TRIGGERED   .badge,
+  .monitor.EXPIRED     .badge { background: rgba(231,76,60,.25); color: var(--bad); }
+  .monitor.EXTERNAL    .badge { background: rgba(41,182,246,.15); color: var(--accent); }
+  .monitor .metric { font-family: 'SF Mono', Menlo, monospace; font-size: 11px; color: var(--text); margin-top: 4px; }
+  .monitor .detail { font-size: 11px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+  .monitor .desc { font-size: 10px; color: var(--muted); margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); font-style: italic; }
+
+  .pos-empty { padding: 30px; text-align: center; color: var(--muted); font-style: italic; }
+  .live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--good); margin-right: 6px; animation: pulse 1.5s infinite; vertical-align: middle; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .error { padding: 14px; background: rgba(231,76,60,.10); color: var(--bad); border-radius: 6px; }
+  .btc-strip { padding: 8px 12px; background: var(--panel-2); border-radius: 6px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/">📊 Monitor</a>
+  <a href="/active-monitors.html" class="active">🎛️ Active Monitors</a>
+  <a href="/pending-monitor.html">⏳ Pending Monitor</a>
+  <a href="/adaptive-eligibility.html">✅ Adaptive Gate</a>
+  <a href="/adaptive-offset.html">🎯 Adaptive Offset</a>
+  <a href="/limit-buy-replay.html">🔄 Limit Replay</a>
+  <a href="/filter-candidate.html">🧪 Filter Tester</a>
+  <a href="/bounce-watch.html">⤴️ Bounce Watch</a>
+  <a href="/early-pump.html">🚀 Early Pump</a>
+  <a href="/pattern-bot.html">🤖 Pattern Bot</a>
+  <a href="/decision-trace.html">🔍 Decision Trace</a>
+  <a href="/backtest.html">🔬 Backtest</a>
+</nav>
+
+<h1>🎛️ Active Position Monitors</h1>
+<div class="sub">
+  Per-position live view of every monitor the bot runs. Each filled position has up to 9 monitors active simultaneously
+  (3 monitors during the pre-fill phase). Color tells you state at a glance:
+  <span style="color: var(--good);">●</span> ARMED/safe
+  <span style="color: var(--accent);">●</span> COUNTING/TRACKING
+  <span style="color: var(--warn);">●</span> CLOSE/DANGER
+  <span style="color: var(--bad);">●</span> WOULD_FIRE/TRIGGERED
+  <span style="color: var(--muted);">●</span> IDLE/DISABLED
+</div>
+
+<div class="card">
+  <div class="toolbar">
+    <button onclick="refresh()">🔄 Refresh</button>
+    <label><input type="checkbox" id="autoRefresh" checked /> Auto-refresh every 5s</label>
+    <span class="hint" id="updatedAt">—</span>
+    <span style="flex: 1;"></span>
+    <span class="btc-strip" id="btcStrip">BTC: —</span>
+  </div>
+</div>
+
+<div id="posList"><div class="pos-empty">Loading…</div></div>
+
+<script>
+function fmt(n, d) { return n == null || isNaN(n) ? '—' : Number(n).toFixed(d == null ? 4 : d); }
+function pctSign(v) { if (v == null || isNaN(v)) return '—'; const s = v >= 0 ? '+' : ''; return s + v.toFixed(2) + '%'; }
+function pnlStr(v) { if (v == null) return '—'; const s = v >= 0 ? '+' : ''; return s + '$' + Number(v).toFixed(4); }
+function ageStr(min) { if (min == null) return '—'; if (min < 60) return min.toFixed(0) + 'm'; return (min/60).toFixed(1) + 'h'; }
+
+function renderMonitor(m) {
+  return `
+    <div class="monitor ${m.state}">
+      <div class="row1">
+        <span class="name">${m.name}</span>
+        <span class="iter">${m.iter}</span>
+        <span class="badge">${m.badge || m.state}</span>
+      </div>
+      <div class="metric">${m.key_metric || ''}</div>
+      <div class="detail">${m.detail || ''}</div>
+    </div>
+  `;
+}
+
+function renderPosition(p) {
+  const s = p.summary || {};
+  const phase = p.phase || 'unknown';
+  const pnlNet = s.unrealized_net_pnl;
+  const pnlPct = s.unrealized_pnl_pct;
+  const pnlClass = pnlNet == null ? 'flat' : pnlNet > 0 ? 'pos' : pnlNet < 0 ? 'neg' : 'flat';
+
+  const stats = phase === 'pending_buy_1' ? `
+    <div class="stat"><div class="k">Signal $</div><div class="v">$${fmt(s.signal_price, 8)}</div></div>
+    <div class="stat"><div class="k">Limit (pending)</div><div class="v">$${fmt(s.current_price > 0 ? s.signal_price * (1 - 0.30/100) : 0, 8)}</div></div>
+    <div class="stat"><div class="k">Current $</div><div class="v">$${fmt(s.current_price, 8)}</div></div>
+    <div class="stat"><div class="k">Peak since signal</div><div class="v">$${fmt(s.peak_since_signal, 8)}</div></div>
+    <div class="stat"><div class="k">Age</div><div class="v">${ageStr(s.age_min)}</div></div>
+  ` : `
+    <div class="stat"><div class="k">Avg buy</div><div class="v">$${fmt(s.avg_buy_price, 8)}</div></div>
+    <div class="stat"><div class="k">Current $</div><div class="v">$${fmt(s.current_price, 8)}</div></div>
+    <div class="stat"><div class="k">Qty</div><div class="v">${fmt(s.total_qty, 6)}</div></div>
+    <div class="stat"><div class="k">Size $</div><div class="v">$${fmt(s.size_usdt, 2)}</div></div>
+    <div class="stat"><div class="k">Unrealized P&amp;L</div><div class="v ${pnlClass}">${pnlStr(pnlNet)} (${pctSign(pnlPct)})</div></div>
+    <div class="stat"><div class="k">Hold time</div><div class="v">${ageStr(s.hold_min)}</div></div>
+    <div class="stat"><div class="k">Peak since signal</div><div class="v">$${fmt(s.peak_since_signal, 8)}</div></div>
+    <div class="stat"><div class="k">Fills</div><div class="v">${(s.fills || []).map(f => f.label.replace('buy_', 'B')).join(' + ') || '—'}</div></div>
+  `;
+
+  if (p.error) {
+    return `<div class="pos-card"><div class="pos-header"><span class="pos-symbol">${s.symbol || '?'}</span></div><div class="monitors"><div class="error">${p.error}</div></div></div>`;
+  }
+
+  return `
+    <div class="pos-card">
+      <div class="pos-header">
+        <span class="pos-symbol">${s.symbol || '?'}</span>
+        <span class="pos-meta tier">${s.tier || '?'}</span>
+        <span class="pos-meta origin">${p.origin || '?'}</span>
+        <span class="pos-meta phase ${phase}">${phase.replace(/_/g, ' ')}</span>
+        <span style="flex: 1;"></span>
+        ${phase !== 'pending_buy_1' ? `<span class="pnl ${pnlClass}">${pnlStr(pnlNet)}</span>` : ''}
+      </div>
+      <div class="pos-stats">${stats}</div>
+      <div class="monitors">
+        <div class="monitor-grid">
+          ${(p.monitors || []).map(renderMonitor).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/active-positions');
+    const j = await r.json();
+    if (j.error) {
+      document.getElementById('posList').innerHTML = '<div class="error">' + j.error + '</div>';
+      return;
+    }
+    document.getElementById('updatedAt').textContent = 'updated ' + new Date(j.ts).toLocaleTimeString();
+    if (j.btc_trend) {
+      const d = j.btc_trend.drift_pct;
+      const sign = d >= 0 ? '+' : '';
+      document.getElementById('btcStrip').innerHTML =
+        `<span class="live-dot"></span> BTC ${j.btc_trend.window_min}m: <strong>${sign}${d}%</strong> @ $${j.btc_trend.last_price.toFixed(0)}`;
+    }
+    if (!j.positions || j.positions.length === 0) {
+      document.getElementById('posList').innerHTML = '<div class="pos-empty">No active positions or pending orders right now. ✓</div>';
+      return;
+    }
+    document.getElementById('posList').innerHTML = j.positions.map(renderPosition).join('');
+  } catch (e) {
+    document.getElementById('posList').innerHTML = '<div class="error">' + e.message + '</div>';
+  }
+}
+
+refresh();
+setInterval(() => {
+  if (document.getElementById('autoRefresh').checked) refresh();
+}, 5000);
+</script>
+
+</body>
+</html>
