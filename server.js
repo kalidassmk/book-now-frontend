@@ -4046,7 +4046,11 @@ app.get('/api/scalper-logs', async (req, res) => {
                   : scalper === 'fast'    ? 'FAST:LOG_TAIL'
                   : null;
         if (!key) return res.status(400).json({ error: 'scalper must be virtual or fast' });
-        const lines = await redis.lrange(key, 0, limit - 1);
+        // iter30 v5: fetch FULL list (not just first N) so we can sort by age
+        // on the server side. The Redis list can have items in unexpected
+        // order (LPUSH inconsistencies, supervisor restart artifacts), so we
+        // never trust insertion order — always re-sort by parsed timestamp.
+        const lines = await redis.lrange(key, 0, -1);
         // Quick categorisation
         const tracebacks = lines.filter(l => /Traceback|Error|Exception/i.test(l)).length;
         const skips = lines.filter(l => /skipped by filter|🔪/i.test(l)).length;
