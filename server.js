@@ -2349,7 +2349,8 @@ app.get('/api/adaptive-offset', async (req, res) => {
         if (!adaptive) return res.status(500).json({ error: 'insufficient klines' });
 
         // Static iter43 fill probability
-        const staticFillProb = adaptive.fill_probabilities[String(staticOffset)] ?? null;
+        const staticFillProb = adaptive.fill_probabilities[staticOffset.toFixed(2)]
+                            ?? adaptive.fill_probabilities[String(staticOffset)] ?? null;
 
         // Verdict
         let verdict;
@@ -2432,7 +2433,11 @@ function evaluateAdaptiveEligibility({ cfg, ticker, dailyKl, hourlyKl, oneMinKl,
     else if (range1hPct < cfg.adaptiveTierNormalMaxPct)  { tier = 'NORMAL';      staticOffset = cfg.adaptiveBuy1OffsetNormal; }
     else if (range1hPct < cfg.adaptiveTierVolatileMaxPct){ tier = 'VOLATILE';    staticOffset = cfg.adaptiveBuy1OffsetVolatile; }
     else                                                 { tier = 'X_VOLATILE';  staticOffset = cfg.adaptiveBuy1OffsetXVolatile; }
-    const staticFillProb = adaptive.fill_probabilities[String(staticOffset)] ?? null;
+    // fill_probabilities keys are "0.15"/"0.30"/"0.70"/"1.50". String(0.7) → "0.7"
+    // so normalise to two decimals before lookup.
+    const staticFillProb = adaptive.fill_probabilities[staticOffset.toFixed(2)]
+                        ?? adaptive.fill_probabilities[String(staticOffset)] ?? null;
+    const staticFillProbForCompare = staticFillProb ?? 0;
 
     // Daily klines processing (drop today's partial)
     const now = Date.now();
@@ -2538,9 +2543,29 @@ function evaluateAdaptiveEligibility({ cfg, ticker, dailyKl, hourlyKl, oneMinKl,
         reason: g7Block ? 'wide spread implies thin book — adaptive limit may sit forever' : 'ok',
     });
 
+    // G8: adaptive is MEANINGFULLY better than static (the whole point of using it).
+    // Two failure modes we want to catch:
+    //   (a) Adaptive fill prob is itself tiny (< 20%) — neither approach will fill,
+    //       so picking adaptive over static buys nothing and adds risk if it does.
+    //   (b) Adaptive only matches static — no real fill-rate uplift, just a deeper
+    //       buy price = worse R/R on the trades that do fill.
+    const adaFillProb = adaptive.recommended.expected_fill_prob ?? 0;
+    const minAdaProb = 0.20;          // 20% — must fill at least sometimes
+    const minDelta = 0.05;            // 5pp — must materially beat static
+    const g8Block = !(adaFillProb >= minAdaProb && (adaFillProb - staticFillProbForCompare) >= minDelta);
+    gates.push({
+        id: 'g8_adaptive_uplift',
+        name: 'Adaptive uplift meaningful (fill ≥ 20% AND > static + 5pp)',
+        pass: !g8Block, blocking: !!g8Block,
+        detail: `adaptive ${(adaFillProb*100).toFixed(0)}% vs static ${(staticFillProbForCompare*100).toFixed(0)}% (delta ${((adaFillProb - staticFillProbForCompare)*100).toFixed(0)}pp)`,
+        reason: g8Block ? (adaFillProb < minAdaProb
+            ? `adaptive fill prob only ${(adaFillProb*100).toFixed(0)}% — won’t fill often enough to justify the risk`
+            : `adaptive only ${((adaFillProb - staticFillProbForCompare)*100).toFixed(0)}pp better than static — not worth the deeper buy price`) : 'ok',
+    });
+
     // Verdict
     const safetyFail = gates.slice(0, 3).find(g => g.blocking);  // G1-G3: hard safety
-    const utilityFail = gates.slice(3).find(g => g.blocking);    // G4-G7: adaptive usefulness
+    const utilityFail = gates.slice(3).find(g => g.blocking);    // G4-G8: adaptive usefulness
     let level, recommendation, headline;
     if (safetyFail) {
         level = 'RED';
