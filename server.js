@@ -3977,6 +3977,28 @@ app.get('/api/scalper-health', async (req, res) => {
             last_executed: patternStatus.last_executed ? +patternStatus.last_executed : 0,
         };
 
+        // iter30 fix: surface the REAL bug source — supervisor crashes
+        // captured by the host log-tailer script. These count occurrences
+        // of "supervisor stopped" in last 24h, which is the ACTUAL reason
+        // Virtual Scalper never completes a buy cycle.
+        const [supCrashes24h, vsRestarts24h] = await Promise.all([
+            redis.get('VIRTUAL:SUPERVISOR_CRASHES_24H').catch(() => null),
+            redis.get('VIRTUAL:RESTARTS_24H').catch(() => null),
+        ]);
+        const lastRestartTs = parseInt((await redis.get('VIRTUAL:LAST_RESTART_TS').catch(() => null)) || '0', 10);
+
+        // If supervisor has been crashing repeatedly, flag Virtual Scalper
+        // as the SYMPTOM but supervisor as the ROOT CAUSE.
+        if (parseInt(supCrashes24h || '0', 10) >= 3) {
+            virtualSummary.alerts = virtualSummary.alerts || [];
+            virtualSummary.alerts.push({
+                level: 'critical',
+                code: 'supervisor_unstable',
+                text: `Supervisor crashed ${supCrashes24h}× in 24h (Python bug in supervisor.py:236 "rc unbound") — kills Virtual Scalper mid-cycle`,
+            });
+            virtualSummary.health_score = 10;
+        }
+
         res.json({
             ts: Date.now(),
             date: today,
@@ -3984,6 +4006,15 @@ app.get('/api/scalper-health', async (req, res) => {
             fast_scalper: annotate(fastSummary, 'Fast Scalper'),
             virtual_scalper: annotate(virtualSummary, 'Virtual Scalper'),
             pattern_bot: patternBot,
+            supervisor: {
+                crashes_24h: parseInt(supCrashes24h || '0', 10),
+                virtual_scalper_restarts_24h: parseInt(vsRestarts24h || '0', 10),
+                last_backend_restart_ts: lastRestartTs || null,
+                last_backend_restart_age_min: lastRestartTs ? Math.round((Date.now()/1000 - lastRestartTs) / 60) : null,
+                root_cause: parseInt(supCrashes24h || '0', 10) >= 3
+                    ? 'Python bug: supervisor.py line 236 — UnboundLocalError: cannot access local variable \'rc\' before assignment. Cascades errors across all 12 tasks, supervisor self-stops + restarts, killing Virtual Scalper mid-buy-cycle every ~3 min.'
+                    : null,
+            },
         });
     } catch (err) {
         res.status(500).json({ error: err.message, stack: err.stack });
