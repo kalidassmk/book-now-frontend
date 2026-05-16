@@ -2786,6 +2786,375 @@ app.get('/api/adaptive-eligibility-replay', async (req, res) => {
     }
 });
 
+// iter 23 fe (2026-05-16): Pending-Buy Health Analyzer
+//
+// User story: bot placed a Buy 1 LIMIT for ZAMA at -0.15% offset; price never
+// dipped, it drifted up, the limit just sat there. User manually cancelled
+// because they couldn't tell whether price would come back to fill or fade.
+//
+// "instead of manual cancel, we need to analyse that coin how much percentage
+//  it went up and how much percentage it is coming down, it will increase
+//  again or not, so based on we can cancell the buy order or we can cancell
+//  and can limit buy 1 order offset can adjust."
+//
+// Classification (priority order, first match wins) — all thresholds scale
+// with the iter43 volatility tier so a 0.3% drift means very different things
+// in CALM vs X_VOLATILE coins:
+//
+//   1. AT_LIMIT          current ≤ limit            → WAIT (will fill)
+//   2. MISSED_BOAT       pumped ≥ missPeak rising   → CANCEL
+//   3. PUMP_AND_DUMP     pumped + crash + falling   → CANCEL
+//   4. DRIFTED_REPRICE   drift up + healthy pullback→ REPRICE at new offset
+//   5. DRIFTED_UP        drift up, no real pullback → CANCEL (signal faded)
+//   6. STALE_FLAT        ~no movement after staleMin→ CANCEL (free the slot)
+//   7. HEALTHY_WAIT      nothing alarming           → RIDE
+
+function classifyPendingBuy({ signalPrice, limitPrice, signalTs, klines, currentPrice, tier, now }) {
+    now = now || Date.now();
+    const ageSec = Math.max(0, (now - signalTs) / 1000);
+    const ageMin = ageSec / 60;
+
+    // Walk klines: find peak high, peak index, and the lowest low AFTER the peak.
+    let peakHigh = signalPrice;
+    let peakIdx = -1;
+    klines.forEach((k, i) => {
+        const high = parseFloat(k[2]);
+        if (high > peakHigh) { peakHigh = high; peakIdx = i; }
+    });
+    let troughLow = peakHigh;
+    if (peakIdx >= 0) {
+        klines.slice(peakIdx).forEach(k => {
+            const low = parseFloat(k[3]);
+            if (low < troughLow) troughLow = low;
+        });
+    }
+
+    // Recent 3m momentum (close-vs-close)
+    const tail = klines.slice(-3);
+    let m3pct = 0;
+    if (tail.length >= 2) {
+        const lastClose  = parseFloat(tail[tail.length - 1][4]);
+        const firstClose = parseFloat(tail[0][1]);
+        if (firstClose > 0) m3pct = (lastClose / firstClose - 1) * 100;
+    }
+
+    // Volume decay: last 3m vs prior 3m
+    const sumQv = arr => arr.reduce((s, k) => s + parseFloat(k[7] || 0), 0);
+    const last3v = sumQv(klines.slice(-3));
+    const prev3v = sumQv(klines.slice(-6, -3));
+    const volDecay = prev3v > 0 ? last3v / prev3v : 1;
+
+    // Trend counts (last 5 candles)
+    const tailHL = klines.slice(-5);
+    let hh = 0, ll = 0;
+    for (let i = 1; i < tailHL.length; i++) {
+        if (parseFloat(tailHL[i][2]) > parseFloat(tailHL[i-1][2])) hh++;
+        if (parseFloat(tailHL[i][3]) < parseFloat(tailHL[i-1][3])) ll++;
+    }
+
+    const peakPct    = signalPrice > 0 ? (peakHigh - signalPrice) / signalPrice * 100 : 0;
+    const pullbackPct= peakHigh > 0 ? (peakHigh - currentPrice) / peakHigh * 100 : 0;
+    const peakToTroughPct = peakHigh > 0 ? (peakHigh - troughLow) / peakHigh * 100 : 0;
+    const limitDistPct = limitPrice > 0 ? (currentPrice - limitPrice) / limitPrice * 100 : 0;
+
+    // Tier-aware thresholds. Tuned from ZAMA-class CALM behavior (0.18% pump
+    // over 14 min IS the missed-boat pattern at this tier).
+    const TIER_TH = {
+        CALM:       { staleMin:  8, staleMaxPeak: 0.10, repriceMinPeak: 0.15, missPeak: 0.40, dumpPeak: 0.30, dumpPullback: 0.30 },
+        NORMAL:     { staleMin: 10, staleMaxPeak: 0.25, repriceMinPeak: 0.35, missPeak: 0.80, dumpPeak: 0.50, dumpPullback: 0.50 },
+        VOLATILE:   { staleMin: 15, staleMaxPeak: 0.50, repriceMinPeak: 0.70, missPeak: 1.50, dumpPeak: 1.00, dumpPullback: 0.80 },
+        X_VOLATILE: { staleMin: 20, staleMaxPeak: 1.00, repriceMinPeak: 1.40, missPeak: 3.00, dumpPeak: 2.00, dumpPullback: 1.50 },
+    };
+    const TH = TIER_TH[tier] || TIER_TH.NORMAL;
+
+    // The offset we originally used (sign-positive %). Used for REPRICE suggestion.
+    const originalOffsetPct = signalPrice > 0 ? Math.abs((signalPrice - limitPrice) / signalPrice * 100) : 0.15;
+
+    let classification, action, headline, suggested = null;
+
+    if (currentPrice <= limitPrice) {
+        classification = 'AT_LIMIT';
+        action = 'WAIT';
+        headline = `Price has hit the limit ($${currentPrice.toFixed(8)} ≤ $${limitPrice.toFixed(8)}). Will fill on next tick.`;
+    } else if (peakPct >= TH.missPeak && pullbackPct < 0.30 && m3pct > 0) {
+        classification = 'MISSED_BOAT';
+        action = 'CANCEL';
+        headline = `Coin pumped +${peakPct.toFixed(2)}% (≥${TH.missPeak}% for ${tier}) and is still rising (${m3pct.toFixed(2)}% in 3m). The dip-buy at $${limitPrice.toFixed(8)} won’t hit. Cancel and look for a fresh signal.`;
+    } else if (peakPct >= TH.dumpPeak && pullbackPct >= TH.dumpPullback && m3pct <= -0.20 && ll >= 2) {
+        classification = 'PUMP_AND_DUMP';
+        action = 'CANCEL';
+        headline = `Pump-and-dump pattern: +${peakPct.toFixed(2)}% pump then −${pullbackPct.toFixed(2)}% pullback from peak, momentum ${m3pct.toFixed(2)}%/3m, ${ll} lower lows in last 5m. If this fills the limit, expect further losses. Cancel.`;
+    } else if (ageMin >= TH.staleMin && peakPct >= TH.repriceMinPeak && pullbackPct >= 0.10 && pullbackPct <= 0.50) {
+        classification = 'DRIFTED_REPRICE';
+        action = 'REPRICE';
+        const newLimit = +(currentPrice * (1 - originalOffsetPct / 100)).toFixed(10);
+        suggested = { new_offset_pct: +originalOffsetPct.toFixed(3), new_limit_price: newLimit };
+        headline = `Coin drifted +${peakPct.toFixed(2)}% then started a healthy pullback (${pullbackPct.toFixed(2)}% from peak). Original limit is now too far below. Reprice to $${newLimit.toFixed(8)} (−${originalOffsetPct.toFixed(2)}% from current $${currentPrice.toFixed(8)}).`;
+    } else if (ageMin >= TH.staleMin && peakPct >= TH.staleMaxPeak && pullbackPct < 0.10 && m3pct >= -0.10) {
+        classification = 'DRIFTED_UP';
+        action = 'CANCEL';
+        headline = `Coin drifted up +${peakPct.toFixed(2)}% but no real pullback (${pullbackPct.toFixed(2)}% from peak). After ${ageMin.toFixed(0)}m the signal is fading — the price is unlikely to come back ${limitDistPct.toFixed(2)}% lower to fill at $${limitPrice.toFixed(8)}. Cancel.`;
+    } else if (ageMin >= TH.staleMin && peakPct < TH.staleMaxPeak) {
+        classification = 'STALE_FLAT';
+        action = 'CANCEL';
+        headline = `Order has been pending ${ageMin.toFixed(0)}m. Coin barely moved (peak +${peakPct.toFixed(2)}%, range ${peakToTroughPct.toFixed(2)}%). Signal is dead — cancel and free the slot.`;
+    } else {
+        classification = 'HEALTHY_WAIT';
+        action = 'RIDE';
+        headline = `No alarm signals. Peak +${peakPct.toFixed(2)}%, current ${limitDistPct.toFixed(2)}% above limit, age ${ageMin.toFixed(0)}m. Dip may still come — let the order ride.`;
+    }
+
+    return {
+        tier,
+        age_min: +ageMin.toFixed(1),
+        signal_price: +signalPrice.toFixed(10),
+        limit_price: +limitPrice.toFixed(10),
+        current_price: +currentPrice.toFixed(10),
+        peak_high: +peakHigh.toFixed(10),
+        peak_pct_from_signal: +peakPct.toFixed(3),
+        trough_low: +troughLow.toFixed(10),
+        pullback_from_peak_pct: +pullbackPct.toFixed(3),
+        peak_to_trough_pct: +peakToTroughPct.toFixed(3),
+        current_vs_limit_pct: +limitDistPct.toFixed(3),
+        momentum_3m_pct: +m3pct.toFixed(3),
+        volume_decay_ratio: +volDecay.toFixed(2),
+        higher_highs_5m: hh,
+        lower_lows_5m: ll,
+        classification,
+        action,
+        headline,
+        suggested,
+        thresholds: TH,
+    };
+}
+
+// Strip "np.float64(...)" wrappers that the Python backend sometimes leaks.
+function _stripNp(s) {
+    return parseFloat(String(s || '').replace(/np\.float64\(/, '').replace(/\)$/, ''));
+}
+
+// Locate the most recent OUTCOME record across the last 2 days that matches
+// the given binance symbol — used as fallback when no order_id is supplied.
+async function findRecentOutcomeForSymbol(binanceSym) {
+    const now = Date.now();
+    for (const off of [0, 86400000]) {
+        const date = new Date(now - off).toISOString().slice(0, 10);
+        const o = await redis.hgetall(`METRICS:OUTCOME:${date}:${binanceSym}`);
+        if (o && o.symbol) return { date, outcome: o };
+    }
+    return null;
+}
+
+// Determine the iter43 tier from the current 1h range. Returns the tier name
+// plus the static offset that would have been used.
+async function classifyTierFromBinance(binanceSym, cfg) {
+    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1h&limit=2`).then(x => x.json()).catch(() => null);
+    let range1hPct = 1.0;
+    if (Array.isArray(r) && r.length) {
+        const k = r[r.length - 1];
+        const h = parseFloat(k[2]); const l = parseFloat(k[3]);
+        range1hPct = l > 0 ? (h - l) / l * 100 : 0;
+    }
+    let tier;
+    if (range1hPct < cfg.adaptiveTierCalmMaxPct) tier = 'CALM';
+    else if (range1hPct < cfg.adaptiveTierNormalMaxPct) tier = 'NORMAL';
+    else if (range1hPct < cfg.adaptiveTierVolatileMaxPct) tier = 'VOLATILE';
+    else tier = 'X_VOLATILE';
+    return { tier, range_1h_pct: +range1hPct.toFixed(2) };
+}
+
+app.get('/api/pending-buy-analysis', async (req, res) => {
+    const sym = (req.query.symbol || '').toUpperCase().trim();
+    if (!sym) return res.status(400).json({ error: 'symbol query param required' });
+    const binanceSym = sym.includes('/') ? sym.replace('/', '') : sym;
+    const ccxtSym = sym.includes('/') ? sym : (sym.endsWith('USDT') ? sym.slice(0, -4) + '/USDT' : sym);
+
+    try {
+        // Optional manual override params for replay / what-if. If provided, we
+        // skip Redis lookup and use these directly. Useful for ZAMA-style
+        // regression testing against historical incidents.
+        let signalPrice = req.query.signal_price ? parseFloat(req.query.signal_price) : null;
+        let limitPrice  = req.query.limit_price  ? parseFloat(req.query.limit_price)  : null;
+        let signalTs    = req.query.signal_ts    ? parseInt(req.query.signal_ts, 10)  : null;
+        // 'now' lets us replay historic state — pretend "now" is the cancel time.
+        const now = req.query.now ? parseInt(req.query.now, 10) : Date.now();
+
+        let source = 'manual_params';
+        let outcomeMeta = null;
+        let isLive = false;
+        let outcomeDate = null;
+
+        if (!signalPrice || !limitPrice || !signalTs) {
+            const found = await findRecentOutcomeForSymbol(binanceSym);
+            if (!found) return res.status(404).json({ error: `No OUTCOME record for ${ccxtSym} today or yesterday. Provide signal_price/limit_price/signal_ts as query params for what-if.` });
+            const o = found.outcome;
+            outcomeDate = found.date;
+            const filled = parseInt(o.filled || '0', 10);
+            const exited = parseInt(o.exited || '0', 10);
+            if (filled === 1) return res.status(400).json({ error: `Order already filled. exit_price=$${o.exit_price}, pnl=$${o.pnl_usdt}` });
+            signalPrice = _stripNp(o.signal_price);
+            limitPrice  = parseFloat(o.buy_1_limit_price);
+            signalTs    = parseInt(o.buy_ts, 10);
+            isLive = exited === 0;
+            source = isLive ? 'live_pending_outcome' : 'historic_cancelled_outcome';
+            outcomeMeta = {
+                date: found.date,
+                buy_ts: signalTs,
+                exit_ts: o.exit_ts ? parseInt(o.exit_ts, 10) : null,
+                exit_reason: o.exit_reason || null,
+                offset_pct: parseFloat(o.offset_pct || '0'),
+                size_usdt: parseFloat(o.size_usdt || '0'),
+                origin: o.scalper_origin || null,
+            };
+        }
+        if (!signalPrice || !limitPrice || !signalTs) {
+            return res.status(400).json({ error: 'signal_price, limit_price, signal_ts all required (manual mode)' });
+        }
+
+        const cfgRaw = await redis.get(CONFIG_KEY);
+        const cfg = { ...DEFAULT_TRADING_CONFIG, ...(cfgRaw ? JSON.parse(cfgRaw) : {}) };
+
+        // Fetch 1m klines covering signal → now. Pad +60s on each end.
+        const klines = await fetchKlinesRange(binanceSym, signalTs - 60000, now + 60000);
+        if (!klines || klines.length === 0) return res.status(502).json({ error: 'klines fetch failed' });
+
+        // Current price = close of last kline whose openTime ≤ now.
+        let currentPrice = parseFloat(klines[klines.length - 1][4]);
+
+        // For LIVE mode also fetch the real-time ticker (klines lag a few sec).
+        if (isLive) {
+            const t = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${binanceSym}`).then(r => r.json()).catch(() => null);
+            if (t && t.price) currentPrice = parseFloat(t.price);
+        }
+
+        const tierInfo = await classifyTierFromBinance(binanceSym, cfg);
+        const analysis = classifyPendingBuy({
+            signalPrice, limitPrice, signalTs, klines, currentPrice,
+            tier: tierInfo.tier, now,
+        });
+
+        // Look up the matching Binance open order id for one-click cancel.
+        let openOrder = null;
+        if (isLive) {
+            try {
+                const raw = await redis.get(`BINANCE:OPEN_ORDERS:${binanceSym}`);
+                const orders = raw ? JSON.parse(raw) : [];
+                openOrder = orders.find(o => o.side === 'BUY' && o.type === 'LIMIT') || null;
+            } catch (_) {}
+        }
+
+        res.json({
+            symbol: ccxtSym,
+            source, is_live: isLive, outcome_date: outcomeDate, outcome: outcomeMeta,
+            tier_info: tierInfo,
+            analysis,
+            open_order: openOrder ? { orderId: openOrder.orderId, price: openOrder.price, qty: openOrder.origQty, time: openOrder.time } : null,
+            timestamp: new Date(now).toISOString(),
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message, stack: err.stack });
+    }
+});
+
+// List all currently-active pending Buy 1 LIMITs, with analyzer applied to each.
+// Sources:
+//   1. BINANCE:OPEN_ORDERS:ALL — authoritative live order list
+//   2. METRICS:OUTCOME:<date>:<symbol> records where filled=0 AND exited=0
+//
+// We use the OUTCOME records as the primary source (they have signal_price +
+// buy_ts), and enrich with open-order data when available.
+app.get('/api/pending-orders', async (req, res) => {
+    try {
+        const today = new Date().toISOString().slice(0, 10);
+        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+        const cfgRaw = await redis.get(CONFIG_KEY);
+        const cfg = { ...DEFAULT_TRADING_CONFIG, ...(cfgRaw ? JSON.parse(cfgRaw) : {}) };
+
+        // Pull all outcome records for both days; keep those that are still pending.
+        const orders = [];
+        const seen = new Set();
+        for (const date of [today, yesterday]) {
+            const stream = redis.scanStream({ match: `METRICS:OUTCOME:${date}:*`, count: 100 });
+            const keys = [];
+            stream.on('data', b => keys.push(...b));
+            await new Promise(r => stream.on('end', r));
+            for (const k of keys) {
+                const o = await redis.hgetall(k);
+                if (!o || !o.symbol) continue;
+                if (parseInt(o.filled || '0', 10) !== 0) continue;
+                if (parseInt(o.exited || '0', 10) !== 0) continue;
+                const sym = o.symbol;
+                if (seen.has(sym)) continue;
+                seen.add(sym);
+                orders.push({
+                    date,
+                    symbol: sym,
+                    signal_price: _stripNp(o.signal_price),
+                    limit_price: parseFloat(o.buy_1_limit_price),
+                    offset_pct: parseFloat(o.offset_pct || '0'),
+                    signal_ts: parseInt(o.buy_ts, 10),
+                    size_usdt: parseFloat(o.size_usdt || '0'),
+                    origin: o.scalper_origin || null,
+                });
+            }
+        }
+        if (orders.length === 0) {
+            return res.json({ count: 0, orders: [], note: 'No pending Buy 1 LIMIT orders right now.' });
+        }
+        orders.sort((a, b) => b.signal_ts - a.signal_ts);
+
+        // For each pending order: fetch 1m klines + ticker + run classifier.
+        const now = Date.now();
+        const enriched = [];
+        for (let i = 0; i < orders.length; i += 3) {
+            const batch = orders.slice(i, i + 3);
+            const br = await Promise.all(batch.map(async (o) => {
+                const binanceSym = o.symbol.replace('/', '');
+                try {
+                    const [klines, tickerJson, tierInfo] = await Promise.all([
+                        fetchKlinesRange(binanceSym, o.signal_ts - 60000, now + 60000),
+                        fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${binanceSym}`).then(r => r.json()).catch(() => null),
+                        classifyTierFromBinance(binanceSym, cfg),
+                    ]);
+                    const currentPrice = tickerJson && tickerJson.price ? parseFloat(tickerJson.price)
+                                       : (klines && klines.length ? parseFloat(klines[klines.length - 1][4]) : o.limit_price);
+                    const analysis = classifyPendingBuy({
+                        signalPrice: o.signal_price, limitPrice: o.limit_price, signalTs: o.signal_ts,
+                        klines: klines || [], currentPrice, tier: tierInfo.tier, now,
+                    });
+                    // Match to live open order
+                    let openOrder = null;
+                    try {
+                        const raw = await redis.get(`BINANCE:OPEN_ORDERS:${binanceSym}`);
+                        const arr = raw ? JSON.parse(raw) : [];
+                        openOrder = arr.find(x => x.side === 'BUY' && x.type === 'LIMIT') || null;
+                    } catch (_) {}
+                    return {
+                        ...o,
+                        tier: tierInfo.tier,
+                        analysis,
+                        open_order: openOrder ? { orderId: openOrder.orderId, price: openOrder.price, qty: openOrder.origQty } : null,
+                    };
+                } catch (e) {
+                    return { ...o, error: e.message };
+                }
+            }));
+            enriched.push(...br);
+        }
+
+        // Summary counts per recommendation
+        const counts = {};
+        enriched.forEach(o => {
+            const a = o.analysis?.action || 'UNKNOWN';
+            counts[a] = (counts[a] || 0) + 1;
+        });
+
+        res.json({ count: enriched.length, counts, orders: enriched });
+    } catch (err) {
+        res.status(500).json({ error: err.message, stack: err.stack });
+    }
+});
+
 // iter 17 fe: Pattern Bot endpoints
 app.get('/api/pattern-bot/status', async (req, res) => {
     try {

@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Book-Now — Pending-Buy Health Monitor</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --panel-2: #1a232e; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --neutral: #8b949e; --pink: #ff6b9d; --purple: #b07ee0;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  .sub { color: var(--muted); margin-bottom: 18px; font-size: 13px; }
+  .topnav { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .topnav a { display: inline-block; padding: 6px 14px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 600; }
+  .topnav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .topnav a:not(.active):hover { color: var(--text); border-color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 14px; }
+  .card h2 { margin: 0 0 14px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+  .card h2 .count { display: inline-block; padding: 2px 8px; background: var(--panel-2); border-radius: 12px; font-size: 11px; color: var(--text); }
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .toolbar input { padding: 8px 12px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 6px; font: 13px monospace; min-width: 200px; }
+  .toolbar button { padding: 8px 16px; background: var(--accent); color: #fff; border: 0; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 12px; }
+  .toolbar button.alt { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); }
+  .toolbar button.danger { background: var(--bad); }
+  .toolbar button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .toolbar label { color: var(--muted); font-size: 12px; }
+  .toolbar input[type=checkbox] { vertical-align: middle; }
+
+  /* Counts strip */
+  .strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .strip .tile { padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; border-left: 3px solid var(--line); }
+  .strip .tile.CANCEL { border-left-color: var(--bad); }
+  .strip .tile.RIDE { border-left-color: var(--good); }
+  .strip .tile.REPRICE { border-left-color: var(--warn); }
+  .strip .tile.WAIT { border-left-color: var(--accent); }
+  .strip .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .strip .value { font-size: 20px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+  /* Order card */
+  .order { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+  .order .top { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  .order .symbol { font-weight: 700; font-size: 16px; }
+  .order .tier { font-size: 10px; padding: 3px 8px; border-radius: 3px; background: var(--panel); color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .order .origin { font-size: 10px; padding: 3px 8px; border-radius: 3px; background: var(--panel); color: var(--muted); }
+  .order .age { font-size: 11px; color: var(--muted); }
+
+  .pill { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: .3px; }
+  .pill.CANCEL { background: rgba(231,76,60,.18); color: var(--bad); }
+  .pill.RIDE { background: rgba(46,204,113,.18); color: var(--good); }
+  .pill.REPRICE { background: rgba(241,196,15,.18); color: var(--warn); }
+  .pill.WAIT { background: rgba(41,182,246,.18); color: var(--accent); }
+  .pill.MISSED_BOAT { background: rgba(255,107,157,.18); color: var(--pink); }
+  .pill.PUMP_AND_DUMP { background: rgba(231,76,60,.22); color: var(--bad); }
+  .pill.DRIFTED_UP { background: rgba(176,126,224,.18); color: var(--purple); }
+  .pill.DRIFTED_REPRICE { background: rgba(241,196,15,.18); color: var(--warn); }
+  .pill.STALE_FLAT { background: rgba(139,148,158,.20); color: var(--muted); }
+  .pill.HEALTHY_WAIT { background: rgba(46,204,113,.15); color: var(--good); }
+  .pill.AT_LIMIT { background: rgba(41,182,246,.18); color: var(--accent); }
+
+  .headline { background: var(--bg); border-left: 3px solid var(--accent); padding: 10px 14px; border-radius: 6px; font-size: 13px; color: var(--text); margin-bottom: 12px; line-height: 1.5; }
+  .order.CANCEL .headline { border-left-color: var(--bad); }
+  .order.RIDE .headline { border-left-color: var(--good); }
+  .order.REPRICE .headline { border-left-color: var(--warn); }
+  .order.WAIT .headline { border-left-color: var(--accent); }
+
+  /* Stat grid */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .grid .stat { background: var(--bg); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--line); }
+  .grid .stat .k { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; }
+  .grid .stat .v { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 3px; }
+  .pos { color: var(--good); } .neg { color: var(--bad); } .mute { color: var(--muted); } .warn { color: var(--warn); }
+
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  .actions button { padding: 8px 16px; border: 0; border-radius: 6px; cursor: pointer; font-weight: 700; font-size: 12px; }
+  .actions button.cancel { background: var(--bad); color: #fff; }
+  .actions button.reprice { background: var(--warn); color: #0c1116; }
+  .actions button.dismiss { background: var(--panel); color: var(--muted); border: 1px solid var(--line); }
+  .actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .empty { padding: 30px; text-align: center; color: var(--muted); font-style: italic; }
+  .error { padding: 14px; background: rgba(231,76,60,.10); color: var(--bad); border-radius: 6px; }
+  .hint { color: var(--muted); font-size: 11px; }
+  .live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--good); margin-right: 6px; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/">📊 Monitor</a>
+  <a href="/metrics.html">📈 Metrics</a>
+  <a href="/spot.html">📋 Spot</a>
+  <a href="/backtest.html">🔬 Backtest</a>
+  <a href="/decision-trace.html">🔍 Decision Trace</a>
+  <a href="/bounce-watch.html">⤴️ Bounce Watch</a>
+  <a href="/early-pump.html">🚀 Early Pump</a>
+  <a href="/pattern-backtest.html">📊 Pattern Backtest</a>
+  <a href="/pattern-bot.html">🤖 Pattern Bot</a>
+  <a href="/adaptive-offset.html">🎯 Adaptive Offset</a>
+  <a href="/adaptive-eligibility.html">✅ Adaptive Gate</a>
+  <a href="/pending-monitor.html" class="active">⏳ Pending Monitor</a>
+  <a href="/limit-buy-replay.html">🔄 Limit Replay</a>
+  <a href="/filter-candidate.html">🧪 Filter Tester</a>
+  <a href="/scanner">🏠 Scanner</a>
+</nav>
+
+<h1>⏳ Pending-Buy Health Monitor</h1>
+<div class="sub">
+  Watches every active Buy 1 LIMIT order. For each: tracks % up from signal, % drop from peak,
+  momentum + volume trend, then classifies as <span class="pill RIDE">RIDE</span>
+  <span class="pill REPRICE">REPRICE</span> <span class="pill CANCEL">CANCEL</span>
+  <span class="pill WAIT">WAIT</span>. One-click cancel uses the same endpoint the dashboard already uses.
+</div>
+
+<!-- Strip -->
+<div id="strip" class="strip">
+  <div class="tile"><div class="label">Pending orders</div><div class="value" id="totCount">—</div></div>
+  <div class="tile CANCEL"><div class="label">Cancel suggested</div><div class="value" id="cntCancel">—</div></div>
+  <div class="tile REPRICE"><div class="label">Reprice suggested</div><div class="value" id="cntReprice">—</div></div>
+  <div class="tile RIDE"><div class="label">Healthy / ride</div><div class="value" id="cntRide">—</div></div>
+  <div class="tile WAIT"><div class="label">At limit / waiting</div><div class="value" id="cntWait">—</div></div>
+</div>
+
+<div class="card">
+  <h2><span class="live-dot"></span>Live pending orders <span class="count" id="lastUpdate">—</span></h2>
+  <div class="toolbar">
+    <button onclick="refreshList()">🔄 Refresh</button>
+    <label><input type="checkbox" id="autoRefresh" checked /> Auto-refresh every 10s</label>
+    <span style="flex: 1;"></span>
+    <span class="hint">Tier thresholds scale: CALM ≠ X_VOLATILE. Hover any classification for the active rule.</span>
+  </div>
+  <div id="orderList" style="margin-top: 14px;"><div class="empty">Loading…</div></div>
+</div>
+
+<div class="card">
+  <h2>What-if / replay any past order</h2>
+  <div class="toolbar">
+    <input id="rSymbol" placeholder="symbol (e.g. ZAMAUSDT)" />
+    <input id="rSignalPrice" placeholder="signal price (optional)" />
+    <input id="rLimitPrice" placeholder="limit price (optional)" />
+    <input id="rSignalTs" placeholder="signal ts (ms) (optional)" />
+    <input id="rNow" placeholder="evaluate-at ts (ms) (optional)" />
+    <button onclick="runWhatIf()">Analyze</button>
+    <button class="alt" onclick="loadZamaCase()">Load ZAMA cancel</button>
+  </div>
+  <div class="hint" style="margin-top: 6px;">Symbol alone uses the most recent OUTCOME (today/yesterday). Add params to replay a specific snapshot.</div>
+  <div id="whatIfResult" style="margin-top: 12px;"></div>
+</div>
+
+<script>
+function fmt(n, d) { return n == null || isNaN(n) ? '—' : Number(n).toFixed(d == null ? 4 : d); }
+function pctSign(v) { if (v == null || isNaN(v)) return '—'; const s = v >= 0 ? '+' : ''; return s + v.toFixed(2) + '%'; }
+function pctClass(v) { return v > 0 ? 'pos' : v < 0 ? 'neg' : 'mute'; }
+function ageStr(min) { if (min == null) return '—'; if (min < 60) return min.toFixed(0) + 'm'; return (min/60).toFixed(1) + 'h'; }
+
+function renderOrder(o) {
+  const a = o.analysis || {};
+  const action = a.action || 'UNKNOWN';
+  const klass = a.classification || 'unknown';
+  const oo = o.open_order;
+  const suggested = a.suggested;
+  return `
+    <div class="order ${action}" data-symbol="${o.symbol}">
+      <div class="top">
+        <div class="symbol">${o.symbol}</div>
+        <span class="tier">${o.tier || '?'}</span>
+        ${o.origin ? `<span class="origin">${o.origin}</span>` : ''}
+        <span class="age">age ${ageStr(a.age_min)}</span>
+        <span style="flex: 1;"></span>
+        <span class="pill ${action}">${action}</span>
+        <span class="pill ${klass}">${klass.replace(/_/g, ' ')}</span>
+      </div>
+
+      <div class="headline">${a.headline || '(no analysis)'}</div>
+
+      <div class="grid">
+        <div class="stat"><div class="k">Signal $</div><div class="v">$${fmt(a.signal_price, 8)}</div></div>
+        <div class="stat"><div class="k">Limit $</div><div class="v">$${fmt(a.limit_price, 8)}</div></div>
+        <div class="stat"><div class="k">Current $</div><div class="v">$${fmt(a.current_price, 8)}</div></div>
+        <div class="stat"><div class="k">Peak high</div><div class="v">$${fmt(a.peak_high, 8)}</div></div>
+        <div class="stat"><div class="k">Peak +%</div><div class="v ${pctClass(a.peak_pct_from_signal)}">${pctSign(a.peak_pct_from_signal)}</div></div>
+        <div class="stat"><div class="k">Pullback −%</div><div class="v ${a.pullback_from_peak_pct>0?'neg':'mute'}">${pctSign(-Math.abs(a.pullback_from_peak_pct))}</div></div>
+        <div class="stat"><div class="k">vs limit</div><div class="v ${pctClass(a.current_vs_limit_pct)}">${pctSign(a.current_vs_limit_pct)}</div></div>
+        <div class="stat"><div class="k">3m mom.</div><div class="v ${pctClass(a.momentum_3m_pct)}">${pctSign(a.momentum_3m_pct)}</div></div>
+        <div class="stat"><div class="k">Vol decay</div><div class="v ${a.volume_decay_ratio<0.6?'neg':a.volume_decay_ratio>1.5?'pos':'mute'}">${fmt(a.volume_decay_ratio, 2)}×</div></div>
+        <div class="stat"><div class="k">HH / LL (5m)</div><div class="v">${a.higher_highs_5m||0} / ${a.lower_lows_5m||0}</div></div>
+      </div>
+
+      ${suggested ? `
+        <div class="headline" style="border-left-color: var(--warn);">
+          <strong>Reprice suggestion:</strong> new limit
+          <strong>$${fmt(suggested.new_limit_price, 8)}</strong>
+          (−${fmt(suggested.new_offset_pct, 2)}% from current).
+          You'll need to cancel the existing order and the bot will place a fresh limit on the next signal cycle.
+        </div>
+      ` : ''}
+
+      <div class="actions">
+        ${action === 'CANCEL' || action === 'REPRICE'
+          ? `<button class="cancel" ${oo ? '' : 'disabled'} onclick="cancelOrder('${o.symbol.replace('/', '')}', '${oo ? oo.orderId : ''}', this)">
+                ${oo ? '✗ Cancel order #' + oo.orderId : '✗ Cancel (orderId unknown)'}
+             </button>`
+          : ''}
+        <button class="dismiss" onclick="this.closest('.order').style.opacity=.3">Dismiss</button>
+      </div>
+    </div>
+  `;
+}
+
+async function refreshList() {
+  const out = document.getElementById('orderList');
+  try {
+    const r = await fetch('/api/pending-orders');
+    const j = await r.json();
+    document.getElementById('totCount').textContent = j.count || 0;
+    const counts = j.counts || {};
+    document.getElementById('cntCancel').textContent  = counts.CANCEL  || 0;
+    document.getElementById('cntReprice').textContent = counts.REPRICE || 0;
+    document.getElementById('cntRide').textContent    = counts.RIDE    || 0;
+    document.getElementById('cntWait').textContent    = counts.WAIT    || 0;
+    document.getElementById('lastUpdate').textContent = 'updated ' + new Date().toLocaleTimeString();
+    if (!j.orders || j.orders.length === 0) {
+      out.innerHTML = '<div class="empty">No pending Buy 1 LIMIT orders right now. ✓</div>';
+      return;
+    }
+    out.innerHTML = j.orders.map(renderOrder).join('');
+  } catch (e) {
+    out.innerHTML = '<div class="error">' + e.message + '</div>';
+  }
+}
+
+async function cancelOrder(binSym, orderId, btn) {
+  if (!orderId) return;
+  if (!confirm(`Cancel ${binSym} order #${orderId}? This will hit Binance.`)) return;
+  btn.disabled = true; btn.textContent = 'Cancelling…';
+  try {
+    const r = await fetch('/api/open-orders/cancel', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol: binSym, orderId: Number(orderId) }),
+    });
+    const j = await r.json();
+    if (j.ok || j.error) {
+      btn.textContent = j.ok ? '✓ Cancelled' : '✗ ' + j.error;
+      setTimeout(refreshList, 800);
+    }
+  } catch (e) {
+    btn.textContent = '✗ ' + e.message;
+  }
+}
+
+async function runWhatIf() {
+  const sym = document.getElementById('rSymbol').value.trim();
+  if (!sym) return;
+  const params = new URLSearchParams({ symbol: sym });
+  const sp = document.getElementById('rSignalPrice').value.trim();
+  const lp = document.getElementById('rLimitPrice').value.trim();
+  const ts = document.getElementById('rSignalTs').value.trim();
+  const nw = document.getElementById('rNow').value.trim();
+  if (sp) params.set('signal_price', sp);
+  if (lp) params.set('limit_price', lp);
+  if (ts) params.set('signal_ts', ts);
+  if (nw) params.set('now', nw);
+  const out = document.getElementById('whatIfResult');
+  out.innerHTML = '<div class="empty">Analyzing…</div>';
+  try {
+    const r = await fetch('/api/pending-buy-analysis?' + params.toString());
+    const j = await r.json();
+    if (j.error) { out.innerHTML = '<div class="error">' + j.error + '</div>'; return; }
+    out.innerHTML = renderOrder({
+      symbol: j.symbol, tier: j.tier_info?.tier, origin: j.outcome?.origin,
+      open_order: j.open_order, analysis: j.analysis,
+    }) + `<div class="hint" style="margin-top: 6px;">Source: ${j.source}${j.outcome_date ? ' (from ' + j.outcome_date + ')' : ''}</div>`;
+  } catch (e) {
+    out.innerHTML = '<div class="error">' + e.message + '</div>';
+  }
+}
+
+function loadZamaCase() {
+  // ZAMA was cancelled at 2026-05-15 23:58:34 UTC.
+  // Signal ts 1778888694390, limit 0.02716, signal 0.02721, manual cancel at 1778889574900.
+  document.getElementById('rSymbol').value = 'ZAMAUSDT';
+  document.getElementById('rSignalPrice').value = '0.02721';
+  document.getElementById('rLimitPrice').value = '0.02716';
+  document.getElementById('rSignalTs').value = '1778888694390';
+  document.getElementById('rNow').value = '1778889574900';
+  runWhatIf();
+}
+
+refreshList();
+setInterval(() => {
+  if (document.getElementById('autoRefresh').checked) refreshList();
+}, 10000);
+</script>
+
+</body>
+</html>
