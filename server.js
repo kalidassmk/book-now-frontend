@@ -4051,8 +4051,10 @@ app.get('/api/scalper-logs', async (req, res) => {
         const tracebacks = lines.filter(l => /Traceback|Error|Exception/i.test(l)).length;
         const skips = lines.filter(l => /skipped by filter|🔪/i.test(l)).length;
 
-        // iter30 v4 (2026-05-16): per-line age + freshness summary
-        // Parse "HH:MM:SS" prefix on each line, compute age assuming UTC today.
+        // iter30 v5 (2026-05-16): per-line age + freshness summary + SORT by age.
+        // The Redis list order can be unreliable when supervisor restarts cause
+        // mid-batch reorders, so we always re-sort by parsed timestamp (newest
+        // first) on the API side. Bulletproof for the dashboard.
         const now = new Date();
         const nowSecOfDay = now.getUTCHours() * 3600 + now.getUTCMinutes() * 60 + now.getUTCSeconds();
         const enrichedLines = lines.map((l, i) => {
@@ -4060,13 +4062,31 @@ app.get('/api/scalper-logs', async (req, res) => {
             let ageSec = null;
             if (m) {
                 const lineSecOfDay = +m[1] * 3600 + +m[2] * 60 + +m[3];
-                // If line time > now, it's likely from yesterday (clock wraparound)
                 ageSec = lineSecOfDay <= nowSecOfDay
                     ? nowSecOfDay - lineSecOfDay
                     : (86400 - lineSecOfDay) + nowSecOfDay;
             }
             return { idx: i, text: l, age_sec: ageSec };
         });
+
+        // Sort newest first by age_sec (smaller = newer). Lines with no
+        // parseable time fall to the bottom.
+        enrichedLines.sort((a, b) => {
+            if (a.age_sec == null && b.age_sec == null) return 0;
+            if (a.age_sec == null) return 1;
+            if (b.age_sec == null) return -1;
+            return a.age_sec - b.age_sec;
+        });
+
+        // Dedupe identical text (in case the Redis list has lingering dupes
+        // from before iter30 v4 dedup fix went live).
+        const seen = new Set();
+        const dedupedLines = [];
+        for (const l of enrichedLines) {
+            if (seen.has(l.text)) continue;
+            seen.add(l.text);
+            dedupedLines.push(l);
+        }
 
         // "Last event" freshness — use the newest line's parsed age
         const lastEventEpochRaw = await redis.get('VIRTUAL:LOG_LAST_EVENT_EPOCH').catch(() => null);
@@ -4084,7 +4104,10 @@ app.get('/api/scalper-logs', async (req, res) => {
                 : lastEventAgeSec < 300 ? `🔴 New activity ${lastEventAgeSec}s ago`
                 : lastEventAgeSec < 3600 ? `🟡 Last event ${Math.round(lastEventAgeSec/60)}m ago`
                 : `🟢 Stable for ${(lastEventAgeSec/3600).toFixed(1)}h — no recent events`,
-            lines: enrichedLines,
+            // iter30 v5: SORTED by age (newest first) + DEDUPED so the same
+            // line never appears twice. Eliminates display ordering bugs
+            // from the underlying Redis list.
+            lines: dedupedLines.slice(0, limit),
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
