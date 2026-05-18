@@ -218,14 +218,30 @@ async function runBacktest() {
       </div>
     `;
 
-    const tableHtml = trades.length === 0 ? '<div class="empty">No filled trades in window</div>' : `
+    // iter31 v2: clarify the UI — many trades had LOSSES from OTHER exit
+    // reasons (not the hard stop). The hard stop only changes outcomes
+    // when price actually dipped deep enough to trigger it.
+    const otherExitLossCount = trades.filter(t => !t.would_have_stopped && t.actual_pnl < 0).length;
+    const otherExitLossTotal = trades.filter(t => !t.would_have_stopped && t.actual_pnl < 0)
+                                     .reduce((s, t) => s + t.actual_pnl, 0);
+    const explainHtml = `
+      <div class="warn-banner" style="margin: 12px 0;">
+        💡 <strong>How to read this:</strong> "STOPPED?" only checks if PRICE dipped past the $${stop} stop level.
+        Many trades exit for OTHER reasons (TP hit, liquidity_death, market_stress, active2_no_recovery, etc.) — those exits happen REGARDLESS of the hard stop and won't change.
+        ${otherExitLossCount > 0 ? `<br>In this window: <strong>${otherExitLossCount}</strong> trades lost ${pnlStr(otherExitLossTotal)} via NON-stop exits — the hard stop wouldn't have helped those.` : ''}
+        ${s.would_have_stopped > 0 ? `<br>Only <strong>${s.would_have_stopped}</strong> trade(s) actually dipped deep enough to trigger the $${stop} stop.` : ''}
+      </div>
+    `;
+
+    const tableHtml = trades.length === 0 ? '<div class="empty">No filled trades in window</div>' : explainHtml + `
       <table>
         <thead>
           <tr>
             <th>Date</th><th>Symbol</th><th>Origin</th>
-            <th>Buy $</th><th>Stop $ ${'(-'+s.would_have_stopped+')'}</th>
-            <th>Min low $</th><th>Min %</th>
-            <th>Stopped?</th><th>When</th>
+            <th>Buy $</th><th>Stop $</th>
+            <th>Min low</th><th>Min %</th>
+            <th>Stop hit?</th>
+            <th>Actual exit reason</th>
             <th>Actual P&amp;L</th><th>Hypo P&amp;L</th><th>Delta</th>
           </tr>
         </thead>
@@ -234,6 +250,16 @@ async function runBacktest() {
             const rowClass = t.error ? '' :
               (t.would_have_stopped && t.actual_pnl > 0) ? 'win-killed' :
               t.would_have_stopped ? 'stopped' : '';
+            const exitReason = (t.actual_exit_reason || '').split(':')[0].split(' ')[0] || 'unknown';
+            const exitColor = exitReason.includes('tp') ? 'var(--good)'
+                            : exitReason.includes('break') ? 'var(--good)'
+                            : exitReason.includes('quick_profit') ? 'var(--good)'
+                            : exitReason.includes('liquidity') ? 'var(--bad)'
+                            : exitReason.includes('stress') ? 'var(--bad)'
+                            : exitReason.includes('stop') ? 'var(--bad)'
+                            : exitReason.includes('no_recovery') ? 'var(--bad)'
+                            : exitReason.includes('cancel') ? 'var(--muted)'
+                            : 'var(--muted)';
             return `
               <tr class="${rowClass}">
                 <td>${t.date}</td>
@@ -243,8 +269,13 @@ async function runBacktest() {
                 <td>${t.stop_price ? '$' + fmt(t.stop_price, 8) : '—'}</td>
                 <td>${t.min_low_seen ? '$' + fmt(t.min_low_seen, 8) : '—'}</td>
                 <td class="${(t.min_low_pct_from_buy||0)<-0.3?'neg':'mute'}">${t.min_low_pct_from_buy != null ? t.min_low_pct_from_buy + '%' : '—'}</td>
-                <td>${t.error ? '<span class="pill mute">err</span>' : (t.would_have_stopped ? `<span class="pill stopped">YES${t.actual_pnl>0?' kill win':''}</span>` : '<span class="pill safe">NO</span>')}</td>
-                <td>${t.would_stop_min_after_fill != null ? t.would_stop_min_after_fill + 'm' : '—'}</td>
+                <td>${t.error ? '<span class="pill mute">err</span>'
+                    : (t.would_have_stopped
+                        ? (t.actual_pnl > 0
+                            ? `<span class="pill win-killed" title="Would stop ${t.would_stop_min_after_fill}m after fill — but trade later recovered to profit">YES (kills win)</span>`
+                            : `<span class="pill stopped" title="${t.would_stop_min_after_fill}m after fill">YES (saves loss)</span>`)
+                        : '<span class="pill safe">no</span>')}</td>
+                <td style="font-size: 11px; color: ${exitColor};" title="${(t.actual_exit_reason||'').replace(/"/g,'&quot;')}">${exitReason}</td>
                 <td class="${pnlClass(t.actual_pnl)}">${pnlStr(t.actual_pnl)}</td>
                 <td class="${pnlClass(t.hypothetical_pnl)}">${pnlStr(t.hypothetical_pnl)}</td>
                 <td class="${pnlClass(t.pnl_delta)}">${pnlStr(t.pnl_delta)}</td>
@@ -254,9 +285,11 @@ async function runBacktest() {
         </tbody>
       </table>
       <div class="hint" style="margin-top: 8px;">
-        <span class="pill stopped">YES</span> = would have stopped at $${stop} loss.
-        <span class="pill win-killed">YES kill win</span> = stop killed a trade that ended up winning (false alarm).
-        <span class="pill safe">NO</span> = price never crossed the stop, outcome unchanged.
+        Legend:
+        <span class="pill stopped">YES (saves loss)</span> stop would fire on a trade that was losing anyway
+        <span class="pill win-killed">YES (kills win)</span> stop would fire on a trade that later recovered to profit (false alarm)
+        <span class="pill safe">no</span> price never crossed the stop — actual exit reason in next column
+        <br>Hover over the exit-reason for the full Python message.
       </div>
     `;
 
