@@ -1030,29 +1030,36 @@ const DEFAULT_TRADING_CONFIG = {
     // 2026-05-11 iter 8: dollar-target wins when set; TP auto-computed.
     // 2026-05-13 iter 19: $0.15 → $0.20 (mirrors backend dataclass default).
     // 2026-05-15 iter 42: $0.20 → $0.15 (operator request — faster TP).
-    ladderTargetNetProfitUsdt: 0.15,
+    // iter33 (2026-05-18): $0.15 → $3.00. 7-day Binance kline analysis on
+    // 45 historical trades showed TP=$3 with 168h hold = +$33 net (vs current
+    // -$5.96). 24% of trades reach $3 in 7d. Median TP=$3 winner had -$2.64
+    // drawdown along the way (need patience). Worst 7d drawdown -$11.50,
+    // all recoverable. User wants ONLY net profit, willing to wait 1 week.
+    ladderTargetNetProfitUsdt: 3.00,
     ladderFeeRatePerSide: 0.00075,  // 0.075 % (BNB-fees ON); set to 0.001 if OFF
     ladderHardStopBelowBuy3Pct: 1.0,
     ladderBuy1UseMarketOrder: true,
     ladderBuy1OffsetPct: 0.15,        // 0 = market; >0 = LIMIT at signal × (1-X%) — iter 12 default
     ladderCooldownSeconds: 14400,    // 4h per-coin cooldown after a ladder closes
 
-    // iter32 (2026-05-18): HARD-STOP-ONLY exit configuration.
-    // Operator request — disable all secondary exit rules and rely solely
-    // on TP + $0.40 USDT hard stop + 4h time fallback. Backtest showed this
-    // beats current (all rules active) by ~$6/week.
-    // For $48 leg: 0.833% drop = $0.40 loss (excl. fees). Fees push real loss
-    // to ~$0.47 at trigger. If Buy 2 also fills ($96 total), 0.833% = $0.80
-    // loss before fees.
+    // iter33 (2026-05-18): PATIENT_PROFIT exit configuration.
+    // Goal: ONLY NET PROFIT. Willing to hold up to 7 days for big pumps.
+    // 7-day Binance kline analysis showed +$33 net over 7 days with this config.
+    // All secondary exit rules stay disabled (from iter32). Only triggers:
+    //   1. TP at $3.00 net (= 6.4% rise on $48 leg)
+    //   2. Catastrophic stop at -25% drop (-$12 — only on real crashes)
+    //   3. 7-day timeout (final fallback)
+    // Median drawdown for winning trades was -$2.64; worst was -$11.50.
+    // Need patience — winners often dip BIG before reaching peak.
     ladderHardStopFromAvgEnabled: true,
-    ladderHardStopFromAvgPct: 0.833,         // iter32: was 1.5 (= $0.72/leg)
+    ladderHardStopFromAvgPct: 25.0,          // iter33: was 0.833 (catastrophic only at -25%)
     liquidityDeathExitEnabled: false,        // iter32: was true (iter39)
     active2MonitorEnabled: false,            // iter32: was true (iter41)
     marketStressExitEnabled: false,          // iter32: was true (iter46)
     ladderBreakevenExitEnabled: false,       // iter32: was true (iter14 BE)
     ladderTrailingTpEnabled: false,          // iter32: was true (iter14 trail)
-    ladderTimeExitEnabled: true,             // iter32: KEPT as 4h fallback
-    ladderMaxHoldSeconds: 14400,             // 4h hard time cap
+    ladderTimeExitEnabled: true,             // iter33: KEPT — 7-day fallback exit
+    ladderMaxHoldSeconds: 604800,            // iter33: was 14400 (4h) → 604800 (7 days)
     metricsEnabled: true,
 
     // iter 17 fe (2026-05-15): Pattern Bot config defaults.
