@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Book-Now — Hard Stop Backtest</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --panel-2: #1a232e; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --neutral: #8b949e; --purple: #b07ee0;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  .sub { color: var(--muted); margin-bottom: 18px; font-size: 13px; }
+  .topnav { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .topnav a { display: inline-block; padding: 6px 14px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 600; }
+  .topnav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .topnav a:not(.active):hover { color: var(--text); border-color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 14px; }
+  .card h2 { margin: 0 0 14px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 600; }
+
+  .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .controls label { font-size: 12px; color: var(--muted); }
+  .controls input { padding: 6px 10px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 4px; font: 13px monospace; width: 80px; text-align: right; }
+  .controls button { padding: 8px 16px; background: var(--accent); color: #fff; border: 0; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 12px; }
+
+  .preset { padding: 4px 10px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); border-radius: 4px; cursor: pointer; font-size: 11px; }
+  .preset:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* Summary tiles */
+  .tile-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+  .tile { padding: 12px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); border-left: 3px solid var(--accent); }
+  .tile.win { border-left-color: var(--good); }
+  .tile.lose { border-left-color: var(--bad); }
+  .tile.neutral { border-left-color: var(--neutral); }
+  .tile .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .tile .value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 4px; }
+  .tile .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* Comparison panel */
+  .compare { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+  .compare .col { padding: 14px; background: var(--panel-2); border-radius: 8px; border-top: 3px solid var(--neutral); }
+  .compare .col.actual { border-top-color: var(--accent); }
+  .compare .col.hypo { border-top-color: var(--warn); }
+  .compare .col.delta { border-top-color: var(--good); }
+  .compare .col .head { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 8px; }
+  .compare .col .big { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .compare .col .stats { margin-top: 8px; }
+  .compare .col .stat { display: flex; justify-content: space-between; font-size: 11px; padding: 3px 0; border-bottom: 1px dashed var(--line); }
+  .compare .col .stat:last-child { border-bottom: none; }
+  .compare .col .stat .k { color: var(--muted); }
+  .compare .col .stat .v { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .pos { color: var(--good); } .neg { color: var(--bad); } .mute { color: var(--muted); } .warn { color: var(--warn); }
+
+  /* Trades table */
+  table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+  th { text-align: left; padding: 8px 10px; background: var(--panel-2); color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .4px; border-bottom: 1px solid var(--line); }
+  td { padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  tr.stopped td { background: rgba(231,76,60,.05); }
+  tr.win-killed td { background: rgba(241,196,15,.06); }
+  tr:hover td { background: var(--panel-2); }
+  .pill { display: inline-block; padding: 2px 7px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+  .pill.stopped { background: rgba(231,76,60,.18); color: var(--bad); }
+  .pill.safe { background: rgba(46,204,113,.15); color: var(--good); }
+  .pill.WIN { background: rgba(46,204,113,.15); color: var(--good); }
+  .pill.LOSS { background: rgba(231,76,60,.15); color: var(--bad); }
+  .pill.win-killed { background: rgba(241,196,15,.20); color: var(--warn); }
+
+  .empty { padding: 30px; text-align: center; color: var(--muted); font-style: italic; }
+  .error { padding: 14px; background: rgba(231,76,60,.10); color: var(--bad); border-radius: 6px; }
+  .hint { color: var(--muted); font-size: 11px; }
+  .ok-banner { padding: 10px 14px; background: rgba(46,204,113,.10); border-left: 3px solid var(--good); border-radius: 6px; color: var(--good); font-size: 12px; }
+  .warn-banner { padding: 10px 14px; background: rgba(241,196,15,.10); border-left: 3px solid var(--warn); border-radius: 6px; color: var(--warn); font-size: 12px; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="/">📊 Monitor</a>
+  <a href="/active-monitors.html">🎛️ Active Monitors</a>
+  <a href="/scalper-diagnostic.html">🔬 Scalper Diagnostic</a>
+  <a href="/offset-strategy.html">⚙️ Offset Strategy</a>
+  <a href="/hard-stop-backtest.html" class="active">🛑 Hard-Stop Backtest</a>
+  <a href="/pending-monitor.html">⏳ Pending Monitor</a>
+  <a href="/adaptive-eligibility.html">✅ Adaptive Gate</a>
+  <a href="/adaptive-offset.html">🎯 Adaptive Offset</a>
+  <a href="/limit-buy-replay.html">🔄 Limit Replay</a>
+  <a href="/filter-candidate.html">🧪 Filter Tester</a>
+  <a href="/pattern-bot.html">🤖 Pattern Bot</a>
+  <a href="/metrics.html">📈 Metrics</a>
+</nav>
+
+<h1>🛑 Hard-Stop Backtest</h1>
+<div class="sub">
+  Replay every historical filled trade against a candidate hard-stop amount. For each trade, walks the 1m klines from fill→exit and finds the moment unrealized loss hit the stop. Shows: how many <strong>winning</strong> trades the stop would have killed (false alarm), how many losses it would have <strong>capped early</strong>, and the net P&amp;L change.
+</div>
+
+<div class="card">
+  <h2>🎚️ Stop amount + range</h2>
+  <div class="controls">
+    <label>Hard stop (USDT loss)</label>
+    <input id="stopUsdt" type="number" step="0.05" min="0.05" value="0.15" />
+    <span class="preset" onclick="setStop(0.05)">$0.05</span>
+    <span class="preset" onclick="setStop(0.10)">$0.10</span>
+    <span class="preset" onclick="setStop(0.15)">$0.15</span>
+    <span class="preset" onclick="setStop(0.20)">$0.20</span>
+    <span class="preset" onclick="setStop(0.30)">$0.30</span>
+    <span class="preset" onclick="setStop(0.50)">$0.50</span>
+    <span style="width: 14px;"></span>
+    <label>Days</label>
+    <input id="days" type="number" step="1" min="1" max="30" value="7" />
+    <button onclick="runBacktest()">▶ Run Backtest</button>
+  </div>
+  <div class="hint" style="margin-top: 8px;">
+    With $48/leg, $0.15 stop = -0.31% drop. Currently bot uses 1.5% hard stop = -$0.72 loss/leg.
+    Tighter stops cap downside but kill more winners that briefly dipped before recovering.
+  </div>
+</div>
+
+<div class="card">
+  <h2>📊 Result</h2>
+  <div id="result"><div class="empty">Pick stop amount and click Run Backtest</div></div>
+</div>
+
+<script>
+function setStop(v) { document.getElementById('stopUsdt').value = v; runBacktest(); }
+function fmt(n, d) { return n == null || isNaN(n) ? '—' : Number(n).toFixed(d == null ? 4 : d); }
+function pnlStr(v) { if (v == null) return '—'; const s = v >= 0 ? '+' : ''; return s + '$' + Number(v).toFixed(4); }
+function pnlClass(v) { return v > 0 ? 'pos' : v < 0 ? 'neg' : 'mute'; }
+
+async function runBacktest() {
+  const stop = document.getElementById('stopUsdt').value || '0.15';
+  const days = document.getElementById('days').value || '7';
+  const out = document.getElementById('result');
+  out.innerHTML = '<div class="empty">Running backtest — walking klines for each historical trade…</div>';
+  try {
+    const r = await fetch('/api/hard-stop-backtest?stop_usdt=' + stop + '&days=' + days);
+    const j = await r.json();
+    if (j.error) { out.innerHTML = '<div class="error">' + j.error + '</div>'; return; }
+    const s = j.summary;
+    const trades = j.trades || [];
+
+    let banner;
+    if (s.pnl_improvement_usdt > 0) {
+      banner = `<div class="ok-banner">✅ With $${stop} hard stop, would have netted <strong>${pnlStr(s.pnl_improvement_usdt)}</strong> better P&amp;L over ${days} day(s). ${s.would_have_stopped} trades stopped early.</div>`;
+    } else if (s.pnl_improvement_usdt < 0) {
+      banner = `<div class="warn-banner">⚠ With $${stop} hard stop, would have netted <strong>${pnlStr(s.pnl_improvement_usdt)}</strong> WORSE P&amp;L (stops killed winners). Loosen the stop.</div>`;
+    } else {
+      banner = `<div class="ok-banner">No P&amp;L change with $${stop} stop.</div>`;
+    }
+
+    const tilesHtml = `
+      <div class="tile-grid" style="margin-bottom: 14px;">
+        <div class="tile neutral">
+          <div class="label">Total filled trades</div>
+          <div class="value">${s.total_filled_trades}</div>
+          <div class="sub">over ${days} day(s)</div>
+        </div>
+        <div class="tile lose">
+          <div class="label">Would have stopped</div>
+          <div class="value neg">${s.would_have_stopped}</div>
+          <div class="sub">${((s.would_have_stopped/Math.max(s.total_filled_trades,1))*100).toFixed(0)}% of trades</div>
+        </div>
+        <div class="tile win">
+          <div class="label">Would NOT stop</div>
+          <div class="value pos">${s.would_NOT_stop}</div>
+          <div class="sub">unchanged outcome</div>
+        </div>
+        <div class="tile">
+          <div class="label">Stop killed a WINNER</div>
+          <div class="value warn">${s.stopped_was_actual_winner}</div>
+          <div class="sub">cost: ${pnlStr(s.stopped_killed_winning_amount_usdt)} ⚠</div>
+        </div>
+        <div class="tile">
+          <div class="label">Stop saved on a LOSER</div>
+          <div class="value pos">${s.stopped_was_actual_loser}</div>
+          <div class="sub">saved: ${pnlStr(s.stopped_saved_amount_usdt)}</div>
+        </div>
+        <div class="tile ${s.pnl_improvement_usdt>0?'win':s.pnl_improvement_usdt<0?'lose':'neutral'}">
+          <div class="label">Net P&amp;L delta</div>
+          <div class="value ${pnlClass(s.pnl_improvement_usdt)}">${pnlStr(s.pnl_improvement_usdt)}</div>
+          <div class="sub">vs current bot behaviour</div>
+        </div>
+      </div>
+    `;
+
+    const compareHtml = `
+      <div class="compare">
+        <div class="col actual">
+          <div class="head">Actual (no stop)</div>
+          <div class="big ${pnlClass(s.actual_total_pnl_usdt)}">${pnlStr(s.actual_total_pnl_usdt)}</div>
+          <div class="stats">
+            <div class="stat"><span class="k">Win rate</span><span class="v">${s.actual_win_rate_pct}%</span></div>
+            <div class="stat"><span class="k">Wins</span><span class="v pos">${trades.filter(t=>t.actual_pnl>0).length}</span></div>
+            <div class="stat"><span class="k">Losses</span><span class="v neg">${trades.filter(t=>t.actual_pnl<=0).length}</span></div>
+          </div>
+        </div>
+        <div class="col hypo">
+          <div class="head">With $${stop} hard stop</div>
+          <div class="big ${pnlClass(s.hypothetical_total_pnl_usdt)}">${pnlStr(s.hypothetical_total_pnl_usdt)}</div>
+          <div class="stats">
+            <div class="stat"><span class="k">Win rate</span><span class="v">${s.hypothetical_win_rate_pct}%</span></div>
+            <div class="stat"><span class="k">Wins</span><span class="v pos">${trades.filter(t=>t.hypothetical_pnl>0).length}</span></div>
+            <div class="stat"><span class="k">Losses</span><span class="v neg">${trades.filter(t=>t.hypothetical_pnl<=0).length}</span></div>
+          </div>
+        </div>
+        <div class="col delta">
+          <div class="head">Delta</div>
+          <div class="big ${pnlClass(s.pnl_improvement_usdt)}">${pnlStr(s.pnl_improvement_usdt)}</div>
+          <div class="stats">
+            <div class="stat"><span class="k">Stopped early</span><span class="v">${s.would_have_stopped}</span></div>
+            <div class="stat"><span class="k">Saved (losses)</span><span class="v pos">${pnlStr(s.stopped_saved_amount_usdt)}</span></div>
+            <div class="stat"><span class="k">Killed (wins)</span><span class="v warn">−${pnlStr(s.stopped_killed_winning_amount_usdt).replace('-','').replace('+','')}</span></div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const tableHtml = trades.length === 0 ? '<div class="empty">No filled trades in window</div>' : `
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th><th>Symbol</th><th>Origin</th>
+            <th>Buy $</th><th>Stop $ ${'(-'+s.would_have_stopped+')'}</th>
+            <th>Min low $</th><th>Min %</th>
+            <th>Stopped?</th><th>When</th>
+            <th>Actual P&amp;L</th><th>Hypo P&amp;L</th><th>Delta</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${trades.map(t => {
+            const rowClass = t.error ? '' :
+              (t.would_have_stopped && t.actual_pnl > 0) ? 'win-killed' :
+              t.would_have_stopped ? 'stopped' : '';
+            return `
+              <tr class="${rowClass}">
+                <td>${t.date}</td>
+                <td><strong>${t.symbol}</strong></td>
+                <td>${t.origin}</td>
+                <td>$${fmt(t.buy_price, 8)}</td>
+                <td>${t.stop_price ? '$' + fmt(t.stop_price, 8) : '—'}</td>
+                <td>${t.min_low_seen ? '$' + fmt(t.min_low_seen, 8) : '—'}</td>
+                <td class="${(t.min_low_pct_from_buy||0)<-0.3?'neg':'mute'}">${t.min_low_pct_from_buy != null ? t.min_low_pct_from_buy + '%' : '—'}</td>
+                <td>${t.error ? '<span class="pill mute">err</span>' : (t.would_have_stopped ? `<span class="pill stopped">YES${t.actual_pnl>0?' kill win':''}</span>` : '<span class="pill safe">NO</span>')}</td>
+                <td>${t.would_stop_min_after_fill != null ? t.would_stop_min_after_fill + 'm' : '—'}</td>
+                <td class="${pnlClass(t.actual_pnl)}">${pnlStr(t.actual_pnl)}</td>
+                <td class="${pnlClass(t.hypothetical_pnl)}">${pnlStr(t.hypothetical_pnl)}</td>
+                <td class="${pnlClass(t.pnl_delta)}">${pnlStr(t.pnl_delta)}</td>
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+      </table>
+      <div class="hint" style="margin-top: 8px;">
+        <span class="pill stopped">YES</span> = would have stopped at $${stop} loss.
+        <span class="pill win-killed">YES kill win</span> = stop killed a trade that ended up winning (false alarm).
+        <span class="pill safe">NO</span> = price never crossed the stop, outcome unchanged.
+      </div>
+    `;
+
+    out.innerHTML = banner + tilesHtml + compareHtml + tableHtml;
+  } catch (e) {
+    out.innerHTML = '<div class="error">' + e.message + '</div>';
+  }
+}
+
+// Auto-run on load with default $0.15
+runBacktest();
+</script>
+
+</body>
+</html>

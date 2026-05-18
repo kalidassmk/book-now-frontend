@@ -4212,6 +4212,180 @@ app.post('/api/scalper-logs/clear', async (req, res) => {
     }
 });
 
+// iter31 fe (2026-05-18): Hard-Stop Backtest
+//
+// User: "i want to setup loss for -.15 only, if reached price and lose for -.15,
+// i need to sell the hard stop, so i need to analyse any coin it is down -.15
+// it it won, i need to completely analyse and need the stop loss amount setup,
+// if will setup -.15 how many coin will win and loss, i need one backtest"
+//
+// For each historical FILLED trade, walks the 1m klines from fill to actual
+// exit. Computes the price at which loss would equal the candidate stop
+// amount, and checks if any candle low crossed it. If yes → trade would
+// have hit the new hard stop and exited at that price (loss = stop_usdt).
+// If no → trade continues to its actual outcome.
+//
+// Lets the operator pick a stop $ amount and see exactly how many trades
+// the new rule would have stopped early.
+
+async function fetchPostFillKlines(binanceSym, startMs, endMs) {
+    // Up to 4 hours of 1m bars (240 bars max — Binance limit per call is 1000)
+    const url = `https://api.binance.com/api/v3/klines?symbol=${binanceSym}` +
+                `&interval=1m&startTime=${startMs}&endTime=${endMs}&limit=300`;
+    try {
+        const r = await fetch(url);
+        if (!r.ok) return null;
+        return await r.json();
+    } catch (_) { return null; }
+}
+
+app.get('/api/hard-stop-backtest', async (req, res) => {
+    try {
+        const stopUsdt = parseFloat(req.query.stop_usdt || '0.15');
+        if (isNaN(stopUsdt) || stopUsdt <= 0) {
+            return res.status(400).json({ error: 'stop_usdt must be positive number' });
+        }
+        const days = Math.max(1, Math.min(parseInt(req.query.days || '7', 10), 30));
+        const FEE_PER_SIDE = 0.00075;
+        const today = new Date();
+        const dates = [];
+        for (let i = 0; i < days; i++) {
+            const d = new Date(today);
+            d.setUTCDate(d.getUTCDate() - i);
+            dates.push(d.toISOString().slice(0, 10));
+        }
+
+        // Collect all FILLED outcomes from the date range
+        const trades = [];
+        for (const date of dates) {
+            const stream = redis.scanStream({ match: `METRICS:OUTCOME:${date}:*`, count: 100 });
+            const keys = [];
+            stream.on('data', (b) => keys.push(...b));
+            await new Promise(r => stream.on('end', r));
+            for (const k of keys) {
+                const h = await redis.hgetall(k);
+                if (!h || !h.symbol) continue;
+                if (parseInt(h.filled || '0', 10) !== 1) continue;
+                const buy_price = parseFloat(h.buy_price || '0');
+                const exit_price = parseFloat(h.exit_price || '0');
+                const buy_ts = parseInt(h.buy_ts || '0', 10);
+                const exit_ts = parseInt(h.exit_ts || '0', 10);
+                const qty = parseFloat(h.qty || h.size_usdt && (parseFloat(h.size_usdt) / buy_price) || '0');
+                const actual_pnl = parseFloat(h.pnl_usdt || '0');
+                if (!buy_price || !buy_ts || !exit_ts || !qty) continue;
+                trades.push({
+                    date,
+                    symbol: h.symbol,
+                    origin: (h.scalper_origin || '?').toUpperCase(),
+                    buy_price, exit_price, buy_ts, exit_ts, qty,
+                    actual_pnl,
+                    actual_exit_reason: h.exit_reason || '',
+                    tp_hit: parseInt(h.tp_hit || '0', 10) === 1,
+                    size_usdt: parseFloat(h.size_usdt || '0'),
+                });
+            }
+        }
+
+        // For each trade, walk post-fill klines + simulate stop
+        const results = [];
+        for (let i = 0; i < trades.length; i += 3) {
+            const batch = trades.slice(i, i + 3);
+            const br = await Promise.all(batch.map(async (t) => {
+                const binanceSym = t.symbol.replace('/', '');
+                // Stop trigger price: where loss equals stopUsdt
+                // PnL = (price - buy_price) * qty - 2*fee*size
+                // For loss = -stopUsdt: price = buy_price - (stopUsdt + 2*fee*size) / qty
+                const fees = 2 * FEE_PER_SIDE * t.size_usdt;
+                const stop_price = t.buy_price - (stopUsdt + fees) / t.qty;
+
+                // Walk klines from buy_ts to exit_ts
+                const klines = await fetchPostFillKlines(binanceSym, t.buy_ts, t.exit_ts + 60000);
+                if (!klines || klines.length === 0) {
+                    return { ...t, stop_price, error: 'no_klines' };
+                }
+                // Find first candle low <= stop_price
+                let wouldStopIdx = -1;
+                let wouldStopMs = null;
+                let wouldStopLow = null;
+                let minLow = Infinity;
+                let actualPath = [];
+                for (let j = 0; j < klines.length; j++) {
+                    const k = klines[j];
+                    const low = parseFloat(k[3]);
+                    if (low < minLow) minLow = low;
+                    if (low <= stop_price && wouldStopIdx < 0) {
+                        wouldStopIdx = j;
+                        wouldStopMs = parseInt(k[0], 10);
+                        wouldStopLow = low;
+                    }
+                }
+                const wouldHaveStopped = wouldStopIdx >= 0;
+                // New P&L if stopped: exit at stop_price (assume slip = 0)
+                // Net loss = -(stop price drop × qty) - fees
+                const hypoPnl = wouldHaveStopped
+                    ? -((t.buy_price - stop_price) * t.qty) - fees
+                    : t.actual_pnl;
+                const minPriceSeenPct = +((minLow / t.buy_price - 1) * 100).toFixed(3);
+                const stopPricePct = +((stop_price / t.buy_price - 1) * 100).toFixed(3);
+
+                return {
+                    ...t,
+                    stop_price: +stop_price.toFixed(10),
+                    stop_pct_from_buy: stopPricePct,
+                    min_low_seen: +minLow.toFixed(10),
+                    min_low_pct_from_buy: minPriceSeenPct,
+                    would_have_stopped: wouldHaveStopped,
+                    would_stop_ts: wouldStopMs,
+                    would_stop_min_after_fill: wouldHaveStopped ? Math.round((wouldStopMs - t.buy_ts) / 60000) : null,
+                    hypothetical_pnl: +hypoPnl.toFixed(4),
+                    pnl_delta: +(hypoPnl - t.actual_pnl).toFixed(4),
+                };
+            }));
+            results.push(...br);
+        }
+
+        // Aggregate
+        const sumActualPnl = results.reduce((s, r) => s + (r.actual_pnl || 0), 0);
+        const sumHypoPnl = results.reduce((s, r) => s + (r.hypothetical_pnl || 0), 0);
+        const stopped = results.filter(r => r.would_have_stopped);
+        const notStopped = results.filter(r => !r.would_have_stopped && !r.error);
+
+        // Categorise: of the trades that WOULD have stopped, how many were
+        // actually winners (we would have killed a winner) vs losers (we
+        // would have just locked in earlier loss)?
+        const stoppedWasWinner = stopped.filter(r => r.actual_pnl > 0).length;
+        const stoppedWasLoser = stopped.filter(r => r.actual_pnl <= 0).length;
+        const stoppedSavedAmount = stopped
+            .filter(r => r.actual_pnl < r.hypothetical_pnl)  // hypo > actual = saved
+            .reduce((s, r) => s + (r.hypothetical_pnl - r.actual_pnl), 0);
+        const stoppedKilledWinAmount = stopped
+            .filter(r => r.actual_pnl > 0)
+            .reduce((s, r) => s + (r.actual_pnl - r.hypothetical_pnl), 0);
+
+        res.json({
+            params: { stop_usdt: stopUsdt, days, dates_scanned: dates },
+            summary: {
+                total_filled_trades: results.length,
+                errors: results.filter(r => r.error).length,
+                would_have_stopped: stopped.length,
+                would_NOT_stop: notStopped.length,
+                stopped_was_actual_winner: stoppedWasWinner,
+                stopped_was_actual_loser: stoppedWasLoser,
+                stopped_saved_amount_usdt: +stoppedSavedAmount.toFixed(4),
+                stopped_killed_winning_amount_usdt: +stoppedKilledWinAmount.toFixed(4),
+                actual_total_pnl_usdt: +sumActualPnl.toFixed(4),
+                hypothetical_total_pnl_usdt: +sumHypoPnl.toFixed(4),
+                pnl_improvement_usdt: +(sumHypoPnl - sumActualPnl).toFixed(4),
+                actual_win_rate_pct: results.length ? +(results.filter(r => r.actual_pnl > 0).length / results.length * 100).toFixed(1) : 0,
+                hypothetical_win_rate_pct: results.length ? +(results.filter(r => r.hypothetical_pnl > 0).length / results.length * 100).toFixed(1) : 0,
+            },
+            trades: results,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message, stack: err.stack });
+    }
+});
+
 app.get('/api/scalper-restart-history', async (req, res) => {
     try {
         const raw = await redis.lrange('VIRTUAL:RESTART_HISTORY', 0, 49);
