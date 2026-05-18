@@ -4273,6 +4273,9 @@ app.get('/api/hard-stop-backtest', async (req, res) => {
                 const qty = parseFloat(h.qty || h.size_usdt && (parseFloat(h.size_usdt) / buy_price) || '0');
                 const actual_pnl = parseFloat(h.pnl_usdt || '0');
                 if (!buy_price || !buy_ts || !exit_ts || !qty) continue;
+                // Pull the TP target if recorded. iter31 v3: needed for the
+                // hard-stop-ONLY simulation (TP + stop, no other rules).
+                const tpTarget = parseFloat(h.target_sell_010 || h.target_sell_015 || h.target_sell_005 || '0');
                 trades.push({
                     date,
                     symbol: h.symbol,
@@ -4282,6 +4285,7 @@ app.get('/api/hard-stop-backtest', async (req, res) => {
                     actual_exit_reason: h.exit_reason || '',
                     tp_hit: parseInt(h.tp_hit || '0', 10) === 1,
                     size_usdt: parseFloat(h.size_usdt || '0'),
+                    tp_target: tpTarget,
                 });
             }
         }
@@ -4298,47 +4302,92 @@ app.get('/api/hard-stop-backtest', async (req, res) => {
                 const fees = 2 * FEE_PER_SIDE * t.size_usdt;
                 const stop_price = t.buy_price - (stopUsdt + fees) / t.qty;
 
-                // Walk klines from buy_ts to exit_ts
-                const klines = await fetchPostFillKlines(binanceSym, t.buy_ts, t.exit_ts + 60000);
+                // iter31 v3: fetch klines for BOTH the actual lifetime AND
+                // a 4-hour window starting from fill (for the "hard-stop only"
+                // simulation that doesn't terminate when bot's other rules fire).
+                const HARD_STOP_TIMEOUT_MS = 4 * 60 * 60 * 1000;  // 4h max-hold
+                const simEndMs = t.buy_ts + HARD_STOP_TIMEOUT_MS;
+                const klines = await fetchPostFillKlines(binanceSym, t.buy_ts, simEndMs);
                 if (!klines || klines.length === 0) {
                     return { ...t, stop_price, error: 'no_klines' };
                 }
-                // Find first candle low <= stop_price
+                // Trim to lifetime of actual trade (for overlay scenario)
+                const actualLifetimeKlines = klines.filter(k => parseInt(k[0], 10) <= t.exit_ts + 60000);
+
+                // ── Overlay scenario: would the stop have fired BEFORE the actual exit? ──
                 let wouldStopIdx = -1;
                 let wouldStopMs = null;
-                let wouldStopLow = null;
-                let minLow = Infinity;
-                let actualPath = [];
-                for (let j = 0; j < klines.length; j++) {
-                    const k = klines[j];
+                let minLowActual = Infinity;
+                for (let j = 0; j < actualLifetimeKlines.length; j++) {
+                    const k = actualLifetimeKlines[j];
                     const low = parseFloat(k[3]);
-                    if (low < minLow) minLow = low;
+                    if (low < minLowActual) minLowActual = low;
                     if (low <= stop_price && wouldStopIdx < 0) {
                         wouldStopIdx = j;
                         wouldStopMs = parseInt(k[0], 10);
-                        wouldStopLow = low;
                     }
                 }
                 const wouldHaveStopped = wouldStopIdx >= 0;
-                // New P&L if stopped: exit at stop_price (assume slip = 0)
-                // Net loss = -(stop price drop × qty) - fees
-                const hypoPnl = wouldHaveStopped
+                const overlayPnl = wouldHaveStopped
                     ? -((t.buy_price - stop_price) * t.qty) - fees
                     : t.actual_pnl;
-                const minPriceSeenPct = +((minLow / t.buy_price - 1) * 100).toFixed(3);
+
+                // ── Hard-stop ONLY scenario: walk full 4h window, exit at TP, stop, or timeout ──
+                // Use TP target from outcome record (target_sell_010 typically = +$0.10 net)
+                // If no TP recorded, derive from default ($0.15 net, iter43 NORMAL formula)
+                const tpPrice = t.tp_target > 0 ? t.tp_target
+                              : t.buy_price * (1 + (0.15 / t.size_usdt * 100 + 2 * FEE_PER_SIDE * 100) / 100);
+                let stopOnlyExitPrice = null;
+                let stopOnlyExitMs = null;
+                let stopOnlyReason = 'timeout';
+                for (let j = 0; j < klines.length; j++) {
+                    const k = klines[j];
+                    const high = parseFloat(k[2]);
+                    const low = parseFloat(k[3]);
+                    if (high >= tpPrice) {
+                        stopOnlyExitPrice = tpPrice;
+                        stopOnlyExitMs = parseInt(k[0], 10);
+                        stopOnlyReason = 'tp_hit';
+                        break;
+                    }
+                    if (low <= stop_price) {
+                        stopOnlyExitPrice = stop_price;
+                        stopOnlyExitMs = parseInt(k[0], 10);
+                        stopOnlyReason = 'hard_stop';
+                        break;
+                    }
+                }
+                if (stopOnlyExitPrice == null && klines.length > 0) {
+                    // 4h timeout — exit at last close
+                    stopOnlyExitPrice = parseFloat(klines[klines.length - 1][4]);
+                    stopOnlyExitMs = parseInt(klines[klines.length - 1][0], 10);
+                    stopOnlyReason = 'timeout_4h';
+                }
+                const stopOnlyPnl = stopOnlyExitPrice != null
+                    ? (stopOnlyExitPrice - t.buy_price) * t.qty - fees
+                    : 0;
+
+                const minPriceSeenPct = +((minLowActual / t.buy_price - 1) * 100).toFixed(3);
                 const stopPricePct = +((stop_price / t.buy_price - 1) * 100).toFixed(3);
 
                 return {
                     ...t,
                     stop_price: +stop_price.toFixed(10),
                     stop_pct_from_buy: stopPricePct,
-                    min_low_seen: +minLow.toFixed(10),
+                    min_low_seen: +minLowActual.toFixed(10),
                     min_low_pct_from_buy: minPriceSeenPct,
                     would_have_stopped: wouldHaveStopped,
                     would_stop_ts: wouldStopMs,
                     would_stop_min_after_fill: wouldHaveStopped ? Math.round((wouldStopMs - t.buy_ts) / 60000) : null,
-                    hypothetical_pnl: +hypoPnl.toFixed(4),
-                    pnl_delta: +(hypoPnl - t.actual_pnl).toFixed(4),
+                    hypothetical_pnl: +overlayPnl.toFixed(4),
+                    pnl_delta: +(overlayPnl - t.actual_pnl).toFixed(4),
+                    // iter31 v3: hard-stop ONLY simulation (no other rules)
+                    stop_only_exit_price: stopOnlyExitPrice != null ? +stopOnlyExitPrice.toFixed(10) : null,
+                    stop_only_exit_min_after_fill: stopOnlyExitMs != null ? Math.round((stopOnlyExitMs - t.buy_ts) / 60000) : null,
+                    stop_only_exit_reason: stopOnlyReason,
+                    stop_only_pnl: +stopOnlyPnl.toFixed(4),
+                    stop_only_vs_actual: +(stopOnlyPnl - t.actual_pnl).toFixed(4),
+                    tp_target_used: +tpPrice.toFixed(10),
                 };
             }));
             results.push(...br);
@@ -4347,6 +4396,11 @@ app.get('/api/hard-stop-backtest', async (req, res) => {
         // Aggregate
         const sumActualPnl = results.reduce((s, r) => s + (r.actual_pnl || 0), 0);
         const sumHypoPnl = results.reduce((s, r) => s + (r.hypothetical_pnl || 0), 0);
+        const sumStopOnlyPnl = results.reduce((s, r) => s + (r.stop_only_pnl || 0), 0);
+        const stopOnlyWins = results.filter(r => r.stop_only_reason === 'tp_hit' || (r.stop_only_pnl || 0) > 0).length;
+        const stopOnlyStops = results.filter(r => r.stop_only_exit_reason === 'hard_stop').length;
+        const stopOnlyTimeouts = results.filter(r => r.stop_only_exit_reason === 'timeout_4h').length;
+        const stopOnlyTpHits = results.filter(r => r.stop_only_exit_reason === 'tp_hit').length;
         const stopped = results.filter(r => r.would_have_stopped);
         const notStopped = results.filter(r => !r.would_have_stopped && !r.error);
 
@@ -4378,6 +4432,13 @@ app.get('/api/hard-stop-backtest', async (req, res) => {
                 pnl_improvement_usdt: +(sumHypoPnl - sumActualPnl).toFixed(4),
                 actual_win_rate_pct: results.length ? +(results.filter(r => r.actual_pnl > 0).length / results.length * 100).toFixed(1) : 0,
                 hypothetical_win_rate_pct: results.length ? +(results.filter(r => r.hypothetical_pnl > 0).length / results.length * 100).toFixed(1) : 0,
+                // iter31 v3: hard-stop ONLY scenario (no liquidity_death, market_stress, active2 etc.)
+                stop_only_total_pnl_usdt: +sumStopOnlyPnl.toFixed(4),
+                stop_only_vs_actual_usdt: +(sumStopOnlyPnl - sumActualPnl).toFixed(4),
+                stop_only_tp_hits: stopOnlyTpHits,
+                stop_only_hard_stops: stopOnlyStops,
+                stop_only_timeouts: stopOnlyTimeouts,
+                stop_only_win_rate_pct: results.length ? +(stopOnlyTpHits / results.length * 100).toFixed(1) : 0,
             },
             trades: results,
         });

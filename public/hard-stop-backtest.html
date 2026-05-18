@@ -142,14 +142,23 @@ async function runBacktest() {
     const s = j.summary;
     const trades = j.trades || [];
 
+    // iter31 v3: build clear recommendation based on which scenario wins
+    const scenarios = [
+      { name: 'A: Hard stop ONLY (no other rules)', pnl: s.stop_only_total_pnl_usdt, desc: `TP + $${stop} hard stop only. iter39/41/46 etc. all disabled. ${s.stop_only_tp_hits} TP / ${s.stop_only_hard_stops} stop / ${s.stop_only_timeouts} timeout.` },
+      { name: 'B: Current bot (all safety rules)', pnl: s.actual_total_pnl_usdt, desc: `What the bot actually did. ALL exit rules active: TP, breakeven, time, hard stop, liquidity_death, market_stress, active2.` },
+      { name: 'C: Current bot + tighter $' + stop + ' stop', pnl: s.hypothetical_total_pnl_usdt, desc: `Current bot rules AND a tighter $${stop} hard stop. Whichever fires first wins.` },
+    ];
+    scenarios.sort((a, b) => b.pnl - a.pnl);
+    const best = scenarios[0];
+    const worst = scenarios[scenarios.length - 1];
+
     let banner;
-    if (s.pnl_improvement_usdt > 0) {
-      banner = `<div class="ok-banner">✅ With $${stop} hard stop, would have netted <strong>${pnlStr(s.pnl_improvement_usdt)}</strong> better P&amp;L over ${days} day(s). ${s.would_have_stopped} trades stopped early.</div>`;
-    } else if (s.pnl_improvement_usdt < 0) {
-      banner = `<div class="warn-banner">⚠ With $${stop} hard stop, would have netted <strong>${pnlStr(s.pnl_improvement_usdt)}</strong> WORSE P&amp;L (stops killed winners). Loosen the stop.</div>`;
-    } else {
-      banner = `<div class="ok-banner">No P&amp;L change with $${stop} stop.</div>`;
-    }
+    const fmtPnl = v => (v >= 0 ? '+' : '') + '$' + Math.abs(v).toFixed(2);
+    banner = `<div class="${best.pnl >= 0 ? 'ok-banner' : 'warn-banner'}" style="margin-bottom: 12px;">
+      <strong>🏆 BEST: ${best.name} → ${pnlStr(best.pnl)}</strong><br>
+      <span style="font-size: 11px;">${best.desc}</span><br>
+      <span style="font-size: 11px; color: var(--muted);">Worst: ${worst.name} → ${pnlStr(worst.pnl)} (${fmtPnl(best.pnl - worst.pnl)} worse than best)</span>
+    </div>`;
 
     const tilesHtml = `
       <div class="tile-grid" style="margin-bottom: 14px;">
@@ -187,34 +196,44 @@ async function runBacktest() {
     `;
 
     const compareHtml = `
+      <h2 style="font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin: 12px 0 8px;">3-Scenario Comparison</h2>
       <div class="compare">
-        <div class="col actual">
-          <div class="head">Actual (no stop)</div>
+        <div class="col" style="border-top-color: ${best.name.startsWith('A')?'var(--good)':'var(--neutral)'};">
+          <div class="head">A — Hard stop ONLY (no other rules)</div>
+          <div class="big ${pnlClass(s.stop_only_total_pnl_usdt)}">${pnlStr(s.stop_only_total_pnl_usdt)}</div>
+          <div class="stats">
+            <div class="stat"><span class="k">TP hits</span><span class="v pos">${s.stop_only_tp_hits}</span></div>
+            <div class="stat"><span class="k">Hard stops</span><span class="v neg">${s.stop_only_hard_stops}</span></div>
+            <div class="stat"><span class="k">4h timeouts</span><span class="v mute">${s.stop_only_timeouts}</span></div>
+            <div class="stat"><span class="k">Win rate</span><span class="v">${s.stop_only_win_rate_pct}%</span></div>
+          </div>
+        </div>
+        <div class="col actual" style="border-top-color: ${best.name.startsWith('B')?'var(--good)':'var(--accent)'};">
+          <div class="head">B — Current bot (all safety rules)</div>
           <div class="big ${pnlClass(s.actual_total_pnl_usdt)}">${pnlStr(s.actual_total_pnl_usdt)}</div>
           <div class="stats">
-            <div class="stat"><span class="k">Win rate</span><span class="v">${s.actual_win_rate_pct}%</span></div>
             <div class="stat"><span class="k">Wins</span><span class="v pos">${trades.filter(t=>t.actual_pnl>0).length}</span></div>
-            <div class="stat"><span class="k">Losses</span><span class="v neg">${trades.filter(t=>t.actual_pnl<=0).length}</span></div>
+            <div class="stat"><span class="k">Losses</span><span class="v neg">${trades.filter(t=>t.actual_pnl<0).length}</span></div>
+            <div class="stat"><span class="k">Breakeven</span><span class="v mute">${trades.filter(t=>t.actual_pnl===0).length}</span></div>
+            <div class="stat"><span class="k">Win rate</span><span class="v">${s.actual_win_rate_pct}%</span></div>
           </div>
         </div>
-        <div class="col hypo">
-          <div class="head">With $${stop} hard stop</div>
+        <div class="col hypo" style="border-top-color: ${best.name.startsWith('C')?'var(--good)':'var(--warn)'};">
+          <div class="head">C — Current + $${stop} stop (hybrid)</div>
           <div class="big ${pnlClass(s.hypothetical_total_pnl_usdt)}">${pnlStr(s.hypothetical_total_pnl_usdt)}</div>
           <div class="stats">
-            <div class="stat"><span class="k">Win rate</span><span class="v">${s.hypothetical_win_rate_pct}%</span></div>
-            <div class="stat"><span class="k">Wins</span><span class="v pos">${trades.filter(t=>t.hypothetical_pnl>0).length}</span></div>
-            <div class="stat"><span class="k">Losses</span><span class="v neg">${trades.filter(t=>t.hypothetical_pnl<=0).length}</span></div>
-          </div>
-        </div>
-        <div class="col delta">
-          <div class="head">Delta</div>
-          <div class="big ${pnlClass(s.pnl_improvement_usdt)}">${pnlStr(s.pnl_improvement_usdt)}</div>
-          <div class="stats">
             <div class="stat"><span class="k">Stopped early</span><span class="v">${s.would_have_stopped}</span></div>
-            <div class="stat"><span class="k">Saved (losses)</span><span class="v pos">${pnlStr(s.stopped_saved_amount_usdt)}</span></div>
-            <div class="stat"><span class="k">Killed (wins)</span><span class="v warn">−${pnlStr(s.stopped_killed_winning_amount_usdt).replace('-','').replace('+','')}</span></div>
+            <div class="stat"><span class="k">Saved losses</span><span class="v pos">${pnlStr(s.stopped_saved_amount_usdt)}</span></div>
+            <div class="stat"><span class="k">Killed wins</span><span class="v warn">${pnlStr(s.stopped_killed_winning_amount_usdt > 0 ? -s.stopped_killed_winning_amount_usdt : 0)}</span></div>
+            <div class="stat"><span class="k">Win rate</span><span class="v">${s.hypothetical_win_rate_pct}%</span></div>
           </div>
         </div>
+      </div>
+      <div class="hint" style="margin: 10px 0 14px;">
+        <strong>How to choose:</strong> Pick the scenario with highest P&amp;L.
+        <strong>A</strong> = simplest (only TP + hard stop, no smart exits — risky in flash crashes).
+        <strong>B</strong> = current (all safety rules including hard 1.5% stop).
+        <strong>C</strong> = current rules PLUS your tighter $${stop} hard stop (whichever fires first).
       </div>
     `;
 
