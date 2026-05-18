@@ -979,9 +979,17 @@ const DEFAULT_TRADING_CONFIG = {
     fastScalpMode: true,
     maxHoldSeconds: 3600,
     marketExitOnTimeout: true,
-    // Trend-reversal exit: True default for safety on Redis wipe, but
-    // operator runs with False (most "panic exits" hit TP later).
-    trendReversalExitEnabled: true,
+    // iter32 (2026-05-18): HARD-STOP-ONLY MODE.
+    // Backtest of 47 trades over 7 days showed disabling all secondary
+    // exit rules (liquidity_death, market_stress, active2, breakeven,
+    // trailing TP, trend reversal) and relying solely on:
+    //   • iter43 TP at avg (+$0.15 net target)
+    //   • iter37 hard stop at $0.40 USDT loss (= 0.833% on $48 leg)
+    //   • 4h time exit as final fallback
+    // produced +$0.35 net P&L vs current bot's −$5.96 (= $6.31 swing).
+    // Secondary rules were exiting trades early at small losses when,
+    // left alone, they would have hit TP. See /hard-stop-backtest.html.
+    trendReversalExitEnabled: false,    // iter32: was true
     // 2026-05-12 iter 15: default true (was false). Aligns with the backend
     // dataclass default. The dashboard form only POSTs a subset of fields,
     // so this default fills in for the rest when the Node frontend merges.
@@ -1028,6 +1036,23 @@ const DEFAULT_TRADING_CONFIG = {
     ladderBuy1UseMarketOrder: true,
     ladderBuy1OffsetPct: 0.15,        // 0 = market; >0 = LIMIT at signal × (1-X%) — iter 12 default
     ladderCooldownSeconds: 14400,    // 4h per-coin cooldown after a ladder closes
+
+    // iter32 (2026-05-18): HARD-STOP-ONLY exit configuration.
+    // Operator request — disable all secondary exit rules and rely solely
+    // on TP + $0.40 USDT hard stop + 4h time fallback. Backtest showed this
+    // beats current (all rules active) by ~$6/week.
+    // For $48 leg: 0.833% drop = $0.40 loss (excl. fees). Fees push real loss
+    // to ~$0.47 at trigger. If Buy 2 also fills ($96 total), 0.833% = $0.80
+    // loss before fees.
+    ladderHardStopFromAvgEnabled: true,
+    ladderHardStopFromAvgPct: 0.833,         // iter32: was 1.5 (= $0.72/leg)
+    liquidityDeathExitEnabled: false,        // iter32: was true (iter39)
+    active2MonitorEnabled: false,            // iter32: was true (iter41)
+    marketStressExitEnabled: false,          // iter32: was true (iter46)
+    ladderBreakevenExitEnabled: false,       // iter32: was true (iter14 BE)
+    ladderTrailingTpEnabled: false,          // iter32: was true (iter14 trail)
+    ladderTimeExitEnabled: true,             // iter32: KEPT as 4h fallback
+    ladderMaxHoldSeconds: 14400,             // 4h hard time cap
     metricsEnabled: true,
 
     // iter 17 fe (2026-05-15): Pattern Bot config defaults.
