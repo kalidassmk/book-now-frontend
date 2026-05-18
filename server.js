@@ -4271,6 +4271,10 @@ app.get('/api/hard-stop-backtest', async (req, res) => {
             return res.status(400).json({ error: 'stop_usdt must be positive number' });
         }
         const days = Math.max(1, Math.min(parseInt(req.query.days || '7', 10), 30));
+        // iter32 v2: optional leg size + TP target overrides.
+        // If absent, uses each trade's actual recorded size_usdt (typically $48).
+        const overrideLegSize = req.query.leg_size_usdt ? parseFloat(req.query.leg_size_usdt) : null;
+        const overrideTpUsdt = req.query.tp_usdt ? parseFloat(req.query.tp_usdt) : null;
         const FEE_PER_SIDE = 0.00075;
         const today = new Date();
         const dates = [];
@@ -4321,11 +4325,13 @@ app.get('/api/hard-stop-backtest', async (req, res) => {
             const batch = trades.slice(i, i + 3);
             const br = await Promise.all(batch.map(async (t) => {
                 const binanceSym = t.symbol.replace('/', '');
-                // Stop trigger price: where loss equals stopUsdt
-                // PnL = (price - buy_price) * qty - 2*fee*size
-                // For loss = -stopUsdt: price = buy_price - (stopUsdt + 2*fee*size) / qty
-                const fees = 2 * FEE_PER_SIDE * t.size_usdt;
-                const stop_price = t.buy_price - (stopUsdt + fees) / t.qty;
+                // iter32 v2: scale qty/fees/TP if leg_size override is set.
+                // Allows "what if I traded $500 instead of $48" simulation.
+                const effectiveLegSize = overrideLegSize ?? t.size_usdt;
+                const effectiveQty = overrideLegSize ? (overrideLegSize / t.buy_price) : t.qty;
+                const fees = 2 * FEE_PER_SIDE * effectiveLegSize;
+                // Stop trigger price: where loss equals stopUsdt + fees
+                const stop_price = t.buy_price - (stopUsdt + fees) / effectiveQty;
 
                 // iter31 v3: fetch klines for BOTH the actual lifetime AND
                 // a 4-hour window starting from fill (for the "hard-stop only"
@@ -4354,14 +4360,22 @@ app.get('/api/hard-stop-backtest', async (req, res) => {
                 }
                 const wouldHaveStopped = wouldStopIdx >= 0;
                 const overlayPnl = wouldHaveStopped
-                    ? -((t.buy_price - stop_price) * t.qty) - fees
-                    : t.actual_pnl;
+                    ? -((t.buy_price - stop_price) * effectiveQty) - fees
+                    : t.actual_pnl * (effectiveLegSize / Math.max(t.size_usdt, 1));  // scale legacy P&L if leg overridden
 
                 // ── Hard-stop ONLY scenario: walk full 4h window, exit at TP, stop, or timeout ──
-                // Use TP target from outcome record (target_sell_010 typically = +$0.10 net)
-                // If no TP recorded, derive from default ($0.15 net, iter43 NORMAL formula)
-                const tpPrice = t.tp_target > 0 ? t.tp_target
-                              : t.buy_price * (1 + (0.15 / t.size_usdt * 100 + 2 * FEE_PER_SIDE * 100) / 100);
+                // If tp_usdt override or leg_size override → recompute TP price.
+                // Otherwise use TP target from outcome record (target_sell_010).
+                let tpPrice;
+                if (overrideTpUsdt != null || overrideLegSize != null) {
+                    const tpNet = overrideTpUsdt ?? 0.15;
+                    // TP gross = TP net + fees on the leg
+                    const tpGrossPct = (tpNet + 2 * FEE_PER_SIDE * effectiveLegSize) / effectiveLegSize * 100;
+                    tpPrice = t.buy_price * (1 + tpGrossPct / 100);
+                } else {
+                    tpPrice = t.tp_target > 0 ? t.tp_target
+                                : t.buy_price * (1 + (0.15 / t.size_usdt * 100 + 2 * FEE_PER_SIDE * 100) / 100);
+                }
                 let stopOnlyExitPrice = null;
                 let stopOnlyExitMs = null;
                 let stopOnlyReason = 'timeout';
@@ -4389,7 +4403,7 @@ app.get('/api/hard-stop-backtest', async (req, res) => {
                     stopOnlyReason = 'timeout_4h';
                 }
                 const stopOnlyPnl = stopOnlyExitPrice != null
-                    ? (stopOnlyExitPrice - t.buy_price) * t.qty - fees
+                    ? (stopOnlyExitPrice - t.buy_price) * effectiveQty - fees
                     : 0;
 
                 const minPriceSeenPct = +((minLowActual / t.buy_price - 1) * 100).toFixed(3);
