@@ -1035,7 +1035,11 @@ const DEFAULT_TRADING_CONFIG = {
     // -$5.96). 24% of trades reach $3 in 7d. Median TP=$3 winner had -$2.64
     // drawdown along the way (need patience). Worst 7d drawdown -$11.50,
     // all recoverable. User wants ONLY net profit, willing to wait 1 week.
-    ladderTargetNetProfitUsdt: 3.00,
+    // iter34 (2026-05-19): $3.00 → $27.00 MOONSHOT TP.
+    // Past 7d: AI/USDT hit +$26.64 in 1.3d; CGPT +$12.91 in 1.2d.
+    // Strategy: place limit sell at +$27 immediately after buy; cancel
+    // and market-sell if not filled within 36.9h. -25% hard stop stays.
+    ladderTargetNetProfitUsdt: 27.00,
     ladderFeeRatePerSide: 0.00075,  // 0.075 % (BNB-fees ON); set to 0.001 if OFF
     ladderHardStopBelowBuy3Pct: 1.0,
     ladderBuy1UseMarketOrder: true,
@@ -1058,8 +1062,18 @@ const DEFAULT_TRADING_CONFIG = {
     marketStressExitEnabled: false,          // iter32: was true (iter46)
     ladderBreakevenExitEnabled: false,       // iter32: was true (iter14 BE)
     ladderTrailingTpEnabled: false,          // iter32: was true (iter14 trail)
-    ladderTimeExitEnabled: true,             // iter33: KEPT — 7-day fallback exit
-    ladderMaxHoldSeconds: 604800,            // iter33: was 14400 (4h) → 604800 (7 days)
+    ladderTimeExitEnabled: true,             // iter33: KEPT — fallback exit
+    ladderMaxHoldSeconds: 172800,            // iter34: was 604800 (7d) → 172800 (2 days backstop)
+    // iter34 (2026-05-19): MOONSHOT — primary forced market sell fires at 36.9h
+    // (132,840s). ladderMaxHoldSeconds=2d above is the absolute safety backstop;
+    // this 36.9h timer is the real cutoff. Cancels any unfilled $27 limit TP first.
+    iter34LimitSellMoonshotActive: true,
+    iter34ForceMarketSellAfterSeconds: 132840,   // 36.9h = 36h54m
+    iter34BinanceOrphanReconcileEnabled: true,   // on scalper start: scan Binance
+                                                 // balances; if buy_ts (from trades)
+                                                 // older than 36.9h → market sell.
+                                                 // Survives Redis flush / restart.
+    iter34AppliedAt: '2026-05-19',
     metricsEnabled: true,
 
     // iter 17 fe (2026-05-15): Pattern Bot config defaults.
