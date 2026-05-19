@@ -965,7 +965,7 @@ const CONFIG_KEY = 'TRADING_CONFIG';
 // 2026-05-10: Option B sizing — $6 buys / +1% TP / -0.65% limit-buy /
 // $0.06 stop. ≈$0.05 NET per win after Binance round-trip fees.
 const DEFAULT_TRADING_CONFIG = {
-    autoBuyEnabled: false,
+    autoBuyEnabled: false,            // iter36: default paused. BTC monitor auto-resumes when bullish.
     // 2026-05-12 iter 15: $48 default to match ladderBuy1/2SizeUsdt.
     buyAmountUsdt: 48.0,
     // 2026-05-11 iter 4: TP 1.0 → 0.6 % → net ~$0.05 per $12 leg.
@@ -1082,6 +1082,28 @@ const DEFAULT_TRADING_CONFIG = {
     iter35TpMinPct: 1.0,                 // floor: $0.48 net min
     iter35TpMaxPct: 25.0,                // ceiling: $12.00 net max
     iter35AppliedAt: '2026-05-19',
+    // iter36 (2026-05-19): BTC TREND AUTO-PAUSE.
+    // Past 7d analysis showed 14% of buys were "immediate dumpers" — coins that
+    // dropped 10%+ within 48h of buy, costing -$19.73. Most coincided with
+    // bearish BTC trend. iter36 pauses autoBuy when BTC 24h trend is bearish,
+    // auto-resumes when trend turns bullish.
+    //
+    // Monitor: ~/booknow-cron/iter36_btc_monitor_run.sh (every 10 min)
+    // Reads BTC/USDT 4h klines, computes 24h trend %, decides:
+    //   trend < -0.5%  → BEARISH → autoBuyEnabled = false
+    //   trend >  0.0%  → BULLISH → autoBuyEnabled = true
+    //   else           → NEUTRAL → keep current state
+    iter36BtcTrendAutoPauseEnabled: true,
+    iter36BtcTrendBearishThresholdPct: -0.5,
+    iter36BtcTrendBullishThresholdPct: 0.0,
+    iter36BtcTrendLookbackHours: 24,
+    iter36AppliedAt: '2026-05-19',
+    // Status fields populated by the cron monitor:
+    iter36BtcTrendStatus: 'NEUTRAL',           // BULLISH | BEARISH | NEUTRAL | PAUSED_INITIAL
+    iter36BtcTrendLastPct: 0.0,
+    iter36BtcTrendLastCheckTs: 0,
+    iter36BtcTrendCurrentPrice: 0,
+    iter36PauseReason: '',
     metricsEnabled: true,
 
     // iter 17 fe (2026-05-15): Pattern Bot config defaults.
