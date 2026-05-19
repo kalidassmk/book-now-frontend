@@ -1036,9 +1036,8 @@ const DEFAULT_TRADING_CONFIG = {
     // drawdown along the way (need patience). Worst 7d drawdown -$11.50,
     // all recoverable. User wants ONLY net profit, willing to wait 1 week.
     // iter34 (2026-05-19): $3.00 → $27.00 MOONSHOT TP.
-    // Past 7d: AI/USDT hit +$26.64 in 1.3d; CGPT +$12.91 in 1.2d.
-    // Strategy: place limit sell at +$27 immediately after buy; cancel
-    // and market-sell if not filled within 36.9h. -25% hard stop stays.
+    // iter35 (2026-05-19): SUPERSEDED by peak-based dynamic TP (see iter35* flags).
+    // ladderTargetNetProfitUsdt kept as fallback only when iter35PeakBasedTpEnabled=false.
     ladderTargetNetProfitUsdt: 27.00,
     ladderFeeRatePerSide: 0.00075,  // 0.075 % (BNB-fees ON); set to 0.001 if OFF
     ladderHardStopBelowBuy3Pct: 1.0,
@@ -1056,24 +1055,33 @@ const DEFAULT_TRADING_CONFIG = {
     // Median drawdown for winning trades was -$2.64; worst was -$11.50.
     // Need patience — winners often dip BIG before reaching peak.
     ladderHardStopFromAvgEnabled: true,
-    ladderHardStopFromAvgPct: 25.0,          // iter33: was 0.833 (catastrophic only at -25%)
+    ladderHardStopFromAvgPct: 20.0,          // iter35: was 25.0 (catastrophic only at -20% = -$9.60/leg)
     liquidityDeathExitEnabled: false,        // iter32: was true (iter39)
     active2MonitorEnabled: false,            // iter32: was true (iter41)
     marketStressExitEnabled: false,          // iter32: was true (iter46)
     ladderBreakevenExitEnabled: false,       // iter32: was true (iter14 BE)
     ladderTrailingTpEnabled: false,          // iter32: was true (iter14 trail)
     ladderTimeExitEnabled: true,             // iter33: KEPT — fallback exit
-    ladderMaxHoldSeconds: 172800,            // iter34: was 604800 (7d) → 172800 (2 days backstop)
-    // iter34 (2026-05-19): MOONSHOT — primary forced market sell fires at 36.9h
-    // (132,840s). ladderMaxHoldSeconds=2d above is the absolute safety backstop;
-    // this 36.9h timer is the real cutoff. Cancels any unfilled $27 limit TP first.
-    iter34LimitSellMoonshotActive: true,
-    iter34ForceMarketSellAfterSeconds: 132840,   // 36.9h = 36h54m
-    iter34BinanceOrphanReconcileEnabled: true,   // on scalper start: scan Binance
-                                                 // balances; if buy_ts (from trades)
-                                                 // older than 36.9h → market sell.
-                                                 // Survives Redis flush / restart.
+    ladderMaxHoldSeconds: 172800,            // iter34/iter35: 48h max hold
+    // iter34 (2026-05-19): MOONSHOT — superseded by iter35 peak-based TP.
+    iter34LimitSellMoonshotActive: false,        // iter35: superseded
+    iter34ForceMarketSellAfterSeconds: 172800,   // iter35: was 132840 (36.9h) → 172800 (48h)
+    iter34BinanceOrphanReconcileEnabled: true,   // orphan sweep: still active, sells coins
+                                                 // bought >48h ago after Redis flush
     iter34AppliedAt: '2026-05-19',
+    // iter35 (2026-05-19): PEAK-BASED ADAPTIVE TP.
+    // Replaces fixed $27 with per-coin dynamic TP from 7d kline history.
+    // Algorithm: take 50th percentile (median) of "max-pump-in-next-24h" across
+    // past 7d 1h candles, multiply by 0.40, clamp to [1.0%, 25.0%].
+    // Backtest on past 7 days: 66.7% win rate (52/78), -$29.94 net.
+    // Hard stop: -20% (-$9.60 on $48 leg). Max hold: 48h.
+    // Max loss per trade: catastrophic stop $9.60 OR negative time-exit drift.
+    iter35PeakBasedTpEnabled: true,
+    iter35PeakPercentile: 50,            // use median of pump distribution
+    iter35PeakFactor: 0.40,              // TP = typical_pump × 0.40
+    iter35TpMinPct: 1.0,                 // floor: $0.48 net min
+    iter35TpMaxPct: 25.0,                // ceiling: $12.00 net max
+    iter35AppliedAt: '2026-05-19',
     metricsEnabled: true,
 
     // iter 17 fe (2026-05-15): Pattern Bot config defaults.
