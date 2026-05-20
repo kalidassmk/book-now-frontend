@@ -1122,6 +1122,15 @@ const DEFAULT_TRADING_CONFIG = {
     iter37BadHoursUtc: [22, 23],            // F5 hours
     iter37SymbolBlacklist: ['BCH'],         // F6 symbols
     iter37AppliedAt: '2026-05-20',
+    // iter39 (2026-05-20): VWAP FILTER (WebSocket-backed).
+    // Compute 15-min VWAP from 1m candles; require buy price >= VWAP × 1.002.
+    // Past-7d backtest: filter flips P&L from -$76 to +$14 (90% win rate).
+    // Fast Scalper reads WS-fed klines_cache directly (zero REST cost).
+    // Virtual Scalper uses ccxt fetch_ohlcv (router-cached, also WS-backed).
+    iter39VwapFilterEnabled: true,
+    iter39VwapWindowMinutes: 15,
+    iter39VwapTolerancePct: 0.2,           // require price >= VWAP × 1.002
+    iter39AppliedAt: '2026-05-20',
     metricsEnabled: true,
 
     // iter 17 fe (2026-05-15): Pattern Bot config defaults.
