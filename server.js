@@ -1104,6 +1104,19 @@ const DEFAULT_TRADING_CONFIG = {
     iter36BtcTrendLastCheckTs: 0,
     iter36BtcTrendCurrentPrice: 0,
     iter36PauseReason: '',
+    // iter37 (2026-05-20): DATA-DRIVEN ENTRY FILTERS.
+    // Backtest showed F3 (skip deep-retraced coins) alone flips past-7d P&L
+    // from -$21.84 to +$0.30 with 83.3% win rate. Combined filters keep ~45%
+    // of trades but turn algorithm near break-even/profitable.
+    //
+    // F3: reject if features['from_24h_high_pct'] < -1.5 (falling knife)
+    // F5: reject if buy hour is 22 or 23 UTC (worst-performing window)
+    // F6: reject blacklisted symbols (BCH lost on every past trade)
+    iter37EntryFiltersEnabled: true,
+    iter37MaxRetraceFrom24hHighPct: -1.5,   // F3 threshold
+    iter37BadHoursUtc: [22, 23],            // F5 hours
+    iter37SymbolBlacklist: ['BCH'],         // F6 symbols
+    iter37AppliedAt: '2026-05-20',
     metricsEnabled: true,
 
     // iter 17 fe (2026-05-15): Pattern Bot config defaults.
