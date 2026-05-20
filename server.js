@@ -967,12 +967,12 @@ const CONFIG_KEY = 'TRADING_CONFIG';
 const DEFAULT_TRADING_CONFIG = {
     autoBuyEnabled: false,            // iter36: default paused. BTC monitor auto-resumes when bullish.
     // 2026-05-12 iter 15: $48 default to match ladderBuy1/2SizeUsdt.
-    buyAmountUsdt: 50.0,            // iter41 (2026-05-20): operator request $50 leg
+    buyAmountUsdt: 96.0,            // iter41 v3 (2026-05-20): operator updated to $96 leg
     // 2026-05-11 iter 4: TP 1.0 → 0.6 % → net ~$0.05 per $12 leg.
     // iter38 (2026-05-20): profitAmountUsdt synced to 0.15 to match
     // ladderTargetNetProfitUsdt — legacy non-ladder path uses this.
     profitPct: 0.6,
-    profitAmountUsdt: 0.15,
+    profitAmountUsdt: 2.00,    // iter41 v3 (2026-05-20): sync with ladderTargetNetProfitUsdt
     // 2026-05-11 iter 3: tighter -0.30% offset (was 0.65) for higher fill rate.
     limitBuyOffsetPct: 0.30,
     tslPct: 2.0,
@@ -1023,7 +1023,7 @@ const DEFAULT_TRADING_CONFIG = {
     singleCoinModeEnabled: false,   // legacy; superseded by maxConcurrentLadders
     // 2026-05-12 iter 15: $50 → $48/leg (operator request — $96/ladder
     // fits $100 wallet with 3% funds margin and ~$3 headroom).
-    ladderBuy1SizeUsdt: 50.0,       // iter41 (2026-05-20): operator request $50 sniper leg
+    ladderBuy1SizeUsdt: 96.0,       // iter41 v3 (2026-05-20): operator request $96 leg
     ladderBuy2SizeUsdt: 0.0,        // iter41: disable Buy 2 averaging (pure sniper mode)
     ladderBuy3SizeUsdt: 0.0,
     ladderBuy2OffsetPct: 0.5,
@@ -1039,10 +1039,11 @@ const DEFAULT_TRADING_CONFIG = {
     // all recoverable. User wants ONLY net profit, willing to wait 1 week.
     // iter34 (2026-05-19): $3.00 → $27.00 MOONSHOT TP.
     // iter35 (2026-05-19): SUPERSEDED by peak-based dynamic TP (see iter35* flags).
-    // iter38 (2026-05-20): operator override → fixed +$0.15 net TP. iter35 disabled.
-    //   $0.15 net + $0.072 fees = $0.222 gross on $48 leg = +0.463% price move needed.
-    //   Very tight TP — fills quickly on minor uptick. Small wins, frequent fills.
-    ladderTargetNetProfitUsdt: 0.15,
+    // iter38 (2026-05-20): $0.15 net TP — superseded.
+    // iter41 v3 (2026-05-20): $2.00 net TP after iter41 backtest confirmed all
+    //   3 sniped winners reached >+5% gain; TP=$2 captures 100% with no SL hits.
+    //   $2.00 net + $0.144 fees = $2.144 gross on $96 leg = +2.233% needed.
+    ladderTargetNetProfitUsdt: 2.00,
     ladderFeeRatePerSide: 0.00075,  // 0.075 % (BNB-fees ON); set to 0.001 if OFF
     ladderHardStopBelowBuy3Pct: 1.0,
     ladderBuy1UseMarketOrder: true,
@@ -1158,7 +1159,7 @@ const DEFAULT_TRADING_CONFIG = {
                                         //   Deeper drops are treated as falling-knife crashes, not entries.
                                         //   Also re-runs VWAP filter at snipe moment.
     iter41WatchWindowMinutes: 10,       // expire watch entry after this
-    iter41LegSizeUsdt: 50.0,            // $50 per snipe buy (user spec)
+    iter41LegSizeUsdt: 96.0,            // iter41 v3: $96 per snipe buy
     iter41AppliedAt: '2026-05-20',
     iter41V2AppliedAt: '2026-05-20',
     metricsEnabled: true,
