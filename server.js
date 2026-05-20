@@ -1060,7 +1060,9 @@ const DEFAULT_TRADING_CONFIG = {
     // Median drawdown for winning trades was -$2.64; worst was -$11.50.
     // Need patience — winners often dip BIG before reaching peak.
     ladderHardStopFromAvgEnabled: true,
-    ladderHardStopFromAvgPct: 20.0,          // iter35: was 25.0 (catastrophic only at -20% = -$9.60/leg)
+    ladderHardStopFromAvgPct: 0.45,          // iter41 v3 (2026-05-20): tight stop per operator request
+                                              // = -$0.58 max loss on $96 leg (was -$19.34 at -20%)
+    emergencyStopLossPct: 0.60,              // iter41 v3: -$0.72 emergency fail-safe (config flag)
     liquidityDeathExitEnabled: false,        // iter32: was true (iter39)
     active2MonitorEnabled: false,            // iter32: was true (iter41)
     marketStressExitEnabled: false,          // iter32: was true (iter46)
@@ -1138,11 +1140,12 @@ const DEFAULT_TRADING_CONFIG = {
     // Median ATR% was 1.34% → typical dynamic stop ≈ 3.35% (much tighter than -20%).
     // Volatile coins get wider stops; stable coins get tighter stops.
     // Both scalpers compute ATR from Binance 1h klines (sync ccxt, cached 1h per symbol).
-    iter40AtrDynamicStopEnabled: true,
-    iter40AtrPeriod: 14,                   // Wilder smoothed period
-    iter40AtrMultiplier: 2.5,              // stop% = atr% × multiplier
-    iter40AtrMinStopPct: 3.0,              // floor (don't go tighter than 3%)
-    iter40AtrMaxStopPct: 20.0,             // ceiling (cap at the old fixed value)
+    // iter40 ATR-dynamic stop DISABLED by iter41 v3 — operator wants fixed tight stop instead
+    iter40AtrDynamicStopEnabled: false,
+    iter40AtrPeriod: 14,
+    iter40AtrMultiplier: 2.5,
+    iter40AtrMinStopPct: 3.0,
+    iter40AtrMaxStopPct: 20.0,
     iter40AppliedAt: '2026-05-20',
     // iter41 (2026-05-20): PATIENT DEEP-DIP SNIPER.
     // Instead of buying immediately on signal, WAIT and watch for the price
