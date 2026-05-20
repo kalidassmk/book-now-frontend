@@ -967,7 +967,7 @@ const CONFIG_KEY = 'TRADING_CONFIG';
 const DEFAULT_TRADING_CONFIG = {
     autoBuyEnabled: false,            // iter36: default paused. BTC monitor auto-resumes when bullish.
     // 2026-05-12 iter 15: $48 default to match ladderBuy1/2SizeUsdt.
-    buyAmountUsdt: 48.0,
+    buyAmountUsdt: 50.0,            // iter41 (2026-05-20): operator request $50 leg
     // 2026-05-11 iter 4: TP 1.0 → 0.6 % → net ~$0.05 per $12 leg.
     // iter38 (2026-05-20): profitAmountUsdt synced to 0.15 to match
     // ladderTargetNetProfitUsdt — legacy non-ladder path uses this.
@@ -1023,8 +1023,8 @@ const DEFAULT_TRADING_CONFIG = {
     singleCoinModeEnabled: false,   // legacy; superseded by maxConcurrentLadders
     // 2026-05-12 iter 15: $50 → $48/leg (operator request — $96/ladder
     // fits $100 wallet with 3% funds margin and ~$3 headroom).
-    ladderBuy1SizeUsdt: 48.0,
-    ladderBuy2SizeUsdt: 48.0,
+    ladderBuy1SizeUsdt: 50.0,       // iter41 (2026-05-20): operator request $50 sniper leg
+    ladderBuy2SizeUsdt: 0.0,        // iter41: disable Buy 2 averaging (pure sniper mode)
     ladderBuy3SizeUsdt: 0.0,
     ladderBuy2OffsetPct: 0.5,
     ladderBuy3OffsetPct: 1.0,
@@ -1143,6 +1143,19 @@ const DEFAULT_TRADING_CONFIG = {
     iter40AtrMinStopPct: 3.0,              // floor (don't go tighter than 3%)
     iter40AtrMaxStopPct: 20.0,             // ceiling (cap at the old fixed value)
     iter40AppliedAt: '2026-05-20',
+    // iter41 (2026-05-20): PATIENT DEEP-DIP SNIPER.
+    // Instead of buying immediately on signal, WAIT and watch for the price
+    // to dip by N% within M minutes. Only buy if dip happens (= cheaper entry).
+    // Otherwise skip the trade entirely.
+    // Past-7d backtest with dip=0.50%, TP=$1.00, SL=-0.45%, watch=10min:
+    //   12 trades fired (vs 58 baseline), net +$0.92 (vs -$1.78 baseline)
+    //   First profitable configuration found across all iterations.
+    // Watch state stored in Redis ITER41:WATCH:VIRTUAL / ITER41:WATCH:FAST hashes.
+    iter41PatientSniperEnabled: true,
+    iter41DipTriggerPct: 0.50,          // require -0.50% dip from signal price
+    iter41WatchWindowMinutes: 10,       // expire watch entry after this
+    iter41LegSizeUsdt: 50.0,            // $50 per snipe buy (user spec)
+    iter41AppliedAt: '2026-05-20',
     metricsEnabled: true,
 
     // iter 17 fe (2026-05-15): Pattern Bot config defaults.
