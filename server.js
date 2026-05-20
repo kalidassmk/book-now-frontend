@@ -1131,6 +1131,18 @@ const DEFAULT_TRADING_CONFIG = {
     iter39VwapWindowMinutes: 15,
     iter39VwapTolerancePct: 0.2,           // require price >= VWAP × 1.002
     iter39AppliedAt: '2026-05-20',
+    // iter40 (2026-05-20): ATR DYNAMIC STOP LOSS.
+    // Per-coin stop % = ATR(14, 1h) / price × 100 × multiplier, clamped to [min, max].
+    // Past-7d backtest: ATR×2.5 clamp[3-20%] beat fixed -20% by +$31.68.
+    // Median ATR% was 1.34% → typical dynamic stop ≈ 3.35% (much tighter than -20%).
+    // Volatile coins get wider stops; stable coins get tighter stops.
+    // Both scalpers compute ATR from Binance 1h klines (sync ccxt, cached 1h per symbol).
+    iter40AtrDynamicStopEnabled: true,
+    iter40AtrPeriod: 14,                   // Wilder smoothed period
+    iter40AtrMultiplier: 2.5,              // stop% = atr% × multiplier
+    iter40AtrMinStopPct: 3.0,              // floor (don't go tighter than 3%)
+    iter40AtrMaxStopPct: 20.0,             // ceiling (cap at the old fixed value)
+    iter40AppliedAt: '2026-05-20',
     metricsEnabled: true,
 
     // iter 17 fe (2026-05-15): Pattern Bot config defaults.
