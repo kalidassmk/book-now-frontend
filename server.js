@@ -1037,8 +1037,10 @@ const DEFAULT_TRADING_CONFIG = {
     // all recoverable. User wants ONLY net profit, willing to wait 1 week.
     // iter34 (2026-05-19): $3.00 → $27.00 MOONSHOT TP.
     // iter35 (2026-05-19): SUPERSEDED by peak-based dynamic TP (see iter35* flags).
-    // ladderTargetNetProfitUsdt kept as fallback only when iter35PeakBasedTpEnabled=false.
-    ladderTargetNetProfitUsdt: 27.00,
+    // iter38 (2026-05-20): operator override → fixed +$0.15 net TP. iter35 disabled.
+    //   $0.15 net + $0.072 fees = $0.222 gross on $48 leg = +0.463% price move needed.
+    //   Very tight TP — fills quickly on minor uptick. Small wins, frequent fills.
+    ladderTargetNetProfitUsdt: 0.15,
     ladderFeeRatePerSide: 0.00075,  // 0.075 % (BNB-fees ON); set to 0.001 if OFF
     ladderHardStopBelowBuy3Pct: 1.0,
     ladderBuy1UseMarketOrder: true,
@@ -1076,11 +1078,12 @@ const DEFAULT_TRADING_CONFIG = {
     // Backtest on past 7 days: 66.7% win rate (52/78), -$29.94 net.
     // Hard stop: -20% (-$9.60 on $48 leg). Max hold: 48h.
     // Max loss per trade: catastrophic stop $9.60 OR negative time-exit drift.
-    iter35PeakBasedTpEnabled: true,
-    iter35PeakPercentile: 50,            // use median of pump distribution
-    iter35PeakFactor: 0.40,              // TP = typical_pump × 0.40
-    iter35TpMinPct: 1.0,                 // floor: $0.48 net min
-    iter35TpMaxPct: 25.0,                // ceiling: $12.00 net max
+    // iter35 DISABLED by iter38 (2026-05-20): operator wants fixed +$0.15 TP instead.
+    iter35PeakBasedTpEnabled: false,
+    iter35PeakPercentile: 50,
+    iter35PeakFactor: 0.40,
+    iter35TpMinPct: 1.0,
+    iter35TpMaxPct: 25.0,
     iter35AppliedAt: '2026-05-19',
     // iter36 (2026-05-19): BTC TREND AUTO-PAUSE.
     // Past 7d analysis showed 14% of buys were "immediate dumpers" — coins that
