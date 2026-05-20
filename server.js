@@ -969,8 +969,10 @@ const DEFAULT_TRADING_CONFIG = {
     // 2026-05-12 iter 15: $48 default to match ladderBuy1/2SizeUsdt.
     buyAmountUsdt: 48.0,
     // 2026-05-11 iter 4: TP 1.0 → 0.6 % → net ~$0.05 per $12 leg.
+    // iter38 (2026-05-20): profitAmountUsdt synced to 0.15 to match
+    // ladderTargetNetProfitUsdt — legacy non-ladder path uses this.
     profitPct: 0.6,
-    profitAmountUsdt: 0.0,
+    profitAmountUsdt: 0.15,
     // 2026-05-11 iter 3: tighter -0.30% offset (was 0.65) for higher fill rate.
     limitBuyOffsetPct: 0.30,
     tslPct: 2.0,
