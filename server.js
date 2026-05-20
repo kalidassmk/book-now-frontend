@@ -1152,10 +1152,15 @@ const DEFAULT_TRADING_CONFIG = {
     //   First profitable configuration found across all iterations.
     // Watch state stored in Redis ITER41:WATCH:VIRTUAL / ITER41:WATCH:FAST hashes.
     iter41PatientSniperEnabled: true,
-    iter41DipTriggerPct: 0.50,          // require -0.50% dip from signal price
+    iter41DipTriggerPct: 0.50,          // require -0.50% dip from signal price (LOWER bound)
+    iter41MaxDipPct: 2.0,               // iter41 v2: ABANDON if dip > -2.0% (UPPER bound — crash guard)
+                                        //   Buys are sniped only when -0.5% <= dip <= -2.0%
+                                        //   Deeper drops are treated as falling-knife crashes, not entries.
+                                        //   Also re-runs VWAP filter at snipe moment.
     iter41WatchWindowMinutes: 10,       // expire watch entry after this
     iter41LegSizeUsdt: 50.0,            // $50 per snipe buy (user spec)
     iter41AppliedAt: '2026-05-20',
+    iter41V2AppliedAt: '2026-05-20',
     metricsEnabled: true,
 
     // iter 17 fe (2026-05-15): Pattern Bot config defaults.
