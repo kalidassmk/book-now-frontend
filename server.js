@@ -1162,8 +1162,8 @@ const DEFAULT_TRADING_CONFIG = {
     //   2. DIP_CONFIRMED: wait 10s, track lowest price
     //   3. After 10s: if price > dip_low (reversed UP) → re-check VWAP → SNIPE
     //                 else → ABANDON (no reversal)
-    iter41DipTriggerPct: 0.30,          // MIN dip — start tracking (was 0.50)
-    iter41MaxDipPct: 0.65,              // MAX dip — ABANDON as crash (was 2.0)
+    iter41DipTriggerPct: 0.20,          // iter41 v7: lowered from 0.30 → 0.20 (more triggers)
+    iter41MaxDipPct: 0.65,              // MAX dip — ABANDON as crash
     iter41ConfirmationSeconds: 10,      // NEW: wait this long for reversal
     iter41WatchWindowMinutes: 10,       // total time before expiring (unchanged)
     iter41LegSizeUsdt: 96.0,
