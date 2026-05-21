@@ -972,7 +972,7 @@ const DEFAULT_TRADING_CONFIG = {
     // iter38 (2026-05-20): profitAmountUsdt synced to 0.15 to match
     // ladderTargetNetProfitUsdt — legacy non-ladder path uses this.
     profitPct: 0.6,
-    profitAmountUsdt: 2.00,    // iter41 v3 (2026-05-20): sync with ladderTargetNetProfitUsdt
+    profitAmountUsdt: 0.50,    // iter41 v4 (2026-05-21): synced with ladderTargetNetProfitUsdt (was 2.00)
     // 2026-05-11 iter 3: tighter -0.30% offset (was 0.65) for higher fill rate.
     limitBuyOffsetPct: 0.30,
     tslPct: 2.0,
@@ -1038,12 +1038,13 @@ const DEFAULT_TRADING_CONFIG = {
     // drawdown along the way (need patience). Worst 7d drawdown -$11.50,
     // all recoverable. User wants ONLY net profit, willing to wait 1 week.
     // iter34 (2026-05-19): $3.00 → $27.00 MOONSHOT TP.
-    // iter35 (2026-05-19): SUPERSEDED by peak-based dynamic TP (see iter35* flags).
+    // iter35 (2026-05-19): SUPERSEDED by peak-based dynamic TP.
     // iter38 (2026-05-20): $0.15 net TP — superseded.
-    // iter41 v3 (2026-05-20): $2.00 net TP after iter41 backtest confirmed all
-    //   3 sniped winners reached >+5% gain; TP=$2 captures 100% with no SL hits.
-    //   $2.00 net + $0.144 fees = $2.144 gross on $96 leg = +2.233% needed.
-    ladderTargetNetProfitUsdt: 2.00,
+    // iter41 v3 (2026-05-20): $2.00 net TP — superseded.
+    // iter41 v4 (2026-05-21): $0.50 net TP per operator request
+    //   $0.50 net + $0.144 fees = $0.644 gross on $96 leg = +0.671% needed.
+    //   Easier to hit than $2.00 (only +0.67% gain vs +2.23%) → more frequent TPs.
+    ladderTargetNetProfitUsdt: 0.50,
     ladderFeeRatePerSide: 0.00075,  // 0.075 % (BNB-fees ON); set to 0.001 if OFF
     ladderHardStopBelowBuy3Pct: 1.0,
     ladderBuy1UseMarketOrder: true,
