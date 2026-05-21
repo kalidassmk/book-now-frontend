@@ -972,7 +972,7 @@ const DEFAULT_TRADING_CONFIG = {
     // iter38 (2026-05-20): profitAmountUsdt synced to 0.15 to match
     // ladderTargetNetProfitUsdt — legacy non-ladder path uses this.
     profitPct: 0.6,
-    profitAmountUsdt: 0.50,    // iter41 v4 (2026-05-21): synced with ladderTargetNetProfitUsdt (was 2.00)
+    profitAmountUsdt: 0.20,    // iter41 v6 (2026-05-21): synced with ladderTargetNetProfitUsdt
     // 2026-05-11 iter 3: tighter -0.30% offset (was 0.65) for higher fill rate.
     limitBuyOffsetPct: 0.30,
     tslPct: 2.0,
@@ -1039,12 +1039,13 @@ const DEFAULT_TRADING_CONFIG = {
     // all recoverable. User wants ONLY net profit, willing to wait 1 week.
     // iter34 (2026-05-19): $3.00 → $27.00 MOONSHOT TP.
     // iter35 (2026-05-19): SUPERSEDED by peak-based dynamic TP.
-    // iter38 (2026-05-20): $0.15 net TP — superseded.
-    // iter41 v3 (2026-05-20): $2.00 net TP — superseded.
-    // iter41 v4 (2026-05-21): $0.50 net TP per operator request
-    //   $0.50 net + $0.144 fees = $0.644 gross on $96 leg = +0.671% needed.
-    //   Easier to hit than $2.00 (only +0.67% gain vs +2.23%) → more frequent TPs.
-    ladderTargetNetProfitUsdt: 0.50,
+    // iter38 (2026-05-20): $0.15 — superseded.
+    // iter41 v3 (2026-05-20): $2.00 — superseded.
+    // iter41 v4 (2026-05-21): $0.50 — superseded.
+    // iter41 v6 (2026-05-21): $0.20 net TP + symmetric -$0.20 net SL (operator).
+    //   $0.20 net + $0.144 fees = $0.344 gross on $96 leg = +0.358% needed.
+    //   Hard SL at -0.06% = -$0.20 net loss. R:R = 1:1.
+    ladderTargetNetProfitUsdt: 0.20,
     ladderFeeRatePerSide: 0.00075,  // 0.075 % (BNB-fees ON); set to 0.001 if OFF
     ladderHardStopBelowBuy3Pct: 1.0,
     ladderBuy1UseMarketOrder: true,
@@ -1061,9 +1062,8 @@ const DEFAULT_TRADING_CONFIG = {
     // Median drawdown for winning trades was -$2.64; worst was -$11.50.
     // Need patience — winners often dip BIG before reaching peak.
     ladderHardStopFromAvgEnabled: true,
-    ladderHardStopFromAvgPct: 0.45,          // iter41 v3 (2026-05-20): tight stop per operator request
-                                              // = -$0.58 max loss on $96 leg (was -$19.34 at -20%)
-    emergencyStopLossPct: 0.60,              // iter41 v3: -$0.72 emergency fail-safe (config flag)
+    ladderHardStopFromAvgPct: 0.06,          // iter41 v6 (2026-05-21): = -$0.20 net loss on $96 leg
+    emergencyStopLossPct: 0.10,              // iter41 v6 (2026-05-21): = -$0.24 net loss fail-safe
     liquidityDeathExitEnabled: false,        // iter32: was true (iter39)
     active2MonitorEnabled: false,            // iter32: was true (iter41)
     marketStressExitEnabled: false,          // iter32: was true (iter46)
