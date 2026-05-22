@@ -1162,6 +1162,14 @@ const DEFAULT_TRADING_CONFIG = {
     //   2. DIP_CONFIRMED: wait 10s, track lowest price
     //   3. After 10s: if price > dip_low (reversed UP) → re-check VWAP → SNIPE
     //                 else → ABANDON (no reversal)
+    // iter42 (2026-05-22): Volume Spike confirmation at SNIPE moment.
+    // Real reversals have buyers stepping in (volume spike).
+    // Weak reversals = bid-ask noise. At SNIPE, require current 1m volume
+    // >= 1.5× average of last 15 minutes. If not, ABANDON.
+    iter42VolumeSpikeEnabled: true,
+    iter42VolumeSpikeMultiplier: 1.5,
+    iter42VolumeWindowMinutes: 15,
+    iter42AppliedAt: '2026-05-22',
     iter41DipTriggerPct: 0.20,          // iter41 v7: lowered from 0.30 → 0.20 (more triggers)
     iter41MaxDipPct: 0.65,              // MAX dip — ABANDON as crash
     iter41ConfirmationSeconds: 10,      // NEW: wait this long for reversal
