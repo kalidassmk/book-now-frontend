@@ -1162,6 +1162,12 @@ const DEFAULT_TRADING_CONFIG = {
     //   2. DIP_CONFIRMED: wait 10s, track lowest price
     //   3. After 10s: if price > dip_low (reversed UP) → re-check VWAP → SNIPE
     //                 else → ABANDON (no reversal)
+    // iter43 (2026-05-22): RSI ceiling tightened 82 → 74.
+    // Expert review: "60-82 is biggest danger zone — above 75-80 = exhaustion risk".
+    // Tighter ceiling rejects late breakout entries on pumped coins (ZAMA-style).
+    rsiMinThreshold: 60,
+    rsiMaxThreshold: 74,           // was 82 — narrowed to avoid top-buying
+
     // iter42 (2026-05-22): Volume Spike confirmation at SNIPE moment.
     // Real reversals have buyers stepping in (volume spike).
     // Weak reversals = bid-ask noise. At SNIPE, require current 1m volume
