@@ -1133,7 +1133,15 @@ const DEFAULT_TRADING_CONFIG = {
     // Virtual Scalper uses ccxt fetch_ohlcv (router-cached, also WS-backed).
     iter39VwapFilterEnabled: true,
     iter39VwapWindowMinutes: 15,
-    iter39VwapTolerancePct: 0.2,           // require price >= VWAP × 1.002
+    iter39VwapTolerancePct: 0.2,           // fallback fixed buffer (used when ATR-adaptive disabled)
+    // Day 3 of Path D (2026-05-23): ATR-adaptive VWAP buffer
+    // Replaces fixed 0.2% buffer with one based on coin volatility.
+    // buffer = ATR_pct × multiplier, clamped to [min, max].
+    // Volatile coins get more breathing room, stable coins get tighter control.
+    iter39VwapAtrAdaptiveEnabled: true,
+    iter39VwapAtrMultiplier: 0.2,          // buffer = 20% of one ATR
+    iter39VwapBufferMinPct: 0.05,          // floor — even for very stable coins
+    iter39VwapBufferMaxPct: 0.5,           // ceiling — even for very volatile coins
     iter39AppliedAt: '2026-05-20',
     // iter40 (2026-05-20): ATR DYNAMIC STOP LOSS.
     // Per-coin stop % = ATR(14, 1h) / price × 100 × multiplier, clamped to [min, max].
