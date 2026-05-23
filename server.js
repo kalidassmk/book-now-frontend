@@ -3332,6 +3332,42 @@ app.get('/api/pending-orders', async (req, res) => {
                 });
             }
         }
+        // iter 50 fe (2026-05-23): also pull BUY hash so R1/R2/R3 + Pattern-Bot
+        // (try_buy) pending limit orders get classified + auto-cancelled too.
+        // METRICS:OUTCOME only covers the ladder scalper writes; try_buy goes
+        // through executor.py and only writes to BUY[symbol].
+        try {
+            const ageCutoffMs = Date.now() - 24 * 60 * 60 * 1000;
+            const offsetPct = cfg.limitBuyOffsetPct || 0.3;
+            const buyHash = await redis.hgetall('BUY') || {};
+            for (const [sym, raw] of Object.entries(buyHash)) {
+                if (seen.has(sym)) continue;
+                let row;
+                try { row = JSON.parse(raw); } catch { continue; }
+                if (!row || row.status !== 'NEW') continue;
+                if (parseFloat(row.executedQty || '0') > 0) continue;
+                if (!row.orderId) continue;
+                const ts = parseInt(row.buyTimeStamp, 10) || 0;
+                if (!(ts > ageCutoffMs)) continue;
+                const limit_price = parseFloat(row.buyPrice || '0');
+                if (!(limit_price > 0)) continue;
+                const signal_price = limit_price / (1 - offsetPct / 100);
+                seen.add(sym);
+                orders.push({
+                    date: today,
+                    symbol: sym,
+                    signal_price,
+                    limit_price,
+                    offset_pct: offsetPct,
+                    signal_ts: ts,
+                    size_usdt: cfg.buyAmountUsdt || 96,
+                    origin: 'try_buy',
+                });
+            }
+        } catch (e) {
+            console.warn('[pending-orders] BUY hash merge failed:', e.message);
+        }
+
         if (orders.length === 0) {
             return res.json({ count: 0, orders: [], note: 'No pending Buy 1 LIMIT orders right now.' });
         }
