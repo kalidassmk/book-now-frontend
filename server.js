@@ -1168,6 +1168,13 @@ const DEFAULT_TRADING_CONFIG = {
     rsiMinThreshold: 60,
     rsiMaxThreshold: 74,           // was 82 — narrowed to avoid top-buying
 
+    // Day 2 of Path D (2026-05-23): EMA slope check.
+    // Convert static "ema9 > ema21 > ema50" check to dynamic.
+    // Now also requires EMA9 AND EMA21 to be HIGHER than 5 candles ago.
+    // Catches "stale stacks" where EMAs are aligned but momentum is dying.
+    emaSlopeCheckEnabled: true,
+    emaSlopeLookbackCandles: 5,
+
     // iter42 (2026-05-22): Volume Spike confirmation at SNIPE moment.
     // Real reversals have buyers stepping in (volume spike).
     // Weak reversals = bid-ask noise. At SNIPE, require current 1m volume
