@@ -36,6 +36,13 @@ const TP_PCT = 0.567;   // matches iter43 strategy + iter42 $0.15 net
 const ENTRY_OFFSET_PCT = 0.15;
 const ENTRY_FILL_TIMEOUT_SEC = 60;
 
+// iter 49 (2026-05-23) — live mode delegates to the Python backend's
+// /api/v1/order/pattern-buy endpoint so positions inherit iter47 dynamic-TP
+// + iter48 hard-SL + the full check-coin filter pipeline.  Set via env to
+// override (e.g. http://backend:8083 in Docker Compose).
+const BACKEND_BASE = process.env.BOOKNOW_BACKEND_BASE || 'http://backend:8083';
+const DELEGATE_SELL_PCT = 5.0;   // R1-FULL parity; profitAmountUsdt usually wins downstream
+
 let _redis, _redisAnalyse, _binanceFetch;
 let _running = false;
 
@@ -187,8 +194,29 @@ async function pollerCycle(port) {
             console.log(`[pattern-bot] 📝 PAPER OPEN ${ev.symbol} score=${ev.score} @ \$${buyPrice} TP=\$${tpPrice} stop=\$${stopPrice}`);
             executed++;
         } else {
-            // TODO: real Binance order placement
-            console.log(`[pattern-bot] ⚠️ live mode not yet implemented — flip patternBotPaperMode=true for now`);
+            // iter 49 (2026-05-23) — delegate to Python backend's try_buy path
+            // so the position inherits iter47 dynamic-TP + iter48 hard-SL + the
+            // full check-coin filter pipeline (which is re-run server-side as a
+            // belt-and-braces double check against the safety call we did above).
+            try {
+                const url = `${BACKEND_BASE}/api/v1/order/pattern-buy/${encodeURIComponent(ev.symbol)}`
+                          + `?sell_pct=${DELEGATE_SELL_PCT}&rule_label=${encodeURIComponent(`PATTERN_BOT:${ev._source}`)}`;
+                const r = await fetch(url, { method: 'POST' });
+                if (!r.ok) {
+                    const body = await r.text().catch(() => '');
+                    console.log(`[pattern-bot] ❌ LIVE delegate ${ev.symbol} HTTP ${r.status}: ${body.slice(0, 200)}`);
+                } else {
+                    const ack = await r.json().catch(() => ({}));
+                    console.log(`[pattern-bot] 🚀 LIVE delegate ${ev.symbol} score=${ev.score} @ \$${buyPrice} accepted ack=${JSON.stringify(ack)}`);
+                    // Record locally for dashboard visibility — Python TradeState
+                    // owns the lifecycle; this hash is informational only.
+                    await _redis.hset('PATTERN_BOT:OPEN', ev.symbol, JSON.stringify({ ...trade, delegated_to: 'python_try_buy' }));
+                    await _redis.expire('PATTERN_BOT:OPEN', 6 * 60 * 60);
+                    executed++;
+                }
+            } catch (e) {
+                console.log(`[pattern-bot] ❌ LIVE delegate ${ev.symbol} error: ${e.message}`);
+            }
         }
 
         await markProcessed(id);

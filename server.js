@@ -6383,6 +6383,30 @@ const pendingAutoCancel = require('./pending-monitor-worker');
 // iter 25 fe (2026-05-16): Cancel-recovery worker
 const pendingRecovery = require('./pending-recovery-worker');
 
+// iter 49 fe (2026-05-23): Pattern Bot detection-feed poller.
+// The HTTP routes /api/bounce-watch and /api/early-pump-watch generate the
+// BOUNCE:DETECTIONS / EARLY_PUMP:DETECTIONS Redis lists that the worker
+// consumes. Without this scheduled poll the lists stay empty and the bot
+// never has anything to evaluate.  Default 60s cadence — matches the
+// worker's 60s "fresh signal" age limit.
+const PATTERN_BOT_FEED_POLL_MS =
+    Number(process.env.PATTERN_BOT_FEED_POLL_MS || 60 * 1000);
+
+async function refreshPatternBotFeeds() {
+    const url1 = `http://127.0.0.1:${PORT}/api/bounce-watch`;
+    const url2 = `http://127.0.0.1:${PORT}/api/early-pump-watch`;
+    for (const u of [url1, url2]) {
+        try {
+            const r = await fetch(u);
+            if (!r.ok) {
+                console.warn(`[pattern-bot-feeds] ${u} -> HTTP ${r.status}`);
+            }
+        } catch (e) {
+            console.warn(`[pattern-bot-feeds] ${u} error: ${e.message}`);
+        }
+    }
+}
+
 server.listen(PORT, () => {
     console.log(`\n🚀 BookNow Fast Dashboard → http://localhost:${PORT}`);
     console.log(`📡 Polling Redis every ${POLL_MS}ms\n`);
@@ -6395,6 +6419,16 @@ server.listen(PORT, () => {
             console.error('[pattern-bot] failed to start:', e.message);
         }
     }, 5000);
+
+    // iter 49 fe (2026-05-23): start the detection-feed poller a beat after
+    // the worker. Runs every PATTERN_BOT_FEED_POLL_MS (default 60s).
+    setTimeout(() => {
+        console.log(`[pattern-bot-feeds] poller starting — every ${PATTERN_BOT_FEED_POLL_MS}ms`);
+        refreshPatternBotFeeds().catch(e => console.warn('[pattern-bot-feeds] initial:', e.message));
+        setInterval(() => {
+            refreshPatternBotFeeds().catch(e => console.warn('[pattern-bot-feeds] tick:', e.message));
+        }, PATTERN_BOT_FEED_POLL_MS);
+    }, 7000);
 
     // Start auto-cancel worker 6s after boot — runs even when disabled in
     // config (it short-circuits inside pollOnce), so status is always live.
