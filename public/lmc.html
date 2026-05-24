@@ -2,13 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Book-Now — Volume Spike Pattern (VSP)</title>
+<title>Book-Now — Low MCap Explosive (LMC)</title>
 <style>
   :root {
     --bg: #0c1116; --panel: #141b24; --panel-2: #1a232e; --line: #1f2933;
     --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
-    --neutral: #8b949e; --text: #e6edf3; --muted: #8b949e;
-    --pump: #2ecc71; --dump: #e74c3c; --uncertain: #8b949e; --moderate: #f1c40f;
+    --pump: #2ecc71; --dump: #e74c3c; --neutral: #8b949e;
+    --text: #e6edf3; --muted: #8b949e;
   }
   * { box-sizing: border-box; }
   body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
@@ -39,13 +39,14 @@
   tr.row.expandable:hover td { background: rgba(255,255,255,.03); }
   tr.row.pump td { background: rgba(46,204,113,.05); }
   tr.row.dump td { background: rgba(231,76,60,.06); }
-  tr.row.big td { font-weight: 700; }
+  tr.row.explosive td { font-weight: 700; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-weight: 700; font-size: 11px; letter-spacing: .3px; }
-  .badge.big-pump { background: rgba(46,204,113,.18); color: var(--pump); border: 1px solid rgba(46,204,113,.4); }
-  .badge.big-dump { background: rgba(231,76,60,.18); color: var(--dump); border: 1px solid rgba(231,76,60,.4); }
-  .badge.moderate-pump { background: rgba(241,196,15,.15); color: var(--moderate); border: 1px solid rgba(241,196,15,.35); }
-  .badge.moderate-dump { background: rgba(241,196,15,.10); color: var(--moderate); border: 1px solid rgba(241,196,15,.30); }
-  .badge.uncertain { background: rgba(139,148,158,.12); color: var(--uncertain); border: 1px solid rgba(139,148,158,.30); }
+  .badge.explosive-pump { background: rgba(46,204,113,.18); color: var(--pump); border: 1px solid rgba(46,204,113,.4); }
+  .badge.explosive-dump { background: rgba(231,76,60,.18); color: var(--dump); border: 1px solid rgba(231,76,60,.4); }
+  .badge.explosive-neutral { background: rgba(241,196,15,.15); color: var(--warn); border: 1px solid rgba(241,196,15,.35); }
+  .badge.watch-pump { background: rgba(46,204,113,.08); color: var(--pump); border: 1px solid rgba(46,204,113,.2); }
+  .badge.watch-dump { background: rgba(231,76,60,.08); color: var(--dump); border: 1px solid rgba(231,76,60,.2); }
+  .badge.watch-neutral { background: rgba(139,148,158,.10); color: var(--neutral); border: 1px solid rgba(139,148,158,.20); }
   .mode-pill { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; }
   .mode-paper { background: rgba(241,196,15,.18); color: var(--warn); border: 1px solid rgba(241,196,15,.4); }
   .mode-live  { background: rgba(46,204,113,.18); color: var(--good); border: 1px solid rgba(46,204,113,.4); }
@@ -56,40 +57,44 @@
   .bd-factor { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px dashed var(--line); font-size: 12px; }
   .bd-factor:last-child { border-bottom: 0; }
   .bd-factor .pts { font-variant-numeric: tabular-nums; font-weight: 700; min-width: 50px; text-align: right; }
-  .conf-bar { display: inline-block; height: 6px; background: rgba(139,148,158,.18); border-radius: 3px; overflow: hidden; vertical-align: middle; margin-right: 6px; min-width: 60px; }
-  .conf-bar-fill { height: 100%; background: linear-gradient(90deg, var(--good) 0%, var(--accent) 100%); }
+  .score-bar { display: inline-block; height: 6px; background: rgba(139,148,158,.18); border-radius: 3px; overflow: hidden; vertical-align: middle; margin-right: 6px; min-width: 60px; }
+  .score-bar-fill { height: 100%; background: linear-gradient(90deg, var(--good) 0%, var(--accent) 100%); }
   .empty { padding: 28px; text-align: center; color: var(--muted); font-style: italic; }
   .tab-bar { display: flex; gap: 8px; margin-bottom: 10px; }
   .tab { padding: 6px 14px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; }
   .tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .bucket { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; letter-spacing: .3px; background: rgba(41,182,246,.15); color: var(--accent); border: 1px solid rgba(41,182,246,.3); }
+  .bucket.micro { background: rgba(231,76,60,.15); color: var(--bad); border-color: rgba(231,76,60,.3); }
+  .bucket.tiny  { background: rgba(241,196,15,.15); color: var(--warn); border-color: rgba(241,196,15,.3); }
+  .bucket.small { background: rgba(46,204,113,.12); color: var(--good); border-color: rgba(46,204,113,.25); }
 </style>
 </head>
 <body>
 
-<h1>⚡ Volume Spike Pattern (VSP)</h1>
+<h1>⚡ Low MCap Explosive (LMC)</h1>
 <div class="sub">
   <span class="live-dot"></span>
   <span id="status">Loading…</span>
   <span class="mode-pill" id="mode-pill">…</span>
-  <span style="color:var(--muted)">Direction (D) + Magnitude (M) classifier — predicts BIG PUMP / BIG DUMP</span>
+  <span style="color:var(--muted)">Small caps (7d avg vol &lt; $10M) suddenly getting 3×+ volume = explosive-move chance</span>
 </div>
 
 <nav class="topnav">
   <a href="/">📊 Monitor</a>
   <a href="/early-pump.html">🚀 Early Pump</a>
-  <a href="/vsp.html" class="active">⚡ Volume Spike</a>
-  <a href="/lmc.html">💎 Low MCap</a>
+  <a href="/vsp.html">⚡ Volume Spike</a>
+  <a href="/lmc.html" class="active">💎 Low MCap</a>
   <a href="/pattern-bot.html">🤖 Pattern Bot</a>
   <a href="/spot.html">📋 Spot</a>
 </nav>
 
 <div class="summary">
   <div class="stat"><div class="label">Detections (today)</div><div class="value" id="stat-total">—</div></div>
-  <div class="stat"><div class="label">Big Pumps</div><div class="value pos" id="stat-big-pump">—</div></div>
-  <div class="stat"><div class="label">Big Dumps</div><div class="value neg" id="stat-big-dump">—</div></div>
+  <div class="stat"><div class="label">EXPLOSIVE_PUMP</div><div class="value pos" id="stat-explosive-pump">—</div></div>
+  <div class="stat"><div class="label">EXPLOSIVE_DUMP</div><div class="value neg" id="stat-explosive-dump">—</div></div>
   <div class="stat"><div class="label">Paper Trades</div><div class="value warn" id="stat-paper">—</div></div>
-  <div class="stat"><div class="label">Paper Hit Rate (≥+0.5% @15m)</div><div class="value" id="stat-hit-rate">—</div></div>
-  <div class="stat"><div class="label">Paper Avg P&L</div><div class="value" id="stat-paper-pnl">—</div></div>
+  <div class="stat"><div class="label">Hit Rate (≥+2% by 60m)</div><div class="value" id="stat-hit-rate">—</div></div>
+  <div class="stat"><div class="label">Paper Avg P&L (best of 4cp)</div><div class="value" id="stat-paper-pnl">—</div></div>
 </div>
 
 <div class="card">
@@ -98,15 +103,16 @@
     <label>Filter:
       <select id="filter-label">
         <option value="">All labels</option>
-        <option value="BIG_PUMP">BIG_PUMP only</option>
-        <option value="BIG_DUMP">BIG_DUMP only</option>
-        <option value="MODERATE_PUMP">Moderate pump</option>
-        <option value="MODERATE_DUMP">Moderate dump</option>
-        <option value="UNCERTAIN">Uncertain</option>
+        <option value="EXPLOSIVE_PUMP">EXPLOSIVE_PUMP only</option>
+        <option value="EXPLOSIVE_DUMP">EXPLOSIVE_DUMP only</option>
+        <option value="EXPLOSIVE_NEUTRAL">EXPLOSIVE_NEUTRAL</option>
+        <option value="WATCH_PUMP">WATCH_PUMP</option>
+        <option value="WATCH_DUMP">WATCH_DUMP</option>
+        <option value="WATCH_NEUTRAL">WATCH_NEUTRAL</option>
       </select>
     </label>
-    <label>Min confidence:
-      <input type="number" id="filter-conf" value="0" min="0" max="100" step="5" style="width:70px" />
+    <label>Min score:
+      <input type="number" id="filter-score" value="0" min="0" max="100" step="5" style="width:70px" />
     </label>
     <label>Date:
       <select id="filter-date">
@@ -115,7 +121,7 @@
       </select>
     </label>
     <button onclick="refresh()">↻ Refresh</button>
-    <span style="margin-left:auto; color: var(--muted)">Auto-refresh: 10s</span>
+    <span style="margin-left:auto; color: var(--muted)">Auto-refresh: 15s · LMC scans every 30s</span>
   </div>
 </div>
 
@@ -126,21 +132,21 @@
 </div>
 
 <div class="card" id="tab-detections">
-  <h2>Live VSP Detections — click a row for score breakdown</h2>
+  <h2>Live LMC Detections — click a row for score breakdown</h2>
   <table id="t-detections">
     <thead>
       <tr>
         <th>Time</th>
         <th>Symbol</th>
         <th>Label</th>
-        <th class="num">D-score</th>
-        <th class="num">M-score</th>
-        <th class="num">Confidence</th>
-        <th class="num">Entry $</th>
-        <th class="num">Vol 1m×</th>
-        <th class="num">Vol 5m×</th>
+        <th>Bucket</th>
+        <th class="num">Score</th>
+        <th class="num">Price $</th>
+        <th class="num">chg_24h</th>
+        <th class="num">Vol×</th>
         <th class="num">Trades×</th>
-        <th class="num">24h Vol</th>
+        <th class="num">7d Avg Vol</th>
+        <th class="num">Today Vol</th>
       </tr>
     </thead>
     <tbody><tr><td colspan="11" class="empty">Loading…</td></tr></tbody>
@@ -148,20 +154,20 @@
 </div>
 
 <div class="card" id="tab-paper" style="display:none">
-  <h2>Paper Trades — what VSP WOULD HAVE BOUGHT (paper mode)</h2>
+  <h2>Paper Trades — what LMC WOULD HAVE BOUGHT (paper mode)</h2>
   <table id="t-paper">
     <thead>
       <tr>
         <th>Time</th>
         <th>Symbol</th>
         <th class="num">Entry $</th>
-        <th class="num">D</th>
-        <th class="num">M</th>
-        <th class="num">Conf</th>
-        <th class="num">+5m</th>
+        <th class="num">Score</th>
+        <th class="num">Vol×</th>
+        <th class="num">7d Avg Vol</th>
         <th class="num">+15m</th>
-        <th class="num">+30m</th>
         <th class="num">+60m</th>
+        <th class="num">+4h</th>
+        <th class="num">+24h</th>
         <th>Result</th>
       </tr>
     </thead>
@@ -177,7 +183,7 @@
         <th>Detection Time</th>
         <th>Symbol</th>
         <th>Label</th>
-        <th class="num">Conf</th>
+        <th class="num">Score</th>
         <th class="num">Entry $</th>
         <th class="num">Checkpoint</th>
         <th class="num">Price Now</th>
@@ -203,8 +209,7 @@ function showTab(tab) {
 
 function fmtTime(ms) {
   if (!ms) return '—';
-  const d = new Date(ms);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 function fmtPrice(p) {
   if (p == null) return '—';
@@ -220,20 +225,25 @@ function fmtUsd(n) {
   return '$' + n.toFixed(0);
 }
 function badgeFor(label) {
-  const cls = (label || '').toLowerCase().replace('_', '-');
+  const cls = (label || '').toLowerCase().replace(/_/g, '-');
   return `<span class="badge ${cls}">${label || '—'}</span>`;
 }
-function confBar(c) {
-  const pct = Math.max(0, Math.min(100, c || 0));
-  return `<span class="conf-bar"><span class="conf-bar-fill" style="width:${pct}%"></span></span>${pct.toFixed(0)}`;
+function bucketTag(b) {
+  if (!b) return '<span class="bucket">—</span>';
+  const cls = b.toLowerCase();
+  return `<span class="bucket ${cls}">${b}</span>`;
+}
+function scoreBar(s) {
+  const pct = Math.max(0, Math.min(100, s || 0));
+  return `<span class="score-bar"><span class="score-bar-fill" style="width:${pct}%"></span></span>${pct.toFixed(0)}`;
 }
 
 function renderDetections() {
   const filter = document.getElementById('filter-label').value;
-  const minConf = parseFloat(document.getElementById('filter-conf').value) || 0;
+  const minScore = parseFloat(document.getElementById('filter-score').value) || 0;
   const tbody = document.querySelector('#t-detections tbody');
   let rows = allDetections.filter(d =>
-    (!filter || d.label === filter) && (d.confidence || 0) >= minConf
+    (!filter || d.label === filter) && (d.score || 0) >= minScore
   );
   rows.sort((a, b) => (b.ts || 0) - (a.ts || 0));
   if (!rows.length) {
@@ -242,20 +252,21 @@ function renderDetections() {
   }
   tbody.innerHTML = rows.map((d, i) => {
     const klass = d.label?.includes('PUMP') ? 'pump' : d.label?.includes('DUMP') ? 'dump' : '';
-    const bigKlass = d.label?.startsWith('BIG_') ? 'big' : '';
+    const explKlass = d.label?.startsWith('EXPLOSIVE_') ? 'explosive' : '';
+    const bucket = d.breakdown?.mcap?.bucket;
     return `
-      <tr class="row expandable ${klass} ${bigKlass}" onclick="toggleBreakdown(${i})">
+      <tr class="row expandable ${klass} ${explKlass}" onclick="toggleBreakdown(${i})">
         <td>${fmtTime(d.ts)}</td>
         <td><strong>${d.symbol}</strong></td>
         <td>${badgeFor(d.label)}</td>
-        <td class="num ${d.direction_score >= 0 ? 'pos' : 'neg'}">${d.direction_score?.toFixed(0) ?? '—'}</td>
-        <td class="num">${d.magnitude_score?.toFixed(0) ?? '—'}</td>
-        <td class="num">${confBar(d.confidence)}</td>
-        <td class="num">${fmtPrice(d.trigger_close)}</td>
-        <td class="num">${d.entry?.vol_1m_mult?.toFixed(1) ?? '—'}×</td>
-        <td class="num">${d.entry?.vol_5m_mult?.toFixed(1) ?? '—'}×</td>
-        <td class="num">${d.entry?.trade_1m_mult?.toFixed(1) ?? '—'}×</td>
-        <td class="num mute">${fmtUsd(d.qv_24h_usdt)}</td>
+        <td>${bucketTag(bucket)}</td>
+        <td class="num">${scoreBar(d.score)}</td>
+        <td class="num">${fmtPrice(d.trigger_price)}</td>
+        <td class="num ${d.chg_24h_pct >= 0 ? 'pos' : 'neg'}">${d.chg_24h_pct > 0 ? '+' : ''}${d.chg_24h_pct?.toFixed(2) ?? '—'}%</td>
+        <td class="num">${d.vol_surge_x?.toFixed(1) ?? '—'}×</td>
+        <td class="num">${d.trade_surge_x?.toFixed(1) ?? '—'}×</td>
+        <td class="num mute">${fmtUsd(d.avg_7d_vol_usd)}</td>
+        <td class="num mute">${fmtUsd(d.today_vol_usd)}</td>
       </tr>
       <tr class="breakdown-row" id="bd-${i}" style="display:none">
         <td colspan="11" class="breakdown">${renderBreakdown(d)}</td>
@@ -265,29 +276,25 @@ function renderDetections() {
 }
 
 function renderBreakdown(d) {
-  const dirItems = Object.entries(d.direction || {}).map(([k, v]) => {
-    const pts = v?.pts ?? 0;
-    const cls = pts > 0 ? 'pos' : pts < 0 ? 'neg' : 'mute';
-    const detail = Object.entries(v || {}).filter(([kk]) => kk !== 'pts').map(([kk, vv]) =>
-      `${kk}=${typeof vv === 'object' ? JSON.stringify(vv) : vv}`).join(', ');
-    return `<div class="bd-factor"><span><strong>${k}</strong> <span class="mute">${detail}</span></span><span class="pts ${cls}">${pts > 0 ? '+' : ''}${pts}</span></div>`;
-  }).join('');
-  const magItems = Object.entries(d.magnitude || {}).map(([k, v]) => {
+  const scoreItems = Object.entries(d.breakdown || {}).map(([k, v]) => {
     const pts = v?.pts ?? 0;
     const detail = Object.entries(v || {}).filter(([kk]) => kk !== 'pts').map(([kk, vv]) =>
       `${kk}=${typeof vv === 'object' ? JSON.stringify(vv) : vv}`).join(', ');
     return `<div class="bd-factor"><span><strong>${k}</strong> <span class="mute">${detail}</span></span><span class="pts">${pts > 0 ? '+' : ''}${pts}</span></div>`;
   }).join('');
+  const dirItems = Object.entries(d.direction_breakdown || {}).map(([k, v]) => {
+    return `<div class="bd-factor"><span><strong>${k}</strong></span><span class="pts mute">${typeof v === 'object' ? JSON.stringify(v) : v}</span></div>`;
+  }).join('');
   return `
     <div class="bd-wrap">
       <div class="bd-grid">
         <div class="bd-block">
-          <h3>Direction Score Breakdown (D=${d.direction_score})</h3>
-          ${dirItems || '<div class="mute">No data</div>'}
+          <h3>Score Breakdown (total ${d.score})</h3>
+          ${scoreItems || '<div class="mute">No data</div>'}
         </div>
         <div class="bd-block">
-          <h3>Magnitude Score Breakdown (M=${d.magnitude_score})</h3>
-          ${magItems || '<div class="mute">No data</div>'}
+          <h3>Direction Breakdown (${d.direction})</h3>
+          ${dirItems || '<div class="mute">No data</div>'}
         </div>
       </div>
     </div>
@@ -304,10 +311,9 @@ function renderPaper() {
   const tbody = document.querySelector('#t-paper tbody');
   const trades = [...allPaperTrades].sort((a, b) => (b.ts || 0) - (a.ts || 0));
   if (!trades.length) {
-    tbody.innerHTML = `<tr><td colspan="11" class="empty">No paper trades yet. (Paper mode prints to VSP:PAPER_TRADES:&lt;date&gt; on BIG_PUMP @ confidence ≥ 75.)</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" class="empty">No paper trades yet. (Paper mode prints to LMC:PAPER_TRADES:&lt;date&gt; on EXPLOSIVE_PUMP @ score ≥ 75.)</td></tr>`;
     return;
   }
-  // Join with outcomes by symbol + detection ts
   const outcomeByKey = {};
   for (const o of allOutcomes) {
     const key = `${o.symbol}:${o.ts_detection}`;
@@ -323,22 +329,22 @@ function renderPaper() {
       const cls = v > 0 ? 'pos' : v < 0 ? 'neg' : 'mute';
       return `<span class="${cls}">${v > 0 ? '+' : ''}${v.toFixed(2)}%</span>`;
     };
-    const best = Math.max(...[5, 15, 30, 60].map(cp => o[cp] || -999));
-    const result = best > 0.5 ? '<span class="pos">✓ HIT (≥+0.5%)</span>' :
-                   best < -0.5 ? '<span class="neg">✗ MISS</span>' :
+    const best = Math.max(...[15, 60, 240, 1440].map(cp => o[cp] || -999));
+    const result = best > 2 ? '<span class="pos">✓ HIT (≥+2%)</span>' :
+                   best < -2 ? '<span class="neg">✗ MISS</span>' :
                    '<span class="mute">flat / pending</span>';
     return `
       <tr class="row">
         <td>${fmtTime(t.ts)}</td>
         <td><strong>${t.symbol}</strong></td>
         <td class="num">${fmtPrice(t.entry_price)}</td>
-        <td class="num pos">${t.direction_score?.toFixed(0) ?? '—'}</td>
-        <td class="num">${t.magnitude_score?.toFixed(0) ?? '—'}</td>
-        <td class="num">${confBar(t.confidence)}</td>
-        <td class="num">${cell(5)}</td>
+        <td class="num">${scoreBar(t.score)}</td>
+        <td class="num">${t.vol_surge_x?.toFixed(1) ?? '—'}×</td>
+        <td class="num mute">${fmtUsd(t.avg_7d_vol_usd)}</td>
         <td class="num">${cell(15)}</td>
-        <td class="num">${cell(30)}</td>
         <td class="num">${cell(60)}</td>
+        <td class="num">${cell(240)}</td>
+        <td class="num">${cell(1440)}</td>
         <td>${result}</td>
       </tr>
     `;
@@ -349,19 +355,20 @@ function renderOutcomes() {
   const tbody = document.querySelector('#t-outcomes tbody');
   const outcomes = [...allOutcomes].sort((a, b) => (b.ts_outcome || 0) - (a.ts_outcome || 0));
   if (!outcomes.length) {
-    tbody.innerHTML = `<tr><td colspan="8" class="empty">No outcomes recorded yet. (Tracker records at +5/+15/+30/+60min after each detection.)</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="empty">No outcomes recorded yet. (Tracker records at +15/+60/+240/+1440min after each detection.)</td></tr>`;
     return;
   }
   tbody.innerHTML = outcomes.slice(0, 200).map(o => {
     const cls = (o.chg_pct || 0) > 0 ? 'pos' : (o.chg_pct || 0) < 0 ? 'neg' : 'mute';
+    const cpLabel = o.checkpoint_min >= 60 ? `+${o.checkpoint_min/60}h` : `+${o.checkpoint_min}m`;
     return `
       <tr class="row">
         <td>${fmtTime(o.ts_detection)}</td>
         <td><strong>${o.symbol}</strong></td>
         <td>${badgeFor(o.label)}</td>
-        <td class="num">${o.confidence?.toFixed(0) ?? '—'}</td>
+        <td class="num">${o.score?.toFixed(0) ?? '—'}</td>
         <td class="num">${fmtPrice(o.entry_price)}</td>
-        <td class="num">+${o.checkpoint_min}m</td>
+        <td class="num">${cpLabel}</td>
         <td class="num">${fmtPrice(o.price_now)}</td>
         <td class="num ${cls}">${o.chg_pct > 0 ? '+' : ''}${o.chg_pct?.toFixed(2) ?? '—'}%</td>
       </tr>
@@ -371,11 +378,10 @@ function renderOutcomes() {
 
 function renderStats() {
   document.getElementById('stat-total').textContent = allDetections.length;
-  document.getElementById('stat-big-pump').textContent = allDetections.filter(d => d.label === 'BIG_PUMP').length;
-  document.getElementById('stat-big-dump').textContent = allDetections.filter(d => d.label === 'BIG_DUMP').length;
+  document.getElementById('stat-explosive-pump').textContent = allDetections.filter(d => d.label === 'EXPLOSIVE_PUMP').length;
+  document.getElementById('stat-explosive-dump').textContent = allDetections.filter(d => d.label === 'EXPLOSIVE_DUMP').length;
   document.getElementById('stat-paper').textContent = allPaperTrades.length;
 
-  // Hit rate @ 15m
   const outcomeByKey = {};
   for (const o of allOutcomes) {
     const key = `${o.symbol}:${o.ts_detection}`;
@@ -385,10 +391,10 @@ function renderStats() {
   let hits = 0, recorded = 0, sumPnl = 0;
   for (const t of allPaperTrades) {
     const o = outcomeByKey[`${t.symbol}:${t.ts}`];
-    const best = o ? Math.max(...[5, 15, 30, 60].map(cp => o[cp] ?? -999)) : null;
+    const best = o ? Math.max(...[15, 60, 240, 1440].map(cp => o[cp] ?? -999)) : null;
     if (best == null || best === -999) continue;
     recorded++;
-    if (best >= 0.5) hits++;
+    if (best >= 2) hits++;
     sumPnl += best;
   }
   document.getElementById('stat-hit-rate').textContent = recorded ? `${(hits / recorded * 100).toFixed(0)}% (${hits}/${recorded})` : '—';
@@ -401,10 +407,10 @@ async function refresh() {
     document.getElementById('status').textContent = 'Refreshing…';
     const date = document.getElementById('filter-date').value || 'today';
     const [d, p, o, s] = await Promise.all([
-      fetch(`${API_BASE}/api/vsp/feed?date=${date}`).then(r => r.json()),
-      fetch(`${API_BASE}/api/vsp/paper-trades?date=${date}`).then(r => r.json()),
-      fetch(`${API_BASE}/api/vsp/outcomes?date=${date}`).then(r => r.json()),
-      fetch(`${API_BASE}/api/vsp/status`).then(r => r.json()),
+      fetch(`${API_BASE}/api/lmc/feed?date=${date}`).then(r => r.json()),
+      fetch(`${API_BASE}/api/lmc/paper-trades?date=${date}`).then(r => r.json()),
+      fetch(`${API_BASE}/api/lmc/outcomes?date=${date}`).then(r => r.json()),
+      fetch(`${API_BASE}/api/lmc/status`).then(r => r.json()),
     ]);
     allDetections  = d.events || [];
     allPaperTrades = p.trades || [];
@@ -428,11 +434,11 @@ async function refresh() {
 }
 
 document.getElementById('filter-label').addEventListener('change', renderDetections);
-document.getElementById('filter-conf').addEventListener('input', renderDetections);
+document.getElementById('filter-score').addEventListener('input', renderDetections);
 document.getElementById('filter-date').addEventListener('change', refresh);
 
 refresh();
-setInterval(refresh, 10000);
+setInterval(refresh, 15000);
 </script>
 
 </body>

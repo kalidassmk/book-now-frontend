@@ -1957,6 +1957,81 @@ app.get('/api/vsp/outcomes', async (req, res) => {
     }
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// iter 70 fe (2026-05-24) — Low Market Cap + High Volume (LMC) feeds.
+// Backend subprocess `low_mcap_explosive.py` publishes:
+//   LMC:DETECTIONS:<date>   — every fire
+//   LMC:LATEST              — symbol → latest event
+//   LMC:PAPER_TRADES:<date> — would-be EXPLOSIVE_PUMP buys
+//   LMC:OUTCOMES:<date>     — actual price chg at +15/+60/+240/+1440m
+// ─────────────────────────────────────────────────────────────────────────
+
+app.get('/api/lmc/feed', async (req, res) => {
+    try {
+        const date  = _resolveDate(req.query.date);
+        const limit = Math.max(1, Math.min(1000, parseInt(req.query.limit || '300', 10)));
+        const raw = await redis.lrange(`LMC:DETECTIONS:${date}`, -limit, -1);
+        const events = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+        res.json({ date, total: events.length, events });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/lmc/paper-trades', async (req, res) => {
+    try {
+        const date = _resolveDate(req.query.date);
+        const raw = await redis.lrange(`LMC:PAPER_TRADES:${date}`, 0, -1);
+        const trades = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+        res.json({ date, total: trades.length, trades });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/lmc/outcomes', async (req, res) => {
+    try {
+        const date  = _resolveDate(req.query.date);
+        const limit = Math.max(1, Math.min(2000, parseInt(req.query.limit || '500', 10)));
+        const raw = await redis.lrange(`LMC:OUTCOMES:${date}`, -limit, -1);
+        const outcomes = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+        res.json({ date, total: outcomes.length, outcomes });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/lmc/status', async (req, res) => {
+    try {
+        const rawCfg = await redis.get(CONFIG_KEY);
+        const cfg = { ...DEFAULT_TRADING_CONFIG, ...(rawCfg ? JSON.parse(rawCfg) : {}) };
+        const paperEnabled = !!cfg.lmcPaperMode;
+        const endStr = cfg.lmcPaperModeEndDate;
+        let mode = 'PAPER';
+        if (!paperEnabled) {
+            mode = 'LIVE';
+        } else if (endStr) {
+            try {
+                const end = new Date(endStr + 'T00:00:00Z').getTime();
+                if (Date.now() >= end) mode = 'LIVE';
+            } catch (_) {}
+        }
+        const latestRaw = await redis.hgetall('LMC:LATEST') || {};
+        res.json({
+            enabled: !!cfg.lmcEnabled,
+            mode,
+            paper_end: endStr || null,
+            live_score: cfg.lmcLiveScore,
+            explosive_score: cfg.lmcExplosiveScore,
+            watch_score: cfg.lmcWatchScore,
+            max_avg_vol_7d: cfg.lmcMaxAvgVol7d,
+            symbols_tracked: Object.keys(latestRaw).length,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get('/api/vsp/status', async (req, res) => {
     try {
         const rawCfg = await redis.get(CONFIG_KEY);
