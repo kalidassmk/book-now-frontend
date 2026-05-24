@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Book-Now — Admin</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --panel-2: #1a232e; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  h2 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 600; margin: 0 0 12px; }
+  .sub { color: var(--muted); margin-bottom: 14px; font-size: 13px; display: flex; align-items: center; gap: 12px; }
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:.4;transform:scale(.85);} }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
+  .card.danger { border-color: rgba(231,76,60,.35); background: linear-gradient(135deg, rgba(231,76,60,.05) 0%, var(--panel) 100%); }
+  .card.warn { border-color: rgba(241,196,15,.35); background: linear-gradient(135deg, rgba(241,196,15,.05) 0%, var(--panel) 100%); }
+  .card.good { border-color: rgba(46,204,113,.35); background: linear-gradient(135deg, rgba(46,204,113,.05) 0%, var(--panel) 100%); }
+  .desc { color: var(--muted); font-size: 12px; line-height: 1.5; margin-bottom: 14px; }
+  .btn-row { display: flex; gap: 10px; flex-wrap: wrap; }
+  button {
+    padding: 10px 18px;
+    background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+    cursor: pointer; font-weight: 700; font-size: 13px;
+    transition: transform .12s, filter .12s;
+  }
+  button:hover { transform: translateY(-1px); filter: brightness(1.1); }
+  button:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+  button.good { background: var(--good); }
+  button.warn { background: var(--warn); color: #000; }
+  button.bad { background: var(--bad); }
+  button.ghost { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 5px 12px; border-radius: 14px;
+    font-size: 12px; font-weight: 700;
+    background: var(--panel-2); border: 1px solid var(--line);
+  }
+  .status-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .status-pill.on .dot { background: var(--good); animation: pulse 1.4s ease-in-out infinite; }
+  .status-pill.off .dot { background: var(--bad); }
+  .status-pill.on { color: var(--good); border-color: rgba(46,204,113,.35); }
+  .status-pill.off { color: var(--bad); border-color: rgba(231,76,60,.35); }
+  .log { background: #0a0d12; border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; margin-top: 12px; font: 11px/1.5 monospace; color: var(--muted); max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
+  .log .ok { color: var(--good); }
+  .log .err { color: var(--bad); }
+  .log .info { color: var(--text); }
+  .quick-link { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: var(--panel-2); border-radius: 6px; color: var(--text); text-decoration: none; font-size: 13px; margin-bottom: 6px; transition: background .12s; }
+  .quick-link:hover { background: rgba(41,182,246,.12); }
+  .quick-link .ic { font-size: 16px; min-width: 22px; text-align: center; }
+  .quick-link .lbl { font-weight: 600; }
+  .quick-link .desc-inline { color: var(--muted); font-size: 11px; margin-left: auto; }
+</style>
+</head>
+<body>
+
+<h1>🛠️ Admin</h1>
+<div class="sub">
+  <span class="live-dot"></span>
+  <span id="status">Backend status: checking…</span>
+  <span class="status-pill" id="svc-pill"><span class="dot"></span><span id="svc-label">…</span></span>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>📜 Live Logs</h2>
+    <div class="desc">Real-time tail of every subprocess log file. Filter by regex, pause auto-scroll, download as text.</div>
+    <a href="/logs.html" class="quick-link"><span class="ic">📜</span><span class="lbl">Open Live Logs</span><span class="desc-inline">→</span></a>
+    <div style="margin-top:10px">Common log sources:</div>
+    <a href="/logs.html?source=fast_scalper" class="quick-link"><span class="ic">⚡</span><span class="lbl">Fast Scalper</span><span class="desc-inline">live ladder buys</span></a>
+    <a href="/logs.html?source=virtual_scalper" class="quick-link"><span class="ic">🧪</span><span class="lbl">Virtual Scalper</span><span class="desc-inline">paper ladder buys</span></a>
+    <a href="/logs.html?source=pump_rider" class="quick-link"><span class="ic">🚀</span><span class="lbl">PumpRider</span><span class="desc-inline">volume-leads-price</span></a>
+    <a href="/logs.html?source=volume_spike_pattern" class="quick-link"><span class="ic">⚡</span><span class="lbl">VSP</span><span class="desc-inline">pump/dump classifier</span></a>
+    <a href="/logs.html?source=low_mcap_explosive" class="quick-link"><span class="ic">💎</span><span class="lbl">LMC</span><span class="desc-inline">small-cap detector</span></a>
+    <a href="/logs.html?source=calm_consolidation" class="quick-link"><span class="ic">🌊</span><span class="lbl">CCP</span><span class="desc-inline">consolidation</span></a>
+    <a href="/logs.html?source=market_scanner" class="quick-link"><span class="ic">📊</span><span class="lbl">Market Scanner</span><span class="desc-inline">ticker feed</span></a>
+  </div>
+
+  <div class="card warn">
+    <h2>♻️ Restart Backend</h2>
+    <div class="desc">
+      Triggers a graceful shutdown of the backend FastAPI process. Docker Compose's <code>restart: unless-stopped</code>
+      policy brings it back up in ~5 seconds with the latest config and a clean event loop.
+      <br><br>
+      <strong>Safe to use</strong> — all sub-processes restart cleanly. Any open Binance orders remain on the
+      exchange (they're managed by Binance, not the bot's in-memory state).
+    </div>
+    <div class="btn-row">
+      <button class="warn" onclick="restartBackend()">♻️ Restart Backend</button>
+      <button class="ghost" onclick="checkStatus()">🔄 Check Status</button>
+    </div>
+    <div class="log" id="restart-log">Press button to see action log…</div>
+  </div>
+
+  <div class="card danger">
+    <h2>🗑️ Redis FLUSHALL</h2>
+    <div class="desc">
+      <strong>DESTRUCTIVE.</strong> Wipes ALL Redis keys — including TRADING_CONFIG, BUY positions,
+      detector caches, alert feeds, trade history. <strong>Only use if you know what you're doing</strong>
+      (e.g. recovering from corruption).<br><br>
+      The backend will need to be restarted afterwards to reload its config.
+    </div>
+    <div class="btn-row">
+      <button class="bad" onclick="flushRedis()">🗑️ FLUSHALL (with confirm)</button>
+    </div>
+    <div class="log" id="flush-log">Press button to see action log…</div>
+  </div>
+
+  <div class="card good">
+    <h2>📊 Quick Diagnostics</h2>
+    <div class="desc">Useful sanity-check URLs:</div>
+    <a href="/api/lmc/status" class="quick-link" target="_blank"><span class="ic">🟢</span><span class="lbl">/api/lmc/status</span><span class="desc-inline">live mode flag</span></a>
+    <a href="/api/alerts/feed?since=0&limit=10" class="quick-link" target="_blank"><span class="ic">🔔</span><span class="lbl">/api/alerts/feed</span><span class="desc-inline">recent signals</span></a>
+    <a href="/api/check-coin?symbol=BTCUSDT" class="quick-link" target="_blank"><span class="ic">🧪</span><span class="lbl">/api/check-coin?symbol=BTCUSDT</span><span class="desc-inline">filter pipeline</span></a>
+    <a href="/api/coin/NEIROUSDT" class="quick-link" target="_blank"><span class="ic">🔬</span><span class="lbl">/api/coin/NEIROUSDT</span><span class="desc-inline">full deep-dive payload</span></a>
+    <a href="/api/logs/list" class="quick-link" target="_blank"><span class="ic">📄</span><span class="lbl">/api/logs/list</span><span class="desc-inline">log file inventory</span></a>
+    <a href="/api/service/status" class="quick-link" target="_blank"><span class="ic">⚙️</span><span class="lbl">/api/service/status</span><span class="desc-inline">backend health</span></a>
+  </div>
+</div>
+
+<script>
+function appendLog(elId, kind, text) {
+  const el = document.getElementById(elId);
+  const ts = new Date().toLocaleTimeString();
+  const line = document.createElement('div');
+  line.className = kind;
+  line.textContent = `[${ts}] ${text}`;
+  if (el.firstChild && el.firstChild.textContent && el.firstChild.textContent.startsWith('Press button')) el.innerHTML = '';
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+async function checkStatus() {
+  try {
+    const r = await fetch('/api/service/status');
+    const d = await r.json();
+    const pill = document.getElementById('svc-pill');
+    const lbl = document.getElementById('svc-label');
+    if (d.running) {
+      pill.className = 'status-pill on'; lbl.textContent = 'BACKEND RUNNING';
+      document.getElementById('status').textContent = 'Backend healthy ✓';
+    } else {
+      pill.className = 'status-pill off'; lbl.textContent = 'BACKEND DOWN';
+      document.getElementById('status').textContent = 'Backend unreachable ✗';
+    }
+  } catch (e) {
+    document.getElementById('status').textContent = 'Status check failed: ' + e.message;
+  }
+}
+
+async function restartBackend() {
+  if (!confirm('Restart the backend FastAPI process? Docker will auto-restart it in ~5 seconds.')) return;
+  const logEl = 'restart-log';
+  appendLog(logEl, 'info', '→ POST /api/service/restart');
+  try {
+    const r = await fetch('/api/service/restart', { method: 'POST' });
+    const d = await r.json();
+    if (r.ok && d.ok) {
+      appendLog(logEl, 'ok', `✓ ${d.message} (pid ${d.pid || '?'})`);
+      appendLog(logEl, 'info', 'Polling for backend to come back…');
+      // Poll status every 2s for up to 30s
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        try {
+          const sr = await fetch('/api/service/status');
+          const sd = await sr.json();
+          if (sd.running) {
+            appendLog(logEl, 'ok', `✓ Backend back up after ${attempts*2}s`);
+            checkStatus();
+            clearInterval(poll);
+          } else if (attempts >= 15) {
+            appendLog(logEl, 'err', `✗ Backend still down after 30s — check container status`);
+            clearInterval(poll);
+          }
+        } catch (_) {}
+      }, 2000);
+    } else {
+      appendLog(logEl, 'err', `✗ ${d.error || 'request failed'}`);
+    }
+  } catch (e) {
+    appendLog(logEl, 'err', `✗ ${e.message}`);
+  }
+}
+
+async function flushRedis() {
+  if (!confirm('⚠️ FLUSHALL Redis? This wipes EVERY KEY including config, positions, history. Type-confirm next.')) return;
+  const word = prompt('Type FLUSH to confirm:');
+  if (word !== 'FLUSH') return;
+  const logEl = 'flush-log';
+  appendLog(logEl, 'info', '→ POST /api/redis/flush?confirm=yes');
+  try {
+    const r = await fetch('/api/redis/flush?confirm=yes', { method: 'POST' });
+    const d = await r.json();
+    if (r.ok && d.ok) {
+      appendLog(logEl, 'ok', `✓ ${d.message}`);
+      appendLog(logEl, 'info', 'You should restart the backend now so it reloads its config.');
+    } else {
+      appendLog(logEl, 'err', `✗ ${d.error || 'request failed'}`);
+    }
+  } catch (e) {
+    appendLog(logEl, 'err', `✗ ${e.message}`);
+  }
+}
+
+checkStatus();
+setInterval(checkStatus, 10000);
+</script>
+
+<script src="/nav.js"></script>
+</body>
+</html>

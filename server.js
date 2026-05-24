@@ -7191,6 +7191,67 @@ app.post('/api/service/start', async (req, res) => {
     }
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// iter 79 — Logs proxy + restart + redis-flush admin endpoints.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Proxy /api/logs/list → backend /api/v1/diag/logs/list
+app.get('/api/logs/list', async (req, res) => {
+    try {
+        const r = await fetch(`${ENGINE_BASE}/api/v1/diag/logs/list`);
+        if (!r.ok) return res.status(r.status).json({ error: `backend HTTP ${r.status}` });
+        res.json(await r.json());
+    } catch (err) {
+        res.status(502).json({ error: 'backend unreachable: ' + err.message });
+    }
+});
+
+// Proxy /api/logs/tail → backend /api/v1/diag/logs/tail
+app.get('/api/logs/tail', async (req, res) => {
+    try {
+        const params = new URLSearchParams();
+        if (req.query.source) params.set('source', String(req.query.source));
+        if (req.query.lines) params.set('lines', String(req.query.lines));
+        if (req.query.grep) params.set('grep', String(req.query.grep));
+        const r = await fetch(`${ENGINE_BASE}/api/v1/diag/logs/tail?${params}`);
+        if (!r.ok) {
+            const txt = await r.text().catch(() => '');
+            return res.status(r.status).json({ error: txt || `backend HTTP ${r.status}` });
+        }
+        res.json(await r.json());
+    } catch (err) {
+        res.status(502).json({ error: 'backend unreachable: ' + err.message });
+    }
+});
+
+// Trigger backend restart (Docker auto-restart policy brings it back).
+app.post('/api/service/restart', async (req, res) => {
+    try {
+        const r = await fetch(`${ENGINE_BASE}/api/v1/diag/restart`, { method: 'POST' });
+        if (!r.ok) return res.status(r.status).json({ error: `backend HTTP ${r.status}` });
+        res.json(await r.json());
+    } catch (err) {
+        res.status(502).json({ error: 'backend unreachable: ' + err.message });
+    }
+});
+
+// Redis flush (used by Clear Cache button).  Requires confirmation.
+app.post('/api/redis/flush', async (req, res) => {
+    try {
+        if (req.query.confirm !== 'yes') {
+            return res.status(400).json({
+                ok: false,
+                error: 'Add ?confirm=yes to actually FLUSHALL. This wipes ALL Redis keys including config.',
+            });
+        }
+        await redis.flushall();
+        console.log('[Admin] Redis FLUSHALL via /api/redis/flush');
+        res.json({ ok: true, message: 'Redis FLUSHALL completed.' });
+    } catch (err) {
+        res.status(500).json({ ok: false, error: err.message });
+    }
+});
+
 // ─── Socket ───────────────────────────────────────────────────────────────────
 io.on('connection', async socket => {
     console.log('[WS] Client:', socket.id);

@@ -82,6 +82,16 @@
         { href: '/pro.html',               label: 'Pro',              icon: '🎖️', desc: 'Pro tier' },
       ],
     },
+    {
+      key: 'admin',
+      label: 'Admin',
+      icon: '🛠️',
+      items: [
+        { href: '/logs.html',              label: 'Live Logs',        icon: '📜', desc: 'Real-time tail of every subprocess log', highlight: true },
+        { href: '/admin.html',             label: 'Service Controls', icon: '🛠️', desc: 'Restart backend, flush Redis, diagnostics' },
+        { href: '/scalper-diagnostic.html', label: 'Scalper Diagnostic', icon: '🔬', desc: 'Smart-restart watcher + crash history' },
+      ],
+    },
   ];
 
   // ── Inject CSS ────────────────────────────────────────────────
