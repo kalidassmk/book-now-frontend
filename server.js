@@ -1901,6 +1901,93 @@ app.get('/api/early-pump-detections', async (req, res) => {
     }
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// iter 69 fe (2026-05-24) — Volume Spike Pattern (VSP) dashboard feeds.
+// Backend subprocess `volume_spike_pattern.py` publishes:
+//   VSP:DETECTIONS:<date>   — RPUSH per fire
+//   VSP:LATEST              — HSET symbol → latest event
+//   VSP:PAPER_TRADES:<date> — RPUSH per paper trade (BIG_PUMP @ conf>=75)
+//   VSP:OUTCOMES:<date>     — RPUSH per outcome record (+5/+15/+30/+60m)
+// All keys live in the main `redis` (not redis-analyse) since VSP is
+// trading-state, not analytics-state.
+// ─────────────────────────────────────────────────────────────────────────
+
+function _resolveDate(q) {
+    const v = (q || '').toLowerCase();
+    const today = new Date().toISOString().slice(0, 10);
+    if (!v || v === 'today') return today;
+    if (v === 'yesterday') {
+        return new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    }
+    return v;  // assume YYYY-MM-DD literal
+}
+
+app.get('/api/vsp/feed', async (req, res) => {
+    try {
+        const date  = _resolveDate(req.query.date);
+        const limit = Math.max(1, Math.min(1000, parseInt(req.query.limit || '300', 10)));
+        const raw = await redis.lrange(`VSP:DETECTIONS:${date}`, -limit, -1);
+        const events = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+        res.json({ date, total: events.length, events });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/vsp/paper-trades', async (req, res) => {
+    try {
+        const date = _resolveDate(req.query.date);
+        const raw = await redis.lrange(`VSP:PAPER_TRADES:${date}`, 0, -1);
+        const trades = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+        res.json({ date, total: trades.length, trades });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/vsp/outcomes', async (req, res) => {
+    try {
+        const date  = _resolveDate(req.query.date);
+        const limit = Math.max(1, Math.min(2000, parseInt(req.query.limit || '500', 10)));
+        const raw = await redis.lrange(`VSP:OUTCOMES:${date}`, -limit, -1);
+        const outcomes = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+        res.json({ date, total: outcomes.length, outcomes });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/vsp/status', async (req, res) => {
+    try {
+        const rawCfg = await redis.get(CONFIG_KEY);
+        const cfg = { ...DEFAULT_TRADING_CONFIG, ...(rawCfg ? JSON.parse(rawCfg) : {}) };
+        const paperEnabled = !!cfg.vspPaperMode;
+        const endStr = cfg.vspPaperModeEndDate;
+        let mode = 'PAPER';
+        if (!paperEnabled) {
+            mode = 'LIVE';
+        } else if (endStr) {
+            try {
+                const end = new Date(endStr + 'T00:00:00Z').getTime();
+                if (Date.now() >= end) mode = 'LIVE';
+            } catch (_) {}
+        }
+        const latestRaw = await redis.hgetall('VSP:LATEST') || {};
+        const latestCount = Object.keys(latestRaw).length;
+        res.json({
+            enabled: !!cfg.vspEnabled,
+            mode,
+            paper_end: endStr || null,
+            live_confidence: cfg.vspLiveConfidence,
+            big_dir_threshold: cfg.vspBigDirThreshold,
+            big_mag_threshold: cfg.vspBigMagThreshold,
+            symbols_tracked: latestCount,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // iter 60 fe (2026-05-23) — unified alert feed for the dashboard banner.
 // Pulls PUMP_RIDER:DETECTIONS, EARLY_PUMP:DETECTIONS, TRADE_ALERTS for
 // the operator's day, normalises to {ts, kind, symbol, ...}, returns
