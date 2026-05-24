@@ -1278,10 +1278,13 @@ app.get('/api/check-coin', async (req, res) => {
         const cfg = { ...DEFAULT_TRADING_CONFIG, ...(rawCfg ? JSON.parse(rawCfg) : {}) };
 
         // Fetch 24h ticker + daily klines (parallel)
-        const [tickerRaw, dailyRaw, hourlyRaw] = await Promise.all([
+        // iter 71 — also fetch 12 × 5m klines (= last 60 min) so we can
+        // compute price-vs-volume divergence for the weak-pump filter.
+        const [tickerRaw, dailyRaw, hourlyRaw, fiveMinRaw] = await Promise.all([
             fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${binanceSym}`).then(r => r.json()),
             fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1d&limit=31`).then(r => r.json()),
             fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=1h&limit=2`).then(r => r.json()),
+            fetch(`https://api.binance.com/api/v3/klines?symbol=${binanceSym}&interval=5m&limit=12`).then(r => r.json()),
         ]);
 
         if (tickerRaw.code) return res.status(404).json({ error: `Binance: ${tickerRaw.msg || JSON.stringify(tickerRaw)}` });
@@ -1430,6 +1433,120 @@ app.get('/api/check-coin', async (req, res) => {
             details: {
                 limits: { threshold: cfg.postPumpThresholdPct, off_peak: cfg.postPumpOffPeakMinPct, lookback_days: cfg.postPumpLookbackDays },
             },
+        });
+
+        // ── Filter 6: iter71 weak-pump (Price↑ + Volume↓ = REJECT) ──
+        // Classic bearish divergence — when price is making higher highs
+        // but volume is FADING, the pump is running out of buyers and is
+        // very likely to reverse.  This catches "fake-out" rallies that
+        // suck in late buyers right before a dump.
+        //
+        // Trigger: chg over weakPumpWindowMin minutes >= weakPumpMinChgPct
+        //          AND vol_ratio (recent half / prior half) < weakPumpVolDeclineRatio
+        //
+        // Optional booster: upper-wick share on green candles >
+        // weakPumpUpperWickShare → buyers being absorbed at the highs.
+        let wp_blocked = false, wp_details = {};
+        const wpEnabled = cfg.iter71WeakPumpFilterEnabled !== false;  // default ON
+        if (Array.isArray(fiveMinRaw) && fiveMinRaw.length >= 9) {
+            const closed5m = fiveMinRaw.slice(0, -1);   // drop in-progress bar
+            const opens  = closed5m.map(k => parseFloat(k[1]));
+            const highs  = closed5m.map(k => parseFloat(k[2]));
+            const lows   = closed5m.map(k => parseFloat(k[3]));
+            const closes = closed5m.map(k => parseFloat(k[4]));
+            const qvols  = closed5m.map(k => parseFloat(k[7]));
+            const tbq    = closed5m.map(k => parseFloat(k[10] || 0));
+
+            const winBars = Math.max(2, Math.min(6, Math.round((cfg.weakPumpWindowMin || 15) / 5)));
+            const n = closes.length;
+            if (n >= winBars * 2) {
+                const recent = { closes: closes.slice(-winBars), opens: opens.slice(-winBars),
+                                  highs: highs.slice(-winBars), lows: lows.slice(-winBars),
+                                  qvols: qvols.slice(-winBars), tbq: tbq.slice(-winBars) };
+                const prior  = { qvols: qvols.slice(-winBars * 2, -winBars) };
+
+                const c_now = recent.closes[recent.closes.length - 1];
+                const c_then = closes[closes.length - winBars - 1] || closes[0];
+                const chg_pct = c_then > 0 ? (c_now - c_then) / c_then * 100 : 0;
+
+                const vol_recent_avg = recent.qvols.reduce((s, v) => s + v, 0) / winBars;
+                const vol_prior_avg  = prior.qvols.reduce((s, v) => s + v, 0) / winBars;
+                const vol_ratio = vol_prior_avg > 0 ? vol_recent_avg / vol_prior_avg : 0;
+
+                // Upper-wick rejection on green bars (last winBars)
+                let green_count = 0, green_upper_wick_total = 0, green_body_total = 0;
+                for (let i = 0; i < winBars; i++) {
+                    const o = recent.opens[i], c = recent.closes[i];
+                    const h = recent.highs[i], l = recent.lows[i];
+                    if (c > o) {
+                        green_count++;
+                        const rng = Math.max(h - l, 1e-12);
+                        green_upper_wick_total += (h - c) / rng;
+                        green_body_total += (c - o) / rng;
+                    }
+                }
+                const avg_upper_wick_share = green_count > 0 ? green_upper_wick_total / green_count : 0;
+
+                // Taker buy ratio (last window)
+                const tb_sum = recent.tbq.reduce((s, v) => s + v, 0);
+                const qv_sum = recent.qvols.reduce((s, v) => s + v, 0);
+                const taker_buy_ratio = qv_sum > 0 ? tb_sum / qv_sum : 0;
+
+                const minChg     = parseFloat(cfg.weakPumpMinChgPct ?? 0.5);
+                const volDecline = parseFloat(cfg.weakPumpVolDeclineRatio ?? 0.7);
+                const wickShare  = parseFloat(cfg.weakPumpUpperWickShare ?? 0.4);
+                const tbrCeil    = parseFloat(cfg.weakPumpTakerBuyCeil ?? 0.45);
+
+                // Primary rule: rising price + falling vol
+                const primary_weak = chg_pct >= minChg && vol_ratio < volDecline;
+                // Booster: also weak if upper-wick rejection dominates on greens
+                const wick_weak = chg_pct >= minChg && green_count >= 2 && avg_upper_wick_share >= wickShare;
+                // Booster: also weak if taker-buy ratio is below ceiling
+                // (sellers absorbing buyers while price stalls up)
+                const tbr_weak = chg_pct >= minChg && taker_buy_ratio < tbrCeil && vol_ratio < 1.0;
+
+                wp_blocked = wpEnabled && (primary_weak || wick_weak || tbr_weak);
+                wp_details = {
+                    window_min: winBars * 5,
+                    chg_pct: +chg_pct.toFixed(3),
+                    vol_ratio: +vol_ratio.toFixed(2),
+                    vol_recent_usd: Math.round(vol_recent_avg),
+                    vol_prior_usd: Math.round(vol_prior_avg),
+                    avg_upper_wick_share: +avg_upper_wick_share.toFixed(2),
+                    taker_buy_ratio: +taker_buy_ratio.toFixed(3),
+                    triggers: {
+                        primary_weak,
+                        wick_weak,
+                        tbr_weak,
+                    },
+                    limits: {
+                        min_chg_pct: minChg,
+                        vol_decline_ratio: volDecline,
+                        upper_wick_share: wickShare,
+                        taker_buy_ceil: tbrCeil,
+                    },
+                };
+            }
+        }
+        filters.push({
+            id: 'iter71_weak_pump',
+            name: 'iter 71 — Weak-pump filter (Price↑ + Volume↓)',
+            pass: !wp_blocked,
+            blocked: wp_blocked,
+            enabled: wpEnabled,
+            reason: wp_blocked
+                ? (() => {
+                    const t = wp_details.triggers || {};
+                    const parts = [];
+                    if (t.primary_weak) parts.push(`price ↑ ${wp_details.chg_pct}% but vol ratio ${wp_details.vol_ratio}× (need ≥ ${wp_details.limits.vol_decline_ratio})`);
+                    if (t.wick_weak) parts.push(`upper-wick share ${wp_details.avg_upper_wick_share} ≥ ${wp_details.limits.upper_wick_share} on green bars (buyer absorption)`);
+                    if (t.tbr_weak) parts.push(`taker-buy ratio ${wp_details.taker_buy_ratio} < ${wp_details.limits.taker_buy_ceil} (sellers absorbing buyers)`);
+                    return parts.join(' OR ');
+                })()
+                : (Array.isArray(fiveMinRaw) && fiveMinRaw.length >= 9
+                    ? `price ↑ ${wp_details.chg_pct}%, vol ratio ${wp_details.vol_ratio}× — healthy momentum`
+                    : 'insufficient 5m history → pass (fail-open)'),
+            details: wp_details,
         });
 
         // Final verdict
