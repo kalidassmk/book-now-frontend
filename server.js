@@ -1901,6 +1901,69 @@ app.get('/api/early-pump-detections', async (req, res) => {
     }
 });
 
+// iter 60 fe (2026-05-23) — unified alert feed for the dashboard banner.
+// Pulls PUMP_RIDER:DETECTIONS, EARLY_PUMP:DETECTIONS, TRADE_ALERTS for
+// the operator's day, normalises to {ts, kind, symbol, ...}, returns
+// the last N events newer than `since`.
+app.get('/api/alerts/feed', async (req, res) => {
+    try {
+        const since = parseInt(req.query.since || '0', 10);
+        const limit = parseInt(req.query.limit || '30', 10);
+        const today = new Date().toISOString().slice(0, 10);
+        const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+        const events = [];
+
+        async function pull(client, key, kind) {
+            try {
+                const raw = await client.lrange(key, 0, 100);
+                for (const r of raw) {
+                    try {
+                        const ev = JSON.parse(r);
+                        if (!ev.ts || ev.ts < since) continue;
+                        events.push({
+                            ts: ev.ts,
+                            kind,
+                            symbol: ev.symbol,
+                            score: ev.score,
+                            change_24h_pct: ev.change_24h_pct,
+                            price: ev.price ?? ev.last_price,
+                            vol_multiple: ev.vol_multiple,
+                            price_change_pct: ev.price_change_pct,
+                            // trade-specific
+                            action: ev.action,
+                            realised_net: ev.realised_net,
+                            rule_label: ev.rule_label,
+                        });
+                    } catch (_) {}
+                }
+            } catch (_) {}
+        }
+
+        // Today's events from all three sources
+        await pull(redis,        `PUMP_RIDER:DETECTIONS:${today}`,    'pump_rider');
+        await pull(redisAnalyse, `EARLY_PUMP:DETECTIONS:${today}`,    'early_pump');
+        await pull(redis,        `TRADE_ALERTS:${today}`,             'trade');
+        // Yesterday too if `since` is older than today's 00:00
+        const todayStart = new Date(today + 'T00:00:00Z').getTime();
+        if (since < todayStart) {
+            await pull(redis,        `PUMP_RIDER:DETECTIONS:${yesterday}`, 'pump_rider');
+            await pull(redisAnalyse, `EARLY_PUMP:DETECTIONS:${yesterday}`, 'early_pump');
+            await pull(redis,        `TRADE_ALERTS:${yesterday}`,          'trade');
+        }
+
+        events.sort((a, b) => b.ts - a.ts);
+        res.json({
+            generated_at: Date.now(),
+            since,
+            count: events.length,
+            events: events.slice(0, limit),
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // iter 16 fe (2026-05-15): Pattern Backtest
 // Replays every detection from BOUNCE:DETECTIONS and EARLY_PUMP:DETECTIONS
 // against actual 1m klines. Simulates the bot's iter43 strategy:
