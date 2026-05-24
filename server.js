@@ -2149,6 +2149,80 @@ app.get('/api/lmc/status', async (req, res) => {
     }
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// iter 72 fe (2026-05-24) — Calm Consolidation Pattern (CCP) feeds.
+// Backend subprocess `calm_consolidation.py` publishes:
+//   CCP:DETECTIONS:<date>   — every fire
+//   CCP:LATEST              — symbol → latest event
+//   CCP:PAPER_TRADES:<date> — would-be CALM_REVERSAL_UP buys
+//   CCP:OUTCOMES:<date>     — price chg at +30/+120/+360/+1440 min
+// ─────────────────────────────────────────────────────────────────────────
+
+app.get('/api/ccp/feed', async (req, res) => {
+    try {
+        const date  = _resolveDate(req.query.date);
+        const limit = Math.max(1, Math.min(1000, parseInt(req.query.limit || '300', 10)));
+        const raw = await redis.lrange(`CCP:DETECTIONS:${date}`, -limit, -1);
+        const events = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+        res.json({ date, total: events.length, events });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/ccp/paper-trades', async (req, res) => {
+    try {
+        const date = _resolveDate(req.query.date);
+        const raw = await redis.lrange(`CCP:PAPER_TRADES:${date}`, 0, -1);
+        const trades = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+        res.json({ date, total: trades.length, trades });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/ccp/outcomes', async (req, res) => {
+    try {
+        const date  = _resolveDate(req.query.date);
+        const limit = Math.max(1, Math.min(2000, parseInt(req.query.limit || '500', 10)));
+        const raw = await redis.lrange(`CCP:OUTCOMES:${date}`, -limit, -1);
+        const outcomes = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+        res.json({ date, total: outcomes.length, outcomes });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/ccp/status', async (req, res) => {
+    try {
+        const rawCfg = await redis.get(CONFIG_KEY);
+        const cfg = { ...DEFAULT_TRADING_CONFIG, ...(rawCfg ? JSON.parse(rawCfg) : {}) };
+        const paperEnabled = !!cfg.ccpPaperMode;
+        const endStr = cfg.ccpPaperModeEndDate;
+        let mode = 'PAPER';
+        if (!paperEnabled) {
+            mode = 'LIVE';
+        } else if (endStr) {
+            try {
+                const end = new Date(endStr + 'T00:00:00Z').getTime();
+                if (Date.now() >= end) mode = 'LIVE';
+            } catch (_) {}
+        }
+        const latestRaw = await redis.hgetall('CCP:LATEST') || {};
+        res.json({
+            enabled: !!cfg.ccpEnabled,
+            mode,
+            paper_end: endStr || null,
+            live_score: cfg.ccpLiveScore,
+            quality_score: cfg.ccpQualityScore,
+            min_score: cfg.ccpMinScore,
+            symbols_tracked: Object.keys(latestRaw).length,
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get('/api/vsp/status', async (req, res) => {
     try {
         const rawCfg = await redis.get(CONFIG_KEY);
