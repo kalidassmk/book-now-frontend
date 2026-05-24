@@ -5424,27 +5424,42 @@ app.get('/api/spot-tickers', async (req, res) => {
             return res.json({ window, ts: Date.now(), tickers });
         }
         if (window === '1h' || window === '4h') {
-            // Binance's /api/v3/ticker?windowSize=… REQUIRES a `symbols`
-            // list (error -1128 if omitted). Cap is 100 symbols per call.
-            // Strategy: take the top 100 USDT pairs by 24h volume — these
-            // are the ones the operator actually cares about, and the
-            // long tail is mostly illiquid micro-caps anyway.
+            // iter 63 (2026-05-24) — fix: take ALL USDT pairs above the
+            // min-volume floor instead of top-100-by-volume.  The old
+            // behaviour gave megacaps (BTC/ETH/SOL/NEAR) priority — they
+            // barely move 1h, so the table missed real movers like EIGEN
+            // (+4.32%) or LUMIA (+3.97%) that aren't in the top 100 by
+            // 24h volume.  Now: filter by min_vol_m (default 2M to match
+            // the dashboard UI), paginate Binance's 100-symbol cap.
             const cached = binanceWorker.getAllTickers24h() || [];
-            const top = cached
+            const minVolM = parseFloat(req.query.min_vol_m || '2');
+            const eligible = cached
                 .filter(t => t.symbol && t.symbol.endsWith('USDT'))
-                .sort((a, b) => parseFloat(b.quoteVolume || 0) - parseFloat(a.quoteVolume || 0))
-                .slice(0, 100)
+                .filter(t => !t.symbol.includes('UPUSDT') && !t.symbol.includes('DOWNUSDT'))
+                .filter(t => parseFloat(t.quoteVolume || 0) >= minVolM * 1e6)
                 .map(t => t.symbol);
-            if (top.length === 0) {
+
+            if (eligible.length === 0) {
                 return res.json({ window, ts: Date.now(), tickers: [] });
             }
-            const data = await binanceWorker.binanceFetch(
-                '/api/v3/ticker', 'GET',
-                { windowSize: window, symbols: JSON.stringify(top) },
-                { signed: false }
-            );
-            const tickers = (Array.isArray(data) ? data : [])
-                .filter(t => t.symbol && t.symbol.endsWith('USDT'))
+
+            // Binance caps symbols per call at 100.  Paginate.
+            const chunks = [];
+            for (let i = 0; i < eligible.length; i += 100) {
+                chunks.push(eligible.slice(i, i + 100));
+            }
+            const results = await Promise.all(chunks.map(chunk =>
+                binanceWorker.binanceFetch(
+                    '/api/v3/ticker', 'GET',
+                    { windowSize: window, symbols: JSON.stringify(chunk) },
+                    { signed: false }
+                ).catch(err => {
+                    console.warn(`[/api/spot-tickers] ${window} chunk(${chunk.length}) failed:`, err.message);
+                    return [];
+                })
+            ));
+            const tickers = results.flat()
+                .filter(t => t && t.symbol && t.symbol.endsWith('USDT'))
                 .map(t => ({
                     symbol: t.symbol,
                     price:  parseFloat(t.lastPrice),
@@ -5453,7 +5468,12 @@ app.get('/api/spot-tickers', async (req, res) => {
                     low:    parseFloat(t.lowPrice),
                     volume: parseFloat(t.quoteVolume),
                 }));
-            return res.json({ window, ts: Date.now(), tickers });
+            return res.json({
+                window, ts: Date.now(),
+                universe_size: eligible.length,
+                chunks: chunks.length,
+                tickers,
+            });
         }
         return res.status(400).json({ error: `Unsupported window: ${window}` });
     } catch (err) {

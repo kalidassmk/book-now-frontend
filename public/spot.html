@@ -253,7 +253,11 @@ function setStatus(state, label) {
 
 async function pollOnce() {
     try {
-        const resp = await fetch(`/api/spot-tickers?window=${timeframe}`);
+        // iter 63 — forward min volume so server-side universe matches UI
+        // filter.  For 1h/4h windows this also reduces Binance API load
+        // (fewer chunks paginated).
+        const url = `/api/spot-tickers?window=${timeframe}&min_vol_m=${minVolMUsdt}`;
+        const resp = await fetch(url);
         if (!resp.ok) throw new Error("HTTP " + resp.status);
         const data = await resp.json();
         tickers = data.tickers || [];
