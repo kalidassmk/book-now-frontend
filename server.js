@@ -2557,16 +2557,109 @@ app.get('/api/alerts/feed', async (req, res) => {
             } catch (_) {}
         }
 
-        // Today's events from all three sources
+        // iter 78 — also include VSP/LMC/CCP detections + weak-pump
+        // skip events from METRICS:SKIP so the alert feed shows the
+        // FULL picture (not just PumpRider + Early Pump + trades).
+        async function pullVsp(date) {
+            try {
+                const raw = await redis.lrange(`VSP:DETECTIONS:${date}`, 0, 100);
+                for (const r of raw) {
+                    try {
+                        const ev = JSON.parse(r);
+                        if (!ev.ts || ev.ts < since) continue;
+                        events.push({
+                            ts: ev.ts, kind: 'vsp', symbol: ev.symbol,
+                            label: ev.label,
+                            direction_score: ev.direction_score,
+                            magnitude_score: ev.magnitude_score,
+                            confidence: ev.confidence,
+                            price: ev.trigger_close,
+                            chg_5m: ev.entry?.vol_5m_mult ? null : undefined,
+                            vol_surge_5m: ev.entry?.vol_5m_mult,
+                        });
+                    } catch (_) {}
+                }
+            } catch (_) {}
+        }
+        async function pullLmc(date) {
+            try {
+                const raw = await redis.lrange(`LMC:DETECTIONS:${date}`, 0, 100);
+                for (const r of raw) {
+                    try {
+                        const ev = JSON.parse(r);
+                        if (!ev.ts || ev.ts < since) continue;
+                        events.push({
+                            ts: ev.ts, kind: 'lmc', symbol: ev.symbol,
+                            label: ev.label,
+                            score: ev.score,
+                            direction: ev.direction,
+                            price: ev.trigger_price,
+                            chg_24h_pct: ev.chg_24h_pct,
+                            vol_surge_x: ev.vol_surge_x,
+                            avg_7d_vol_usd: ev.avg_7d_vol_usd,
+                        });
+                    } catch (_) {}
+                }
+            } catch (_) {}
+        }
+        async function pullCcp(date) {
+            try {
+                const raw = await redis.lrange(`CCP:DETECTIONS:${date}`, 0, 100);
+                for (const r of raw) {
+                    try {
+                        const ev = JSON.parse(r);
+                        if (!ev.ts || ev.ts < since) continue;
+                        events.push({
+                            ts: ev.ts, kind: 'ccp', symbol: ev.symbol,
+                            label: ev.label,
+                            score: ev.score,
+                            direction: ev.direction,
+                            price: ev.trigger_price,
+                            pos_24h_pct: ev.direction_breakdown?.pos_24h_pct,
+                        });
+                    } catch (_) {}
+                }
+            } catch (_) {}
+        }
+        async function pullWeakPumpSkips(date) {
+            // METRICS:SKIP entries with reason containing "iter71_weak_pump"
+            try {
+                const raw = await redis.lrange(`METRICS:SKIP:${date}`, 0, 200);
+                for (const r of raw) {
+                    try {
+                        const ev = JSON.parse(r);
+                        if (!ev.ts || ev.ts < since) continue;
+                        const reason = ev.reason || '';
+                        if (!reason.includes('iter71_weak_pump') && !reason.includes('weak_pump')) continue;
+                        events.push({
+                            ts: ev.ts, kind: 'weak_pump', symbol: ev.symbol,
+                            reason,
+                            rule: ev.rule,
+                            rule_label: ev.rule_label,
+                        });
+                    } catch (_) {}
+                }
+            } catch (_) {}
+        }
+
+        // Today's events from all sources
         await pull(redis,        `PUMP_RIDER:DETECTIONS:${today}`,    'pump_rider');
         await pull(redisAnalyse, `EARLY_PUMP:DETECTIONS:${today}`,    'early_pump');
         await pull(redis,        `TRADE_ALERTS:${today}`,             'trade');
+        await pullVsp(today);
+        await pullLmc(today);
+        await pullCcp(today);
+        await pullWeakPumpSkips(today);
         // Yesterday too if `since` is older than today's 00:00
         const todayStart = new Date(today + 'T00:00:00Z').getTime();
         if (since < todayStart) {
             await pull(redis,        `PUMP_RIDER:DETECTIONS:${yesterday}`, 'pump_rider');
             await pull(redisAnalyse, `EARLY_PUMP:DETECTIONS:${yesterday}`, 'early_pump');
             await pull(redis,        `TRADE_ALERTS:${yesterday}`,          'trade');
+            await pullVsp(yesterday);
+            await pullLmc(yesterday);
+            await pullCcp(yesterday);
+            await pullWeakPumpSkips(yesterday);
         }
 
         events.sort((a, b) => b.ts - a.ts);

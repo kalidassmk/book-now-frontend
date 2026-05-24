@@ -445,15 +445,161 @@ if (urlSym) {
   // Auto-refresh every 15s when viewing a symbol
   setInterval(refresh, 15000);
 } else {
-  document.getElementById('content').innerHTML = `
-    <div class="card empty">
-      Type a symbol above to load. Examples:
-      <strong style="color:var(--accent);cursor:pointer" onclick="document.getElementById('search-input').value='NEIROUSDT';loadSymbol()">NEIROUSDT</strong> ·
-      <strong style="color:var(--accent);cursor:pointer" onclick="document.getElementById('search-input').value='BTCUSDT';loadSymbol()">BTCUSDT</strong> ·
-      <strong style="color:var(--accent);cursor:pointer" onclick="document.getElementById('search-input').value='SOLUSDT';loadSymbol()">SOLUSDT</strong>
-    </div>
-  `;
-  document.getElementById('status').textContent = 'Ready';
+  // No ?sym= → show the unified Alerts panel as default view
+  renderAlertsHome();
+  document.getElementById('status').textContent = 'Showing live alerts — search a coin for deep-dive';
+  // Refresh alerts every 5s when on the home view
+  setInterval(renderAlertsHome, 5000);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Alerts home view — categorized, color-coded, clickable rows.
+// Sources: /api/alerts/feed (includes pump_rider, early_pump,
+// trade, vsp, lmc, ccp, weak_pump).
+// ─────────────────────────────────────────────────────────────
+function categorize(ev) {
+  if (ev.kind === 'trade') return 'trade';
+  if (ev.kind === 'weak_pump') return 'weak';
+  if (ev.kind === 'pump_rider') {
+    const t = (ev.tier || '').toUpperCase();
+    return (t === 'STRONG' || t === 'NORMAL') ? 'strong' : 'watch';
+  }
+  if (ev.kind === 'early_pump') return (+ev.score || 0) >= 80 ? 'strong' : 'watch';
+  if (ev.kind === 'vsp') {
+    const l = (ev.label || '').toUpperCase();
+    if (l.startsWith('BIG_PUMP')) return 'strong';
+    if (l.includes('DUMP')) return 'dump';
+    return 'watch';
+  }
+  if (ev.kind === 'lmc') {
+    const l = (ev.label || '').toUpperCase();
+    if (l === 'EXPLOSIVE_PUMP') return 'strong';
+    if (l.includes('DUMP')) return 'dump';
+    return 'watch';
+  }
+  if (ev.kind === 'ccp') {
+    const l = (ev.label || '').toUpperCase();
+    if (l === 'CALM_REVERSAL_UP') return 'strong';
+    if (l.includes('BREAKDOWN_RISK')) return 'dump';
+    return 'watch';
+  }
+  return 'watch';
+}
+
+function describe(ev) {
+  if (ev.kind === 'trade') {
+    const a = ev.action || '';
+    const p = ev.price != null ? '$' + (+ev.price).toPrecision(4) : '';
+    const pnl = ev.realised_net != null ? ` <strong class="${ev.realised_net >= 0 ? 'pos' : 'neg'}">${ev.realised_net >= 0 ? '+' : ''}$${(+ev.realised_net).toFixed(2)}</strong>` : '';
+    const ic = a === 'BUY' ? '🛒' : (ev.realised_net >= 0 ? '💰' : '🛑');
+    return { ic, source: 'Bot Trade', detail: `${a} ${p}${pnl}` };
+  }
+  if (ev.kind === 'weak_pump') {
+    return { ic: '⚠️', source: 'Weak-Pump Reject', detail: ev.reason || '' };
+  }
+  if (ev.kind === 'pump_rider') {
+    const t = (ev.tier || '').toUpperCase();
+    const ic = ({STRONG:'🔥', NORMAL:'🚀', EARLY:'👀', MEGA:'⚠️'})[t] || '⚡';
+    const c5 = ev.chg_5m != null ? `<strong>+${(+ev.chg_5m).toFixed(2)}%</strong>/5m` : '';
+    const v5 = ev.vol_surge_5m != null ? `vol <strong>${(+ev.vol_surge_5m).toFixed(1)}×</strong>` : '';
+    return { ic, source: `PumpRider ${t}`, detail: `${c5} · ${v5}` };
+  }
+  if (ev.kind === 'early_pump') {
+    const s = +ev.score || 0;
+    const c = ev.change_24h_pct != null ? `${ev.change_24h_pct >= 0 ? '+' : ''}${(+ev.change_24h_pct).toFixed(2)}% 24h` : '';
+    return { ic: s >= 80 ? '🚀' : '👀', source: 'Early Pump', detail: `score <strong>${s}</strong> · ${c}` };
+  }
+  if (ev.kind === 'vsp') {
+    const l = ev.label || '';
+    const ic = l.includes('BIG_PUMP') ? '🔥' : l.includes('BIG_DUMP') ? '🔴' : l.includes('MODERATE') ? '⚡' : '👀';
+    return { ic, source: 'VSP', detail: `${l} · conf <strong>${ev.confidence ?? '—'}</strong> D=${ev.direction_score ?? '?'} M=${ev.magnitude_score ?? '?'}` };
+  }
+  if (ev.kind === 'lmc') {
+    const l = ev.label || '';
+    const ic = l === 'EXPLOSIVE_PUMP' ? '💎🚀' : l.includes('DUMP') ? '💎🔴' : '💎';
+    return { ic, source: 'LMC (Low MCap)', detail: `${l} · score <strong>${ev.score ?? '?'}</strong> · vol <strong>${ev.vol_surge_x ?? '?'}×</strong>` };
+  }
+  if (ev.kind === 'ccp') {
+    const l = ev.label || '';
+    const ic = l === 'CALM_REVERSAL_UP' ? '🌊⬆️' : l.includes('BREAKDOWN') ? '🌊🔴' : '🌊';
+    return { ic, source: 'CCP (Consolidation)', detail: `${l} · score <strong>${ev.score ?? '?'}</strong>` };
+  }
+  return { ic: '•', source: ev.kind || 'event', detail: '' };
+}
+
+async function renderAlertsHome() {
+  if (currentSym) return;  // user has loaded a coin — don't overwrite
+  try {
+    const r = await fetch('/api/alerts/feed?since=0&limit=100');
+    if (!r.ok) {
+      document.getElementById('content').innerHTML = `<div class="card empty">Couldn't load alerts (HTTP ${r.status}).</div>`;
+      return;
+    }
+    const d = await r.json();
+    const events = (d.events || []).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    const buckets = { trade: [], strong: [], watch: [], weak: [], dump: [] };
+    for (const ev of events) buckets[categorize(ev)].push(ev);
+
+    const sections = [
+      { key: 'trade',  title: '🛒 Trade Events',                color: '#c084fc', desc: 'Bot buys, fills, sells, P&L' },
+      { key: 'strong', title: '🔥 Strong Signals',              color: '#2ecc71', desc: 'High-confidence BUY candidates' },
+      { key: 'watch',  title: '👀 Watch List',                  color: '#f1c40f', desc: 'Early signals, lower confidence' },
+      { key: 'weak',   title: '⚠️ Weak Pumps (REJECTED)',        color: '#e67e22', desc: 'Price↑ + Vol↓ — bot skipped these' },
+      { key: 'dump',   title: '🔴 Dump Risk',                    color: '#e74c3c', desc: 'Down signals — avoid entry' },
+    ];
+
+    let html = `
+      <div class="card" style="background:linear-gradient(135deg,rgba(41,182,246,.08) 0%,var(--panel) 100%);border-color:rgba(41,182,246,.3)">
+        <h2 style="margin-bottom:6px">🚨 Live Alerts Dashboard</h2>
+        <div style="color:var(--muted);font-size:12px">Categorized signals from all 5 detectors + bot trade events + weak-pump rejections. Click any symbol to deep-dive.</div>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+          ${sections.map(s => `<span style="padding:4px 10px;background:rgba(139,148,158,.10);border-radius:14px;font-size:11px;color:${s.color};font-weight:700">${s.title.split(' ')[0]} ${buckets[s.key].length}</span>`).join('')}
+          <span style="margin-left:auto;color:var(--muted);font-size:11px;align-self:center">${events.length} total · updated ${new Date().toLocaleTimeString()}</span>
+        </div>
+      </div>
+    `;
+
+    for (const s of sections) {
+      const items = buckets[s.key];
+      if (!items.length) continue;
+      html += `
+        <div class="card" style="border-left:4px solid ${s.color}">
+          <h2 style="color:${s.color};font-size:13px">${s.title} <span style="color:var(--muted);font-weight:400;font-size:11px;text-transform:none;letter-spacing:0">— ${s.desc} · ${items.length} event${items.length === 1 ? '' : 's'}</span></h2>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            ${items.slice(0, 20).map(ev => {
+              const { ic, source, detail } = describe(ev);
+              const ago = ((Date.now() - ev.ts) / 1000);
+              const agoStr = ago < 60 ? `${ago.toFixed(0)}s ago` : ago < 3600 ? `${(ago/60).toFixed(0)}m ago` : `${(ago/3600).toFixed(1)}h ago`;
+              return `
+                <a href="/coin.html?sym=${ev.symbol}" style="display:flex;gap:12px;align-items:center;padding:9px 12px;background:var(--panel-2);border-radius:6px;text-decoration:none;color:var(--text);transition:background .12s" onmouseover="this.style.background='rgba(41,182,246,.12)'" onmouseout="this.style.background='var(--panel-2)'">
+                  <span style="font-size:18px;min-width:28px;text-align:center">${ic}</span>
+                  <span style="font-weight:700;min-width:110px;letter-spacing:.3px">${ev.symbol}</span>
+                  <span style="color:var(--muted);font-size:10px;min-width:120px;text-transform:uppercase;letter-spacing:.4px">${source}</span>
+                  <span style="flex:1;font-size:12px">${detail}</span>
+                  <span style="color:var(--muted);font-size:11px;min-width:70px;text-align:right">${agoStr}</span>
+                </a>
+              `;
+            }).join('')}
+            ${items.length > 20 ? `<div style="color:var(--muted);font-size:11px;text-align:center;padding:6px">+ ${items.length - 20} more not shown</div>` : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    if (events.length === 0) {
+      html += `<div class="card empty">No alerts yet. Try again in a few seconds.</div>`;
+    }
+
+    html += `
+      <div style="text-align:center;color:var(--muted);font-size:11px;padding:8px">
+        Refreshing every 5s · Search a symbol above to deep-dive into any coin
+      </div>
+    `;
+
+    document.getElementById('content').innerHTML = html;
+  } catch (e) {
+    document.getElementById('content').innerHTML = `<div class="card empty">Error loading alerts: ${e.message}</div>`;
+  }
 }
 </script>
 
