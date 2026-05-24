@@ -1927,9 +1927,16 @@ app.get('/api/alerts/feed', async (req, res) => {
                             symbol: ev.symbol,
                             score: ev.score,
                             change_24h_pct: ev.change_24h_pct,
-                            price: ev.price ?? ev.last_price,
+                            price: ev.price ?? ev.last_price ?? ev.trigger_close,
                             vol_multiple: ev.vol_multiple,
                             price_change_pct: ev.price_change_pct,
+                            // iter61 pump-rider tiered fields
+                            tier: ev.tier,
+                            chg_1m: ev.chg_1m,
+                            chg_5m: ev.chg_5m,
+                            chg_30m: ev.chg_30m,
+                            vol_surge_1m: ev.vol_surge_1m,
+                            vol_surge_5m: ev.vol_surge_5m,
                             // trade-specific
                             action: ev.action,
                             realised_net: ev.realised_net,

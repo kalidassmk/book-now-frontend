@@ -165,8 +165,13 @@
         icon = '🟡';
         body = `score ${ev.score} · ${ev.change_24h_pct >= 0 ? '+' : ''}${(ev.change_24h_pct||0).toFixed(2)}% 24h`;
       } else {
-        // pump_rider or generic price pump
-        body = `vol ${ev.vol_multiple ? ev.vol_multiple.toFixed(1)+'x' : ''} · ${ev.price_change_pct ? '+'+ev.price_change_pct.toFixed(2)+'%' : ''}`;
+        // pump_rider — iter61 tiered output with chg_5m / vol_surge_5m
+        const tier = ev.tier || '';
+        const tierEmoji = ({STRONG:'🔥', NORMAL:'🚀', EARLY:'👀', MEGA:'⚠️'})[tier] || '🚀';
+        icon = tierEmoji;
+        const chg5 = ev.chg_5m != null ? `+${ev.chg_5m.toFixed(2)}%/5m` : (ev.price_change_pct ? '+' + ev.price_change_pct.toFixed(2) + '%' : '');
+        const vol5 = ev.vol_surge_5m != null ? `vol ${ev.vol_surge_5m.toFixed(1)}x` : (ev.vol_multiple ? 'vol ' + ev.vol_multiple.toFixed(1) + 'x' : '');
+        body = `${tier ? '<b>'+tier+'</b> ' : ''}${chg5} · ${vol5}`;
       }
       return `<div class="b-event ${kindClass}">${icon} <span class="sym">${ev.symbol}</span> ${body}<span class="ago">${timeAgo(ev.ts)}</span></div>`;
     }).join('');
