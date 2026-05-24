@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Book-Now — Coin Detail</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --panel-2: #1a232e; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --neutral: #8b949e; --calm: #6c8eef;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  h2 { margin: 0 0 10px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 600; }
+  .sub { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:.4;transform:scale(.85);} }
+  .topnav { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .topnav a { display: inline-block; padding: 6px 14px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 600; }
+  .topnav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .topnav a:not(.active):hover { color: var(--text); border-color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+  .pos { color: var(--good); } .neg { color: var(--bad); } .mute { color: var(--muted); } .warn { color: var(--warn); }
+
+  /* Search box */
+  .search-row { display: flex; gap: 10px; margin-bottom: 14px; align-items: center; }
+  .search-row input { flex: 1; padding: 10px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; color: var(--text); font-size: 14px; font-weight: 600; text-transform: uppercase; }
+  .search-row button { padding: 10px 18px; background: var(--accent); color: #fff; border: 0; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 700; }
+
+  /* Header */
+  .coin-header { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: end; margin-bottom: 14px; }
+  .coin-name { font-size: 32px; font-weight: 700; }
+  .coin-price { font-size: 28px; font-variant-numeric: tabular-nums; font-weight: 700; }
+  .coin-meta { display: flex; gap: 18px; color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+  /* Signal Quality verdict */
+  .verdict { padding: 18px 22px; border-radius: 12px; margin-bottom: 14px; border-width: 2px; border-style: solid; }
+  .verdict.good { background: rgba(46,204,113,.15); border-color: var(--good); }
+  .verdict.warn { background: rgba(241,196,15,.18); border-color: var(--warn); }
+  .verdict.bad { background: rgba(231,76,60,.18); border-color: var(--bad); }
+  .verdict.mute { background: rgba(139,148,158,.12); border-color: var(--neutral); }
+  .verdict .v-row { display: flex; gap: 14px; align-items: center; }
+  .verdict .v-emoji { font-size: 40px; line-height: 1; }
+  .verdict .v-label { font-size: 24px; font-weight: 800; letter-spacing: .5px; }
+  .verdict.good .v-label { color: var(--good); }
+  .verdict.warn .v-label { color: var(--warn); }
+  .verdict.bad .v-label { color: var(--bad); }
+  .verdict.mute .v-label { color: var(--neutral); }
+  .verdict ul { margin: 10px 0 0 0; padding-left: 20px; color: var(--text); font-size: 13px; }
+  .verdict li { margin-bottom: 2px; }
+
+  /* Grids */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  @media (max-width: 900px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+  /* Detector cards */
+  .det-card { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .det-card h3 { margin: 0 0 8px; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; display: flex; align-items: center; gap: 8px; }
+  .det-card .status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }
+  .det-card .status.active { background: rgba(46,204,113,.18); color: var(--good); border: 1px solid rgba(46,204,113,.4); }
+  .det-card .status.dump { background: rgba(231,76,60,.18); color: var(--bad); border: 1px solid rgba(231,76,60,.4); }
+  .det-card .status.watch { background: rgba(241,196,15,.15); color: var(--warn); border: 1px solid rgba(241,196,15,.35); }
+  .det-card .status.none { background: rgba(139,148,158,.10); color: var(--muted); border: 1px solid rgba(139,148,158,.25); }
+  .det-row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12px; }
+  .det-row .k { color: var(--muted); }
+  .det-row .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .det-age { font-size: 10px; color: var(--muted); font-weight: 400; margin-left: auto; }
+
+  /* Filter table */
+  .filter-tbl { width: 100%; border-collapse: collapse; }
+  .filter-tbl td { padding: 7px 8px; border-bottom: 1px solid var(--line); font-size: 12px; }
+  .filter-tbl tr:last-child td { border-bottom: 0; }
+  .filter-tbl .f-status { width: 30px; text-align: center; font-size: 16px; }
+  .filter-tbl .f-name { font-weight: 600; }
+  .filter-tbl .f-reason { color: var(--muted); font-size: 11px; }
+  .filter-tbl tr.blocked td { background: rgba(231,76,60,.06); }
+  .filter-tbl tr.blocked .f-reason { color: var(--bad); font-weight: 600; }
+
+  /* Orderbook */
+  .ob-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .ob-block { padding: 10px 14px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; }
+  .ob-block .label { font-size: 10px; color: var(--muted); text-transform: uppercase; }
+  .ob-block .value { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .ob-block .sub { font-size: 11px; color: var(--muted); }
+
+  /* Price action chart */
+  .pa-chart { display: flex; align-items: flex-end; gap: 2px; height: 80px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px; margin-bottom: 8px; }
+  .pa-chart .bar { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; min-width: 6px; position: relative; }
+  .pa-chart .bar .price-bar { background: var(--neutral); border-radius: 2px 2px 0 0; opacity: .8; }
+  .pa-chart .bar.green .price-bar { background: var(--good); }
+  .pa-chart .bar.red .price-bar { background: var(--bad); }
+  .pa-vol { display: flex; align-items: flex-end; gap: 2px; height: 30px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 4px; }
+  .pa-vol .vbar { flex: 1; background: var(--accent); opacity: .5; border-radius: 1px; min-width: 6px; }
+  .pa-summary { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; margin-top: 10px; font-size: 12px; }
+  .pa-summary div { padding: 6px 10px; background: var(--panel-2); border-radius: 6px; }
+  .pa-summary .label { font-size: 9px; color: var(--muted); text-transform: uppercase; }
+  .pa-summary .value { font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+
+  /* Trades table */
+  .trades-tbl { width: 100%; border-collapse: collapse; }
+  .trades-tbl th, .trades-tbl td { padding: 6px 10px; text-align: left; font-size: 11px; border-bottom: 1px solid var(--line); }
+  .trades-tbl th { color: var(--muted); text-transform: uppercase; font-size: 10px; }
+  .trades-tbl .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .side-buy { color: var(--good); font-weight: 600; }
+  .side-sell { color: var(--bad); font-weight: 600; }
+
+  /* Empty / loading */
+  .empty { padding: 24px; text-align: center; color: var(--muted); font-style: italic; }
+  .loading { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>🔬 Coin Detail</h1>
+<div class="sub">
+  <span class="live-dot"></span>
+  <span id="status">Loading…</span>
+  <span style="color:var(--muted)">One-stop view: signal quality + all 5 detectors + filters + orderbook + position</span>
+</div>
+
+<nav class="topnav">
+  <a href="/">📊 Monitor</a>
+  <a href="/coin.html" class="active">🔬 Coin Detail</a>
+  <a href="/early-pump.html">🚀 Early Pump</a>
+  <a href="/vsp.html">⚡ Volume Spike</a>
+  <a href="/lmc.html">💎 Low MCap</a>
+  <a href="/ccp.html">🌊 Calm Consolidation</a>
+  <a href="/spot.html">📋 Spot</a>
+</nav>
+
+<div class="search-row">
+  <input type="text" id="search-input" placeholder="Enter symbol — e.g. NEIROUSDT, BTCUSDT, ETHUSDT" />
+  <button onclick="loadSymbol()">🔍 Load</button>
+  <button onclick="refresh()" id="refresh-btn" disabled>↻ Refresh</button>
+</div>
+
+<div id="content"></div>
+
+<script>
+let currentSym = null;
+
+function fmtPrice(p) {
+  if (p == null || isNaN(p)) return '—';
+  if (p >= 100) return p.toFixed(2);
+  if (p >= 1) return p.toFixed(4);
+  return p.toFixed(8);
+}
+function fmtUsd(n) {
+  if (!n && n !== 0) return '—';
+  const sign = n < 0 ? '-' : '';
+  const a = Math.abs(n);
+  if (a >= 1e9) return sign + '$' + (a / 1e9).toFixed(2) + 'B';
+  if (a >= 1e6) return sign + '$' + (a / 1e6).toFixed(1) + 'M';
+  if (a >= 1e3) return sign + '$' + (a / 1e3).toFixed(1) + 'K';
+  return sign + '$' + a.toFixed(2);
+}
+function fmtPct(n) {
+  if (n == null || isNaN(n)) return '—';
+  return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
+}
+function fmtTime(ms) {
+  if (!ms) return '—';
+  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+function fmtAge(ms) {
+  if (!ms) return '';
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return Math.floor(diff/1000) + 's ago';
+  if (diff < 3600_000) return Math.floor(diff/60000) + 'm ago';
+  return Math.floor(diff/3600000) + 'h ago';
+}
+
+function renderDetectorCard(name, emoji, data, opts = {}) {
+  let statusClass = 'none', statusLabel = '—';
+  if (data) {
+    const label = (data.label || data.tier || '').toUpperCase();
+    if (label.includes('PUMP') || label === 'STRONG' || label === 'NORMAL' || label.includes('REVERSAL_UP') || label === 'EXPLOSIVE_PUMP') {
+      statusClass = 'active'; statusLabel = label;
+    } else if (label.includes('DUMP') || label === 'BREAKDOWN_RISK' || label.includes('BREAKDOWN')) {
+      statusClass = 'dump'; statusLabel = label;
+    } else if (label === 'EARLY' || label.includes('WATCH') || label === 'MEGA' || label === 'NEUTRAL') {
+      statusClass = 'watch'; statusLabel = label;
+    } else if (label) {
+      statusClass = 'watch'; statusLabel = label;
+    }
+  }
+  let body = '';
+  if (data) {
+    const age = data.ts ? `<span class="det-age">${fmtAge(data.ts)}</span>` : '';
+    const rows = (opts.rows || []).map(([k, v]) =>
+      `<div class="det-row"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('');
+    body = `${rows}`;
+    return `
+      <div class="det-card">
+        <h3>${emoji} ${name} <span class="status ${statusClass}">${statusLabel}</span> ${age}</h3>
+        ${body || '<div class="mute" style="font-size:11px">Signal active</div>'}
+      </div>
+    `;
+  }
+  return `
+    <div class="det-card">
+      <h3>${emoji} ${name} <span class="status none">No signal</span></h3>
+      <div class="mute" style="font-size:11px">No active detection on this coin.</div>
+    </div>
+  `;
+}
+
+function render(payload) {
+  const p = payload;
+  const m = p.market || {};
+  const sq = p.signal_quality || {};
+
+  // Signal-quality card
+  const verdictHtml = `
+    <div class="verdict ${sq.color || 'mute'}">
+      <div class="v-row">
+        <div class="v-emoji">${sq.emoji || ''}</div>
+        <div>
+          <div class="v-label">${sq.verdict || 'UNKNOWN'}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">${currentSym} — Signal Quality verdict</div>
+        </div>
+      </div>
+      <ul>${(sq.reasons || []).map(r => `<li>${r}</li>`).join('')}</ul>
+    </div>
+  `;
+
+  // Detector cards
+  const detPR = p.detectors.pump_rider;
+  const detEP = p.detectors.early_pump;
+  const detVSP = p.detectors.vsp;
+  const detLMC = p.detectors.lmc;
+  const detCCP = p.detectors.ccp;
+
+  const detectorsHtml = `
+    <div class="card">
+      <h2>Detector Signals (latest per coin)</h2>
+      <div class="grid-3" style="margin-bottom:14px">
+        ${renderDetectorCard('PumpRider', '⚡', detPR ? { ...detPR, label: detPR.tier } : null, { rows: detPR ? [
+          ['chg_5m', (detPR.chg_5m ?? '—') + '%'],
+          ['chg_1h', (detPR.chg_1h ?? '—') + '%'],
+          ['vol_surge_5m', (detPR.vol_surge_5m ?? '—') + '×'],
+        ] : [] })}
+        ${renderDetectorCard('Early Pump', '🚀', detEP, { rows: detEP ? [
+          ['Score', detEP.score ?? '—'],
+          ['Green/10', detEP.factors?.green_candles_10 ?? '—'],
+          ['Vol surge', (detEP.factors?.vol_surge_ratio ?? '—') + '×'],
+          ['Buy ratio', (detEP.factors?.taker_buy_ratio_pct ?? '—') + '%'],
+        ] : [] })}
+        ${renderDetectorCard('VSP', '⚡', detVSP, { rows: detVSP ? [
+          ['D-score', detVSP.direction_score ?? '—'],
+          ['M-score', detVSP.magnitude_score ?? '—'],
+          ['Confidence', detVSP.confidence ?? '—'],
+          ['vol_5m×', detVSP.entry?.vol_5m_mult ?? '—'],
+        ] : [] })}
+      </div>
+      <div class="grid-2">
+        ${renderDetectorCard('LMC (Low MCap)', '💎', detLMC, { rows: detLMC ? [
+          ['Score', detLMC.score ?? '—'],
+          ['vol_surge', (detLMC.vol_surge_x ?? '—') + '×'],
+          ['7d avg vol', fmtUsd(detLMC.avg_7d_vol_usd)],
+          ['chg_24h', (detLMC.chg_24h_pct ?? '—') + '%'],
+        ] : [] })}
+        ${renderDetectorCard('CCP (Consolidation)', '🌊', detCCP, { rows: detCCP ? [
+          ['Score', detCCP.score ?? '—'],
+          ['vol_drying', detCCP.breakdown?.vol_drying?.ratio ?? '—'],
+          ['range/atr', detCCP.breakdown?.range_contraction?.ratio_vs_atr ?? '—'],
+          ['pos_24h', (detCCP.direction_breakdown?.pos_24h_pct ?? '—') + '%'],
+        ] : [] })}
+      </div>
+    </div>
+  `;
+
+  // Filters table
+  const filters = p.filters || [];
+  const filtersHtml = `
+    <div class="card">
+      <h2>Pre-Buy Filters (/api/check-coin pipeline)</h2>
+      ${filters.length ? `
+      <table class="filter-tbl">
+        ${filters.map(f => `
+          <tr class="${f.blocked ? 'blocked' : ''}">
+            <td class="f-status">${f.blocked ? '❌' : f.pass === false ? '⚠️' : '✅'}</td>
+            <td class="f-name">${f.name || f.id}</td>
+            <td class="f-reason">${f.reason || (f.blocked ? 'BLOCKED' : 'pass')}</td>
+          </tr>
+        `).join('')}
+      </table>` : '<div class="empty">No filter results.</div>'}
+    </div>
+  `;
+
+  // Orderbook
+  const ob = p.orderbook;
+  const obHtml = `
+    <div class="card">
+      <h2>Orderbook (top 20)</h2>
+      ${ob ? `
+      <div class="ob-grid">
+        <div class="ob-block"><div class="label">Best Bid</div><div class="value pos">${fmtPrice(ob.best_bid)}</div></div>
+        <div class="ob-block"><div class="label">Best Ask</div><div class="value neg">${fmtPrice(ob.best_ask)}</div></div>
+        <div class="ob-block"><div class="label">Spread</div><div class="value">${ob.spread_pct.toFixed(3)}%</div><div class="sub">${ob.spread_pct > 0.5 ? '⚠️ Wide (>0.5%)' : 'OK'}</div></div>
+        <div class="ob-block"><div class="label">Mid</div><div class="value">${fmtPrice(ob.mid)}</div></div>
+        <div class="ob-block"><div class="label">Bid depth (±0.5%)</div><div class="value">${fmtUsd(ob.bid_depth_within_0_5pct_usdt)}</div><div class="sub">supports market-exit</div></div>
+        <div class="ob-block"><div class="label">Ask depth (±0.5%)</div><div class="value">${fmtUsd(ob.ask_depth_within_0_5pct_usdt)}</div><div class="sub">supply pressure</div></div>
+      </div>` : '<div class="empty">No depth data.</div>'}
+    </div>
+  `;
+
+  // Price action chart
+  const pa = p.price_action;
+  let chartHtml = '<div class="empty">No price action data.</div>';
+  if (pa && pa.bars && pa.bars.length) {
+    const bars = pa.bars;
+    const maxC = Math.max(...bars.map(b => b.h));
+    const minC = Math.min(...bars.map(b => b.l));
+    const range = Math.max(maxC - minC, 1e-12);
+    const maxV = Math.max(...bars.map(b => b.v));
+    const priceBars = bars.map(b => {
+      const klass = b.c > b.o ? 'green' : b.c < b.o ? 'red' : '';
+      const hPct = ((b.c - minC) / range) * 100;
+      const lPct = ((b.l - minC) / range) * 100;
+      const top = Math.max(lPct, 5);
+      return `<div class="bar ${klass}"><div class="price-bar" style="height:${top}%"></div></div>`;
+    }).join('');
+    const volBars = bars.map(b => {
+      const h = maxV > 0 ? (b.v / maxV) * 100 : 0;
+      return `<div class="vbar" style="height:${h}%"></div>`;
+    }).join('');
+    chartHtml = `
+      <div class="pa-chart">${priceBars}</div>
+      <div class="pa-vol">${volBars}</div>
+      <div class="pa-summary">
+        <div><div class="label">chg_5m</div><div class="value ${pa.chg_5m_pct >= 0 ? 'pos' : 'neg'}">${fmtPct(pa.chg_5m_pct)}</div></div>
+        <div><div class="label">chg_15m</div><div class="value ${pa.chg_15m_pct >= 0 ? 'pos' : 'neg'}">${fmtPct(pa.chg_15m_pct)}</div></div>
+        <div><div class="label">chg_1h</div><div class="value ${pa.chg_1h_pct >= 0 ? 'pos' : 'neg'}">${fmtPct(pa.chg_1h_pct)}</div></div>
+        <div><div class="label">vol_ratio (recent/prior)</div><div class="value ${pa.vol_ratio_recent_vs_prior >= 1 ? 'pos' : 'neg'}">${pa.vol_ratio_recent_vs_prior.toFixed(2)}×</div></div>
+      </div>
+    `;
+  }
+  const priceActionHtml = `
+    <div class="card">
+      <h2>Price Action (last 60min, 5m bars)</h2>
+      ${chartHtml}
+    </div>
+  `;
+
+  // Position
+  const pos = p.position;
+  const posHtml = pos ? `
+    <div class="card">
+      <h2>Current Position (HOLDING)</h2>
+      <div class="grid-3">
+        <div class="ob-block"><div class="label">Entry $</div><div class="value">${fmtPrice(pos.entry_price)}</div><div class="sub">qty ${pos.qty}</div></div>
+        <div class="ob-block"><div class="label">Last $</div><div class="value">${fmtPrice(pos.last_price)}</div><div class="sub">val ${fmtUsd(pos.current_value_usdt)}</div></div>
+        <div class="ob-block"><div class="label">P&L</div><div class="value ${pos.pnl_usdt >= 0 ? 'pos' : 'neg'}">${fmtUsd(pos.pnl_usdt)}</div><div class="sub">${fmtPct(pos.pnl_pct)}</div></div>
+      </div>
+    </div>
+  ` : '';
+
+  // Trades
+  const trades = p.trades_recent || [];
+  const tradesHtml = `
+    <div class="card">
+      <h2>Recent Trades (last 10)</h2>
+      ${trades.length ? `
+      <table class="trades-tbl">
+        <thead><tr><th>Time</th><th>Side</th><th class="num">Price</th><th class="num">Qty</th><th class="num">Quote</th></tr></thead>
+        <tbody>
+          ${trades.map(t => `
+            <tr>
+              <td>${fmtTime(t.time)}</td>
+              <td class="${t.side === 'BUY' ? 'side-buy' : 'side-sell'}">${t.side}</td>
+              <td class="num">${fmtPrice(t.price)}</td>
+              <td class="num">${t.qty}</td>
+              <td class="num">${fmtUsd(t.quote)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>` : '<div class="empty">No trades recorded for this coin.</div>'}
+    </div>
+  `;
+
+  // Header
+  const chg24 = m.change_24h_pct;
+  const headerHtml = `
+    <div class="coin-header">
+      <div>
+        <div class="coin-name">${currentSym}</div>
+        <div class="coin-meta">
+          <span>24h vol: <strong>${fmtUsd(m.quote_volume_24h_usdt)}</strong></span>
+          <span>24h trades: <strong>${m.trade_count_24h?.toLocaleString() || '—'}</strong></span>
+          <span>24h high: <strong>${fmtPrice(m.high_24h)}</strong></span>
+          <span>24h low: <strong>${fmtPrice(m.low_24h)}</strong></span>
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div class="coin-price">${fmtPrice(m.last_price)}</div>
+        <div style="font-size:18px;font-weight:700;margin-top:4px" class="${chg24 >= 0 ? 'pos' : 'neg'}">${fmtPct(chg24)}</div>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('content').innerHTML = headerHtml + verdictHtml + detectorsHtml + filtersHtml + obHtml + priceActionHtml + posHtml + tradesHtml;
+}
+
+async function refresh() {
+  if (!currentSym) return;
+  document.getElementById('status').textContent = `Loading ${currentSym}…`;
+  try {
+    const r = await fetch(`/api/coin/${currentSym}`);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ error: 'Request failed' }));
+      document.getElementById('content').innerHTML = `<div class="card empty">Error: ${err.error || 'request failed'}</div>`;
+      document.getElementById('status').textContent = 'Error';
+      return;
+    }
+    const data = await r.json();
+    render(data);
+    document.getElementById('status').textContent = `${currentSym} — updated ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    document.getElementById('content').innerHTML = `<div class="card empty">Error: ${e.message}</div>`;
+    document.getElementById('status').textContent = 'Error';
+  }
+}
+
+function loadSymbol() {
+  let sym = document.getElementById('search-input').value.trim().toUpperCase();
+  if (!sym) return;
+  if (!sym.endsWith('USDT')) sym = sym + 'USDT';
+  currentSym = sym;
+  document.getElementById('refresh-btn').disabled = false;
+  // Update URL
+  const url = new URL(window.location);
+  url.searchParams.set('sym', sym);
+  window.history.replaceState({}, '', url);
+  refresh();
+}
+
+// Allow Enter key
+document.getElementById('search-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') loadSymbol();
+});
+
+// Auto-load from URL param
+const urlSym = new URL(window.location).searchParams.get('sym');
+if (urlSym) {
+  document.getElementById('search-input').value = urlSym;
+  currentSym = urlSym.toUpperCase();
+  document.getElementById('refresh-btn').disabled = false;
+  refresh();
+  // Auto-refresh every 15s when viewing a symbol
+  setInterval(refresh, 15000);
+} else {
+  document.getElementById('content').innerHTML = `
+    <div class="card empty">
+      Type a symbol above to load. Examples:
+      <strong style="color:var(--accent);cursor:pointer" onclick="document.getElementById('search-input').value='NEIROUSDT';loadSymbol()">NEIROUSDT</strong> ·
+      <strong style="color:var(--accent);cursor:pointer" onclick="document.getElementById('search-input').value='BTCUSDT';loadSymbol()">BTCUSDT</strong> ·
+      <strong style="color:var(--accent);cursor:pointer" onclick="document.getElementById('search-input').value='SOLUSDT';loadSymbol()">SOLUSDT</strong>
+    </div>
+  `;
+  document.getElementById('status').textContent = 'Ready';
+}
+</script>
+
+</body>
+</html>

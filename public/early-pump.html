@@ -241,7 +241,7 @@ function renderTable(rows) {
                   : '⚪ cold';
     return `
       <tr class="row expandable ${rowCls}" onclick="toggleDetail('det-${i}')">
-        <td><strong>${r.symbol}</strong></td>
+        <td><a href="/coin.html?sym=${r.symbol}" style="color:var(--accent);text-decoration:none;font-weight:700" title="View coin detail">${r.symbol}</a></td>
         <td class="num">${fmtPrice(r.last_price)}</td>
         <td class="num pos">${fmtPct(r.change_24h_pct)}</td>
         <td class="num mute">${(r.quote_volume_24h_usd/1e6).toFixed(2)}</td>
@@ -320,7 +320,7 @@ async function loadDetections() {
       return `
         <tr>
           <td class="mute">${t}</td>
-          <td><strong>${ev.symbol}</strong></td>
+          <td><a href="/coin.html?sym=${ev.symbol}" style="color:var(--accent);text-decoration:none;font-weight:700" title="View coin detail">${ev.symbol}</a></td>
           <td class="num pos">${ev.score}</td>
           <td class="num pos">${fmtPct(ev.change_24h_pct)}</td>
           <td class="mute">${keys.join(' · ')}</td>

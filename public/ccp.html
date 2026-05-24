@@ -259,7 +259,7 @@ function renderDetections() {
     return `
       <tr class="row expandable ${klass} ${hqKlass}" onclick="toggleBreakdown(${i})">
         <td>${fmtTime(d.ts)}</td>
-        <td><strong>${d.symbol}</strong></td>
+        <td><a href="/coin.html?sym=${d.symbol}" style="color:var(--accent);text-decoration:none;font-weight:700" title="View coin detail">${d.symbol}</a></td>
         <td>${badgeFor(d.label)}</td>
         <td class="num">${scoreBar(d.score)}</td>
         <td class="num">${fmtPrice(d.trigger_price)}</td>
@@ -343,7 +343,7 @@ function renderPaper() {
     return `
       <tr class="row">
         <td>${fmtTime(t.ts)}</td>
-        <td><strong>${t.symbol}</strong></td>
+        <td><a href="/coin.html?sym=${t.symbol}" style="color:var(--accent);text-decoration:none;font-weight:700" title="View coin detail">${t.symbol}</a></td>
         <td class="num">${fmtPrice(t.entry_price)}</td>
         <td class="num">${scoreBar(t.score)}</td>
         <td>${posTag(t.pos_in_24h_pct)}</td>
@@ -370,7 +370,7 @@ function renderOutcomes() {
     return `
       <tr class="row">
         <td>${fmtTime(o.ts_detection)}</td>
-        <td><strong>${o.symbol}</strong></td>
+        <td><a href="/coin.html?sym=${o.symbol}" style="color:var(--accent);text-decoration:none;font-weight:700" title="View coin detail">${o.symbol}</a></td>
         <td>${badgeFor(o.label)}</td>
         <td class="num">${o.score?.toFixed(0) ?? '—'}</td>
         <td class="num">${fmtPrice(o.entry_price)}</td>

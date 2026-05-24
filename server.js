@@ -2254,6 +2254,263 @@ app.get('/api/vsp/status', async (req, res) => {
     }
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// iter 76 fe (2026-05-24) — Coin Detail aggregator.
+// One endpoint = one big JSON with EVERYTHING about a single coin:
+//   • Binance: 24h ticker, 5m+1h klines, orderbook depth
+//   • All 5 detector latest states (PumpRider, EP, VSP, LMC, CCP)
+//   • Full /api/check-coin filter pipeline verdict
+//   • BUY position state + Binance trade history (last 10)
+//   • Computed Signal Quality verdict (HEALTHY / WEAK_PUMP / DO_NOT_BUY / NEUTRAL)
+// ─────────────────────────────────────────────────────────────────────────
+
+async function _findLatestPumpRiderForSymbol(sym) {
+    // PumpRider doesn't maintain a LATEST hash, so scan today+yesterday detections.
+    const today = new Date().toISOString().slice(0, 10);
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    for (const date of [today, yesterday]) {
+        try {
+            const raw = await redis.lrange(`PUMP_RIDER:DETECTIONS:${date}`, -200, -1);
+            for (let i = raw.length - 1; i >= 0; i--) {
+                try {
+                    const ev = JSON.parse(raw[i]);
+                    if (ev.symbol === sym) return ev;
+                } catch (_) {}
+            }
+        } catch (_) {}
+    }
+    return null;
+}
+
+function _computeSignalQuality(payload) {
+    // Returns { verdict, color, reasons[] }
+    const reasons = [];
+    const { detectors, filters, position } = payload;
+    // Check for any filter block first (highest priority)
+    const blockedFilters = (filters || []).filter(f => f.blocked);
+    if (blockedFilters.length) {
+        const weakPump = blockedFilters.find(f => f.id === 'iter71_weak_pump');
+        if (weakPump) {
+            reasons.push(`Weak Pump: ${weakPump.reason || 'price up + volume declining'}`);
+            return { verdict: 'WEAK_PUMP', color: 'warn', emoji: '⚠️', reasons };
+        }
+        for (const f of blockedFilters) {
+            reasons.push(`${f.name || f.id}: ${f.reason || 'blocked'}`);
+        }
+        return { verdict: 'DO_NOT_BUY', color: 'bad', emoji: '❌', reasons };
+    }
+    // Look for active detector signals
+    const detSignals = [];
+    if (detectors.pump_rider && detectors.pump_rider.tier && detectors.pump_rider.tier !== 'EARLY' && detectors.pump_rider.tier !== 'MEGA') {
+        detSignals.push(`PumpRider ${detectors.pump_rider.tier}`);
+    }
+    if (detectors.early_pump && (detectors.early_pump.score || 0) >= 75) {
+        detSignals.push(`Early Pump score ${detectors.early_pump.score}`);
+    }
+    if (detectors.vsp && (detectors.vsp.label || '').startsWith('BIG_PUMP')) {
+        detSignals.push(`VSP ${detectors.vsp.label} conf=${detectors.vsp.confidence}`);
+    }
+    if (detectors.lmc && detectors.lmc.label === 'EXPLOSIVE_PUMP') {
+        detSignals.push(`LMC ${detectors.lmc.label} score=${detectors.lmc.score}`);
+    }
+    if (detectors.ccp && detectors.ccp.label === 'CALM_REVERSAL_UP') {
+        detSignals.push(`CCP ${detectors.ccp.label} score=${detectors.ccp.score}`);
+    }
+    // Check for DUMP signals
+    const dumpSignals = [];
+    if (detectors.vsp && (detectors.vsp.label || '').includes('DUMP')) {
+        dumpSignals.push(`VSP ${detectors.vsp.label}`);
+    }
+    if (detectors.lmc && (detectors.lmc.label || '').includes('DUMP')) {
+        dumpSignals.push(`LMC ${detectors.lmc.label}`);
+    }
+    if (detectors.ccp && detectors.ccp.label === 'CALM_BREAKDOWN_RISK') {
+        dumpSignals.push(`CCP ${detectors.ccp.label}`);
+    }
+    if (dumpSignals.length && !detSignals.length) {
+        reasons.push(...dumpSignals.map(s => `Dump signal: ${s}`));
+        return { verdict: 'DO_NOT_BUY', color: 'bad', emoji: '🔴', reasons };
+    }
+    if (detSignals.length) {
+        reasons.push(...detSignals.map(s => `Active signal: ${s}`));
+        return { verdict: 'HEALTHY', color: 'good', emoji: '✅', reasons };
+    }
+    // Currently holding?
+    if (position && position.holding) {
+        reasons.push(`Holding ${position.qty} @ ${position.entry_price}`);
+        return { verdict: 'HOLDING', color: 'mute', emoji: '📦', reasons };
+    }
+    reasons.push('No active detector signals, no filter blocks');
+    return { verdict: 'NEUTRAL', color: 'mute', emoji: '🤷', reasons };
+}
+
+app.get('/api/coin/:symbol', async (req, res) => {
+    const sym = String(req.params.symbol || '').toUpperCase().trim();
+    if (!sym.endsWith('USDT')) {
+        return res.status(400).json({ error: 'symbol must end with USDT (e.g. NEIROUSDT)' });
+    }
+    try {
+        const host = req.get('host') || `localhost:${PORT}`;
+        const proto = req.protocol;
+        const checkCoinUrl = `${proto}://${host}/api/check-coin?symbol=${sym}`;
+
+        // Fire everything in parallel
+        const [tickerRes, depthRes, kl5Res, kl1hRes,
+                pumpRiderEv, vspRaw, lmcRaw, ccpRaw, epRaw,
+                buyRaw, tradeHistRaw, checkCoinRes] = await Promise.all([
+            fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${sym}`).then(r => r.json()).catch(() => null),
+            fetch(`https://api.binance.com/api/v3/depth?symbol=${sym}&limit=20`).then(r => r.json()).catch(() => null),
+            fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=5m&limit=12`).then(r => r.json()).catch(() => null),
+            fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=1h&limit=24`).then(r => r.json()).catch(() => null),
+            _findLatestPumpRiderForSymbol(sym),
+            redis.hget('VSP:LATEST', sym).catch(() => null),
+            redis.hget('LMC:LATEST', sym).catch(() => null),
+            redis.hget('CCP:LATEST', sym).catch(() => null),
+            redisAnalyse.hget('EARLY_PUMP:LATEST', sym).catch(() => null),
+            redis.hget('BUY', sym).catch(() => null),
+            redis.get(`BINANCE:TRADE_HISTORY:${sym}`).catch(() => null),
+            fetch(checkCoinUrl).then(r => r.json()).catch(() => null),
+        ]);
+
+        const _parse = r => { try { return r ? JSON.parse(r) : null; } catch (_) { return null; } };
+
+        // Detectors
+        const detectors = {
+            pump_rider: pumpRiderEv || null,
+            early_pump: _parse(epRaw),
+            vsp:        _parse(vspRaw),
+            lmc:        _parse(lmcRaw),
+            ccp:        _parse(ccpRaw),
+        };
+
+        // Filters (from /api/check-coin)
+        const filters = (checkCoinRes && checkCoinRes.filters) || [];
+        const checkCoinVerdict = (checkCoinRes && checkCoinRes.verdict) || null;
+
+        // Position
+        const buyState = _parse(buyRaw);
+        let position = null;
+        if (buyState && (buyState.status === 'FILLED' || buyState.status === 'PARTIALLY_FILLED')) {
+            const entry = parseFloat(buyState.buyPrice || 0);
+            const qty = parseFloat(buyState.executedQty || buyState.origQty || 0);
+            const lastPrice = tickerRes ? parseFloat(tickerRes.lastPrice || 0) : entry;
+            const cost = entry * qty;
+            const cur_val = lastPrice * qty;
+            const pnl = cur_val - cost;
+            const pnl_pct = entry > 0 ? (lastPrice / entry - 1) * 100 : 0;
+            position = {
+                holding: true,
+                entry_price: entry,
+                qty,
+                cost_usdt: +cost.toFixed(2),
+                last_price: lastPrice,
+                current_value_usdt: +cur_val.toFixed(2),
+                pnl_usdt: +pnl.toFixed(4),
+                pnl_pct: +pnl_pct.toFixed(3),
+                status: buyState.status,
+                buy_timestamp: buyState.buyTimeStamp,
+            };
+        }
+
+        // Trade history (last 10)
+        let trades = [];
+        try {
+            const allTrades = _parse(tradeHistRaw) || [];
+            // Sort by time DESC, keep last 10
+            trades = allTrades.sort((a, b) => (b.time || 0) - (a.time || 0)).slice(0, 10).map(t => ({
+                time: t.time,
+                side: t.isBuyer ? 'BUY' : 'SELL',
+                price: parseFloat(t.price),
+                qty: parseFloat(t.qty),
+                quote: parseFloat(t.quoteQty),
+                order_id: t.orderId,
+            }));
+        } catch (_) {}
+
+        // Orderbook summary
+        let orderbook = null;
+        if (depthRes && depthRes.bids && depthRes.asks) {
+            const bb = parseFloat(depthRes.bids[0][0]);
+            const ba = parseFloat(depthRes.asks[0][0]);
+            const mid = (bb + ba) / 2;
+            const spreadPct = mid > 0 ? (ba - bb) / mid * 100 : 0;
+            const bidFloor = mid * 0.995;
+            const askCeil = mid * 1.005;
+            const bidDepth = depthRes.bids.reduce((s, [p, q]) => parseFloat(p) >= bidFloor ? s + parseFloat(p) * parseFloat(q) : s, 0);
+            const askDepth = depthRes.asks.reduce((s, [p, q]) => parseFloat(p) <= askCeil ? s + parseFloat(p) * parseFloat(q) : s, 0);
+            orderbook = {
+                best_bid: bb,
+                best_ask: ba,
+                mid,
+                spread_pct: +spreadPct.toFixed(3),
+                bid_depth_within_0_5pct_usdt: +bidDepth.toFixed(0),
+                ask_depth_within_0_5pct_usdt: +askDepth.toFixed(0),
+            };
+        }
+
+        // Price action (5m bars)
+        let priceAction = null;
+        if (Array.isArray(kl5Res) && kl5Res.length) {
+            const bars = kl5Res.map(k => ({
+                t: k[0],
+                o: parseFloat(k[1]),
+                h: parseFloat(k[2]),
+                l: parseFloat(k[3]),
+                c: parseFloat(k[4]),
+                v: parseFloat(k[7]),  // quote vol
+                tbv: parseFloat(k[10] || 0),
+            }));
+            const closes = bars.map(b => b.c);
+            const vols = bars.map(b => b.v);
+            const chg_5m_pct = closes.length >= 2 ? (closes[closes.length - 1] / closes[closes.length - 2] - 1) * 100 : 0;
+            const chg_15m_pct = closes.length >= 4 ? (closes[closes.length - 1] / closes[closes.length - 4] - 1) * 100 : 0;
+            const chg_1h_pct = closes.length >= 12 ? (closes[closes.length - 1] / closes[0] - 1) * 100 : 0;
+            const vol_recent_avg = vols.slice(-3).reduce((s, v) => s + v, 0) / 3;
+            const vol_prior_avg = vols.slice(0, -3).reduce((s, v) => s + v, 0) / Math.max(1, vols.length - 3);
+            priceAction = {
+                bars,
+                chg_5m_pct: +chg_5m_pct.toFixed(3),
+                chg_15m_pct: +chg_15m_pct.toFixed(3),
+                chg_1h_pct: +chg_1h_pct.toFixed(3),
+                vol_ratio_recent_vs_prior: vol_prior_avg > 0 ? +(vol_recent_avg / vol_prior_avg).toFixed(3) : 0,
+                vol_recent_avg_usdt: +vol_recent_avg.toFixed(0),
+                vol_prior_avg_usdt: +vol_prior_avg.toFixed(0),
+            };
+        }
+
+        // Market summary from 24h ticker
+        let market = null;
+        if (tickerRes && !tickerRes.code) {
+            market = {
+                last_price: parseFloat(tickerRes.lastPrice),
+                change_24h_pct: parseFloat(tickerRes.priceChangePercent),
+                high_24h: parseFloat(tickerRes.highPrice),
+                low_24h: parseFloat(tickerRes.lowPrice),
+                quote_volume_24h_usdt: parseFloat(tickerRes.quoteVolume),
+                trade_count_24h: parseInt(tickerRes.count || 0, 10),
+            };
+        }
+
+        const payload = {
+            symbol: sym,
+            ts: Date.now(),
+            market,
+            detectors,
+            filters,
+            check_coin_verdict: checkCoinVerdict,
+            orderbook,
+            price_action: priceAction,
+            position,
+            trades_recent: trades,
+        };
+        payload.signal_quality = _computeSignalQuality(payload);
+
+        res.json(payload);
+    } catch (err) {
+        res.status(500).json({ error: err.message, stack: err.stack });
+    }
+});
+
 // iter 60 fe (2026-05-23) — unified alert feed for the dashboard banner.
 // Pulls PUMP_RIDER:DETECTIONS, EARLY_PUMP:DETECTIONS, TRADE_ALERTS for
 // the operator's day, normalises to {ts, kind, symbol, ...}, returns
