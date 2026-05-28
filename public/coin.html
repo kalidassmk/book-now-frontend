@@ -168,6 +168,28 @@
   .alerts-section .sec-rows {
     display: flex; flex-direction: column; gap: 2px;
   }
+  /* iter89 — per-detector sub-headers within a section */
+  .alerts-section .sub-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin: 8px 0 2px;
+    padding: 3px 8px;
+    background: rgba(139,148,158,.06);
+    border-radius: 4px;
+    font-size: 10px; font-weight: 700; letter-spacing: .3px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .alerts-section .sub-head:first-child { margin-top: 0; }
+  .alerts-section .sub-title { color: #b6c2cf; }
+  .alerts-section .sub-count {
+    font-size: 10px; font-weight: 700;
+    background: var(--panel-2); color: var(--muted);
+    padding: 1px 7px; border-radius: 8px;
+  }
+  .alerts-section .sec-more {
+    font-size: 10px; color: var(--muted);
+    padding: 3px 10px 0; font-style: italic;
+  }
 
   .alert-row {
     display: grid;
@@ -748,7 +770,9 @@ function describe(ev) {
 async function renderAlertsHome() {
   if (currentSym) return;  // user has loaded a coin — don't overwrite
   try {
-    const r = await fetch('/api/alerts/feed?since=0&limit=100');
+    // iter89 — bump limit so VSP/LMC/CCP/Scalper events don't get pushed
+    // out by hundreds of recent PumpRider events.
+    const r = await fetch('/api/alerts/feed?since=0&limit=300');
     if (!r.ok) {
       document.getElementById('content').innerHTML = `<div class="card empty">Couldn't load alerts (HTTP ${r.status}).</div>`;
       return;
@@ -806,6 +830,70 @@ async function renderAlertsHome() {
       </div>
     `;
 
+    // iter89 — within each section, sub-group by detector kind so
+    // VSP / LMC / CCP / FastScalper / VirtualScalper each get their
+    // own row block instead of being drowned by the much-more-frequent
+    // PumpRider events.  Each kind shows up to PER_KIND_CAP events.
+    const KIND_LABELS = {
+      pump_rider:      '🚀 PumpRider',
+      early_pump:      '👀 Early Pump',
+      vsp:             '⚡ Volume Spike (VSP)',
+      lmc:             '💎 Low MCap (LMC)',
+      ccp:             '🌊 Calm Consolidation (CCP)',
+      fast_scalper:    '⚡ Fast Scalper',
+      virtual_scalper: '🧪 Virtual Scalper',
+      trade:           '🛒 Bot Trade',
+      weak_pump:       '⚠️ Weak Pump',
+    };
+    // Render order within a section (so VSP/LMC/CCP/Scalper appear
+    // before the noisier PumpRider block).
+    const KIND_RENDER_ORDER = [
+      'fast_scalper', 'virtual_scalper',
+      'vsp', 'lmc', 'ccp',
+      'early_pump', 'pump_rider',
+      'trade', 'weak_pump',
+    ];
+    const PER_KIND_CAP = 10;
+
+    function renderRow(ev) {
+      const d = describe(ev);
+      const bz = (window.bnBinanceLinkHtml || (()=>''))(ev.symbol, { compact: true });
+      const cb = consensusBadgeHtml(ev.symbol);
+      return `
+        <div class="alert-row" role="link" tabindex="0" onclick="if(event.target.closest('.bn-binance-link'))return;location.href='/coin.html?sym=${ev.symbol}'">
+          <span class="a-ic">${d.ic}</span>
+          <span class="a-sym">${ev.symbol}</span>
+          <span class="a-source">${d.source}</span>
+          <span class="a-metrics">${(d.chips || []).join('')}${cb}</span>
+          ${bz}
+          <span class="a-ago">${ageStr(ev.ts)}</span>
+        </div>
+      `;
+    }
+
+    function renderSectionBody(items) {
+      // Group by kind
+      const groups = {};
+      for (const ev of items) (groups[ev.kind] = groups[ev.kind] || []).push(ev);
+      const ordered = [
+        ...KIND_RENDER_ORDER.filter(k => groups[k]),
+        ...Object.keys(groups).filter(k => !KIND_RENDER_ORDER.includes(k)),
+      ];
+      if (!ordered.length) return '';
+      let out = '';
+      for (const kind of ordered) {
+        const arr = groups[kind].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+        const shown = arr.slice(0, PER_KIND_CAP);
+        const label = KIND_LABELS[kind] || kind;
+        out += `<div class="sub-head"><span class="sub-title">${label}</span><span class="sub-count">${arr.length}</span></div>`;
+        out += shown.map(renderRow).join('');
+        if (arr.length > PER_KIND_CAP) {
+          out += `<div class="sec-more">+ ${arr.length - PER_KIND_CAP} more ${label}</div>`;
+        }
+      }
+      return out;
+    }
+
     for (const s of sections) {
       const items = buckets[s.key];
       if (!items.length) continue;
@@ -820,22 +908,7 @@ async function renderAlertsHome() {
             <span class="sec-count">${items.length} ${items.length === 1 ? 'event' : 'events'}</span>
           </div>
           <div class="sec-rows">
-            ${items.slice(0, 20).map(ev => {
-              const d = describe(ev);
-              const bz = (window.bnBinanceLinkHtml || (()=>''))(ev.symbol, { compact: true });
-              const cb = consensusBadgeHtml(ev.symbol);   // iter86 consensus
-              return `
-                <div class="alert-row" role="link" tabindex="0" onclick="if(event.target.closest('.bn-binance-link'))return;location.href='/coin.html?sym=${ev.symbol}'">
-                  <span class="a-ic">${d.ic}</span>
-                  <span class="a-sym">${ev.symbol}</span>
-                  <span class="a-source">${d.source}</span>
-                  <span class="a-metrics">${(d.chips || []).join('')}${cb}</span>
-                  ${bz}
-                  <span class="a-ago">${ageStr(ev.ts)}</span>
-                </div>
-              `;
-            }).join('')}
-            ${items.length > 20 ? `<div class="sec-more">+ ${items.length - 20} more not shown — refine filters to drill in</div>` : ''}
+            ${renderSectionBody(items)}
           </div>
         </section>
       `;

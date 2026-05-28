@@ -364,7 +364,9 @@
   // ── Polling ───────────────────────────────────────────────────
   async function poll() {
     try {
-      const r = await fetch(FEED_URL + '?since=0&limit=60');
+      // iter89 — bump limit so VSP/LMC/CCP/Scalper events aren't pushed
+      // off the bell popover by hundreds of PumpRider events.
+      const r = await fetch(FEED_URL + '?since=0&limit=200');
       if (!r.ok) return;
       const d = await r.json();
       const events = d.events || [];
