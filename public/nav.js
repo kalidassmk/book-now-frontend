@@ -22,6 +22,31 @@
  *   • Live status badge polls /api/lmc/status every 30s
  *   • Coin search jumps to /coin.html?sym=XXX
  */
+// ── Global helpers (available on every page that loads nav.js) ──
+// iter 83 — Binance trade-page URL builder.  Splits SYMBOL into BASE_QUOTE
+// (e.g. "NEIROUSDT" → "NEIRO_USDT") so the deep link works.
+window.bnBinanceUrl = function (sym) {
+  sym = String(sym || '').toUpperCase().trim();
+  if (!sym) return 'https://www.binance.com/en/trade';
+  // Insert _ before common quote currencies
+  for (const quote of ['USDT', 'BUSD', 'FDUSD', 'USDC', 'BTC', 'BNB', 'ETH']) {
+    if (sym.endsWith(quote) && sym.length > quote.length) {
+      return `https://www.binance.com/en/trade/${sym.slice(0, -quote.length)}_${quote}?type=spot`;
+    }
+  }
+  return `https://www.binance.com/en/trade/${sym}?type=spot`;
+};
+
+// iter 83 — Small inline Binance link button.  Returns the HTML for
+// a tiny clickable icon next to a symbol.  e.g.:
+//   <a class="bn-binance-link" href="..." target="_blank" ...>🟡</a>
+window.bnBinanceLinkHtml = function (sym, opts) {
+  const url = window.bnBinanceUrl(sym);
+  const compact = (opts || {}).compact;
+  const label = compact ? '🟡' : '🟡 Binance';
+  return `<a class="bn-binance-link" href="${url}" target="_blank" rel="noopener noreferrer" title="Open ${sym} on Binance" onclick="event.stopPropagation()">${label}</a>`;
+};
+
 (function () {
   'use strict';
   if (window.__bnNavLoaded) return;  // idempotent
@@ -109,6 +134,28 @@
       --bn-muted: #8b949e;
     }
     .bn-nav-spacer { height: 56px; }
+
+    /* iter 83 — Binance quick-link button (compact inline + full size) */
+    .bn-binance-link {
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: 4px;
+      padding: 2px 7px;
+      border-radius: 4px;
+      background: rgba(243, 186, 47, 0.12);
+      border: 1px solid rgba(243, 186, 47, 0.35);
+      color: #f3ba2f !important;
+      text-decoration: none !important;
+      font-size: 11px; font-weight: 700;
+      line-height: 1.4;
+      transition: background .12s, transform .12s;
+    }
+    .bn-binance-link:hover {
+      background: rgba(243, 186, 47, 0.25);
+      transform: translateY(-1px);
+    }
+    .bn-binance-link.large {
+      padding: 8px 16px; font-size: 13px; border-radius: 7px;
+    }
     .bn-nav {
       position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
       height: 56px;

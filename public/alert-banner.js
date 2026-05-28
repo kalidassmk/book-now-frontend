@@ -313,6 +313,8 @@
       const cat = categorize(ev);
       const { ic, text } = summarize(ev);
       const unseenCls = ev.ts > lastSeenTs ? 'unseen' : '';
+      // iter 83 — inline Binance link
+      const bz = (window.bnBinanceLinkHtml || (()=>''))(ev.symbol, { compact: true });
       return `
         <a class="row ${cat} ${unseenCls}" href="/coin.html?sym=${ev.symbol}">
           <span class="ic">${ic}</span>
@@ -320,6 +322,7 @@
             <span class="sym">${ev.symbol}</span>
             <div class="meta">${text}</div>
           </span>
+          ${bz}
           <span class="ago">${timeAgo(ev.ts)}</span>
         </a>
       `;
