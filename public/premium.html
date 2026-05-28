@@ -554,19 +554,28 @@
                 const q  = parseFloat(t.qty) || 0;
                 const qq = parseFloat(t.quoteQty) || 0;
                 const c  = parseFloat(t.commission) || 0;
+                const p  = parseFloat(t.price) || 0;
                 g.qty       += q;
                 g.quoteQty  += qq;
-                // Commissions paid in USDT add directly. BNB commissions
-                // approximate to USDT using BNB/USDT spot price if available
-                // via window.__bnbUsdtPrice (best-effort); else accumulate
-                // without dollar-conversion (shown separately).
-                if ((t.commissionAsset || '').toUpperCase() === 'USDT') {
+                // iter 97 — convert ALL commission flavors to USDT so the
+                // dashboard shows the true round-trip fee cost.  Binance
+                // charges:
+                //   • USDT for SELL fills (e.g. 0.07795 USDT)
+                //   • base asset for BUY fills (e.g. 0.7721 FF for FFUSDT)
+                //   • BNB if the BNB-discount option is enabled
+                const sym = (t.symbol || '').toUpperCase();
+                const asset = (t.commissionAsset || '').toUpperCase();
+                const baseAsset = sym.endsWith('USDT') ? sym.slice(0, -4) : '';
+                if (asset === 'USDT') {
                     g.commissionUsdt += c;
-                } else if ((t.commissionAsset || '').toUpperCase() === 'BNB' && (window.__bnbUsdtPrice || 0) > 0) {
+                } else if (asset === baseAsset && p > 0) {
+                    // Base-asset commission — value = qty_fee × fill_price
+                    g.commissionUsdt += c * p;
+                } else if (asset === 'BNB' && (window.__bnbUsdtPrice || 0) > 0) {
                     g.commissionUsdt += c * window.__bnbUsdtPrice;
                 } else {
-                    // unknown asset commission — count nominally and tag
-                    g.commissionUsdt += c * 0;
+                    // Unknown asset — leave commissionUsdt unchanged but
+                    // show the raw asset tag so the operator sees it.
                 }
                 g.commissionAssets.add(t.commissionAsset || '');
                 g.firstTime = Math.min(g.firstTime, t.time);
