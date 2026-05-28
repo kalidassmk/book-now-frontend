@@ -796,7 +796,17 @@ function describe(ev) {
     const chips = [chip(l, l.includes('DUMP') ? 'neg' : (l.includes('PUMP') ? 'pos' : ''))];
     if (ev.price != null) chips.push(priceChip(ev.price));   // iter90
     if (ev.score != null) chips.push(chip(`score ${ev.score}`, 'score'));
-    if (ev.vol_surge_x != null) chips.push(chip(`${(+ev.vol_surge_x).toFixed(1)}× vol`, 'vol'));
+    // iter92 — fast-path 5m surge chips
+    if (ev.surge_5m != null && +ev.surge_5m > 0) {
+      chips.push(chip(`${(+ev.surge_5m).toFixed(1)}× vol/5m`, 'vol'));
+    }
+    if (ev.chg_5m_pct != null && Math.abs(+ev.chg_5m_pct) > 0) {
+      chips.push(pctChip(+ev.chg_5m_pct, '/5m'));
+    }
+    if (ev.trigger_source && ev.trigger_source !== '24h') {
+      chips.push(chip('⚡' + ev.trigger_source, 'score'));
+    }
+    if (ev.vol_surge_x != null) chips.push(chip(`${(+ev.vol_surge_x).toFixed(1)}× vol/24h`, 'vol'));
     return { ic, source: 'LMC', chips };
   }
   if (ev.kind === 'ccp') {

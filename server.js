@@ -2723,6 +2723,10 @@ app.get('/api/alerts/feed', async (req, res) => {
                             chg_24h_pct: ev.chg_24h_pct,
                             vol_surge_x: ev.vol_surge_x,
                             avg_7d_vol_usd: ev.avg_7d_vol_usd,
+                            // iter92 — fast-path 5m surge metrics
+                            trigger_source: ev.trigger_source,
+                            surge_5m: ev.surge_5m,
+                            chg_5m_pct: ev.chg_5m_pct,
                         });
                     } catch (_) {}
                 }
