@@ -76,7 +76,11 @@ app.use(express.json());
 // at-a-glance status). The old scanner UI is preserved at '/scanner' and
 // '/index.html'. Register these BEFORE the static middleware so the
 // custom '/' route wins over public/index.html.
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'monitor.html')));
+// iter 86 — operator chose manual-only buy mode.  Make the alerts
+// dashboard (coin.html) the homepage so every page load surfaces
+// live signals across all 5 detectors first.  /monitor still
+// serves the legacy monitor.html for those who want it.
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'coin.html')));
 app.get('/scanner', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 // Disable browser caching for HTML so dashboard updates land immediately
@@ -2529,6 +2533,28 @@ app.get('/api/coin/:symbol', async (req, res) => {
             const askCeil = mid * 1.005;
             const bidDepth = depthRes.bids.reduce((s, [p, q]) => parseFloat(p) >= bidFloor ? s + parseFloat(p) * parseFloat(q) : s, 0);
             const askDepth = depthRes.asks.reduce((s, [p, q]) => parseFloat(p) <= askCeil ? s + parseFloat(p) * parseFloat(q) : s, 0);
+            // iter 86 — compute suggested entry prices + slippage by qty.
+            // Walk the ask side (buying takes from asks) to find the
+            // average fill price for different USD sizes.
+            function walkAsks(usdAmount) {
+                let remaining = usdAmount;
+                let qty = 0;
+                let cost = 0;
+                for (const [pStr, qStr] of depthRes.asks) {
+                    const p = parseFloat(pStr); const q = parseFloat(qStr);
+                    const levelUsd = p * q;
+                    if (remaining <= 0) break;
+                    const take = Math.min(levelUsd, remaining);
+                    qty += take / p;
+                    cost += take;
+                    remaining -= take;
+                }
+                if (cost <= 0 || qty <= 0) return null;
+                const avg = cost / qty;
+                const slip = bb > 0 ? (avg - ba) / ba * 100 : 0;
+                return { usd: usdAmount, qty: +qty.toFixed(4), avg_price: +avg.toFixed(8), slip_pct: +slip.toFixed(3), filled: usdAmount - Math.max(0, remaining) };
+            }
+            const tick = Math.max(1e-12, ba - bb || ba * 0.0001);
             orderbook = {
                 best_bid: bb,
                 best_ask: ba,
@@ -2536,6 +2562,15 @@ app.get('/api/coin/:symbol', async (req, res) => {
                 spread_pct: +spreadPct.toFixed(3),
                 bid_depth_within_0_5pct_usdt: +bidDepth.toFixed(0),
                 ask_depth_within_0_5pct_usdt: +askDepth.toFixed(0),
+                // iter 86 — entry suggestions
+                suggested: {
+                    maker_patient: +(bb).toFixed(8),                      // sit at best bid (highest fill chance for maker)
+                    maker_aggressive: +(bb + tick).toFixed(8),            // 1 tick above bid (front-runs queue)
+                    taker_instant: +ba.toFixed(8),                        // best ask — instant fill
+                    fill_50:  walkAsks(50),                               // slippage for $50
+                    fill_100: walkAsks(100),                              // slippage for $100
+                    fill_200: walkAsks(200),                              // slippage for $200
+                },
             };
         }
 

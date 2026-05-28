@@ -417,6 +417,67 @@ function render(payload) {
     </div>
   `;
 
+  // iter 86 — Suggested Entry card (for manual buys on Binance)
+  const sg = ob && ob.suggested;
+  function priceClickToCopy(price, kind) {
+    return `<span style="cursor:pointer" onclick="navigator.clipboard.writeText('${price}'); this.textContent='✓ copied'; setTimeout(()=>this.textContent='${fmtPrice(price)}', 1200)" title="Click to copy">${fmtPrice(price)}</span>`;
+  }
+  function fillRow(fill, label) {
+    if (!fill) return '';
+    const slipClass = fill.slip_pct > 0.5 ? 'neg' : fill.slip_pct > 0.2 ? 'warn' : 'pos';
+    const ratio = fill.filled && fill.usd ? fill.filled / fill.usd : 1;
+    const warn = ratio < 0.99 ? ' <span style="color:var(--bad);font-size:10px">⚠️ partial fill (book too thin)</span>' : '';
+    return `
+      <tr>
+        <td><strong>${label}</strong></td>
+        <td class="num">${fmtPrice(fill.avg_price)}</td>
+        <td class="num ${slipClass}">${fill.slip_pct > 0 ? '+' : ''}${fill.slip_pct.toFixed(3)}%</td>
+        <td class="num">${fill.qty}</td>
+        <td>${warn || '<span style="color:var(--good);font-size:10px">✓ full fill</span>'}</td>
+      </tr>
+    `;
+  }
+  const sgHtml = sg ? `
+    <div class="card" style="background:linear-gradient(135deg,rgba(46,204,113,.06) 0%,var(--panel) 60%);border-color:rgba(46,204,113,.30)">
+      <h2 style="color:var(--good)">💰 Suggested Entry Prices (for manual buys on Binance)</h2>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:12px">
+        <div class="ob-block">
+          <div class="label">🎯 Maker — Patient</div>
+          <div class="value pos" style="font-size:20px">${priceClickToCopy(sg.maker_patient)}</div>
+          <div class="sub">Sit at best bid. May not fill if price runs up. 0% taker fee.</div>
+        </div>
+        <div class="ob-block">
+          <div class="label">⚡ Maker — Aggressive</div>
+          <div class="value pos" style="font-size:20px">${priceClickToCopy(sg.maker_aggressive)}</div>
+          <div class="sub">1 tick above bid. Front-runs the queue. Still maker.</div>
+        </div>
+        <div class="ob-block">
+          <div class="label">🚀 Taker — Instant</div>
+          <div class="value neg" style="font-size:20px">${priceClickToCopy(sg.taker_instant)}</div>
+          <div class="sub">Hit best ask. Instant fill. Pays taker fee.</div>
+        </div>
+      </div>
+      <h3 style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin:14px 0 6px">Slippage estimate (market-buy walks the ask side)</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.4px;text-align:left">
+          <th style="padding:4px 8px">Order size</th>
+          <th class="num" style="padding:4px 8px">Avg fill price</th>
+          <th class="num" style="padding:4px 8px">Slippage</th>
+          <th class="num" style="padding:4px 8px">Qty filled</th>
+          <th style="padding:4px 8px">Status</th>
+        </tr></thead>
+        <tbody style="font-variant-numeric:tabular-nums">
+          ${fillRow(sg.fill_50, '$50')}
+          ${fillRow(sg.fill_100, '$100')}
+          ${fillRow(sg.fill_200, '$200')}
+        </tbody>
+      </table>
+      <div style="margin-top:10px;font-size:11px;color:var(--muted);text-align:right">
+        💡 Click any price above to copy to clipboard. Open Binance and paste into the order form.
+      </div>
+    </div>
+  ` : '';
+
   // Price action chart
   const pa = p.price_action;
   let chartHtml = '<div class="empty">No price action data.</div>';
@@ -513,7 +574,7 @@ function render(payload) {
     </div>
   `;
 
-  document.getElementById('content').innerHTML = headerHtml + verdictHtml + detectorsHtml + filtersHtml + obHtml + priceActionHtml + posHtml + tradesHtml;
+  document.getElementById('content').innerHTML = headerHtml + verdictHtml + sgHtml + detectorsHtml + filtersHtml + obHtml + priceActionHtml + posHtml + tradesHtml;
 }
 
 async function refresh() {
@@ -682,6 +743,27 @@ async function renderAlertsHome() {
     const buckets = { trade: [], strong: [], watch: [], weak: [], dump: [] };
     for (const ev of events) buckets[categorize(ev)].push(ev);
 
+    // iter 86 — compute per-symbol consensus: how many distinct
+    // detectors fired on each symbol in the last 30 min.  Helps the
+    // operator instantly see "agreement" between algorithms.
+    const consensus = {};  // symbol → Set of kinds
+    const RECENT_MS = 30 * 60 * 1000;
+    const nowMs = Date.now();
+    for (const ev of events) {
+      if (!ev.symbol || nowMs - (ev.ts || 0) > RECENT_MS) continue;
+      if (ev.kind === 'trade' || ev.kind === 'weak_pump') continue;  // exclude trade/skip events
+      (consensus[ev.symbol] = consensus[ev.symbol] || new Set()).add(ev.kind);
+    }
+    // The 5 signal detectors: pump_rider, early_pump, vsp, lmc, ccp
+    const TOTAL_DETECTORS = 5;
+    function consensusBadgeHtml(sym) {
+      const set = consensus[sym];
+      if (!set || set.size < 2) return '';
+      const n = set.size;
+      const cls = n >= 4 ? 'pos' : n === 3 ? 'score' : '';
+      return `<span class="m-chip ${cls}" title="${n} of ${TOTAL_DETECTORS} detectors agree (last 30min): ${[...set].join(', ')}">🎯 ${n}/${TOTAL_DETECTORS}</span>`;
+    }
+
     const sections = [
       { key: 'trade',  title: '🛒 Trade Events',                desc: 'Bot buys, fills, sells, P&L' },
       { key: 'strong', title: '🔥 Strong Signals',              desc: 'High-confidence BUY candidates' },
@@ -726,17 +808,13 @@ async function renderAlertsHome() {
             ${items.slice(0, 20).map(ev => {
               const d = describe(ev);
               const bz = (window.bnBinanceLinkHtml || (()=>''))(ev.symbol, { compact: true });
-              // iter 85 fix: outer must be <div>, NOT <a> — because we
-              // nest an <a class="bn-binance-link"> for the Binance icon,
-              // and the HTML spec auto-closes the outer <a> when a nested
-              // <a> appears, kicking the Binance icon + time-ago out of
-              // the grid (caused the "floating yellow dot" bug).
+              const cb = consensusBadgeHtml(ev.symbol);   // iter86 consensus
               return `
                 <div class="alert-row" role="link" tabindex="0" onclick="if(event.target.closest('.bn-binance-link'))return;location.href='/coin.html?sym=${ev.symbol}'">
                   <span class="a-ic">${d.ic}</span>
                   <span class="a-sym">${ev.symbol}</span>
                   <span class="a-source">${d.source}</span>
-                  <span class="a-metrics">${(d.chips || []).join('')}</span>
+                  <span class="a-metrics">${(d.chips || []).join('')}${cb}</span>
                   ${bz}
                   <span class="a-ago">${ageStr(ev.ts)}</span>
                 </div>
