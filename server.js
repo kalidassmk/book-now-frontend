@@ -1446,6 +1446,27 @@ app.get('/api/check-coin', async (req, res) => {
         //
         // Optional booster: upper-wick share on green candles >
         // weakPumpUpperWickShare → buyers being absorbed at the highs.
+        // ── iter 81 (FAST-FAIL): Symbol blacklist ──
+        // Hard-block coins that have lost money consistently.  Configured
+        // via TRADING_CONFIG.symbolBlacklist (array of symbols).
+        // Default: FIDA, AMP, JTO, S, COS, CFG (the 6 worst losers).
+        const blacklist = Array.isArray(cfg.symbolBlacklist) && cfg.symbolBlacklist.length
+            ? cfg.symbolBlacklist.map(s => String(s).toUpperCase())
+            : [];
+        const blEnabled = cfg.iter81SymbolBlacklistEnabled !== false;  // default ON
+        const isBlacklisted = blEnabled && blacklist.includes(sym);
+        filters.push({
+            id: 'iter81_symbol_blacklist',
+            name: 'iter 81 — Symbol blacklist (toxic coins)',
+            pass: !isBlacklisted,
+            blocked: isBlacklisted,
+            enabled: blEnabled,
+            reason: isBlacklisted
+                ? `${sym} is in the blacklist (chronic loser — manually reviewed). Remove from TRADING_CONFIG.symbolBlacklist to unblock.`
+                : (blacklist.length ? `not in blacklist (${blacklist.length} symbols blocked)` : 'no symbols blacklisted'),
+            details: { blacklist },
+        });
+
         let wp_blocked = false, wp_details = {};
         const wpEnabled = cfg.iter71WeakPumpFilterEnabled !== false;  // default ON
         if (Array.isArray(fiveMinRaw) && fiveMinRaw.length >= 9) {
@@ -1497,15 +1518,71 @@ app.get('/api/check-coin', async (req, res) => {
                 const wickShare  = parseFloat(cfg.weakPumpUpperWickShare ?? 0.4);
                 const tbrCeil    = parseFloat(cfg.weakPumpTakerBuyCeil ?? 0.45);
 
-                // Primary rule: rising price + falling vol
-                const primary_weak = chg_pct >= minChg && vol_ratio < volDecline;
-                // Booster: also weak if upper-wick rejection dominates on greens
-                const wick_weak = chg_pct >= minChg && green_count >= 2 && avg_upper_wick_share >= wickShare;
-                // Booster: also weak if taker-buy ratio is below ceiling
-                // (sellers absorbing buyers while price stalls up)
-                const tbr_weak = chg_pct >= minChg && taker_buy_ratio < tbrCeil && vol_ratio < 1.0;
+                // ── iter 81 new thresholds ─────────────────────────
+                // Seller-dominance: regardless of chg, if recent vol
+                // is heavily sell-side, REJECT. JTO 08:36 had TBR=14%.
+                const sellerDomTbrCeil = parseFloat(cfg.weakPumpSellerDomTbrCeil ?? 0.30);
+                const sellerDomMinVolRatio = parseFloat(cfg.weakPumpSellerDomMinVolRatio ?? 0.8);
+                // Latest-candle reversal: 2+ greens in last 3 then RED with fading vol
+                const reversalEnabled = cfg.iter81LatestReversalEnabled !== false;
+                // Buy-near-top: current close in top X% of 15m range w/ flat/red tail
+                const nearTopThreshold = parseFloat(cfg.weakPumpNearTopThreshold ?? 0.7);
+                const nearTopEnabled = cfg.iter81NearTopEnabled !== false;
 
-                wp_blocked = wpEnabled && (primary_weak || wick_weak || tbr_weak);
+                // ── iter 71 original rules ─────────────────────────
+                const primary_weak = chg_pct >= minChg && vol_ratio < volDecline;
+                const wick_weak = chg_pct >= minChg && green_count >= 2 && avg_upper_wick_share >= wickShare;
+                // iter 81 tweak: lower chg threshold from 0.5% → 0.0% so
+                // tiny-momentum trades like JTO get caught.
+                const tbr_weak = chg_pct >= 0 && taker_buy_ratio < tbrCeil && vol_ratio < 1.0;
+
+                // ── iter 81 NEW: Seller dominance (no chg threshold) ──
+                // Catches JTO-style trades: tiny price chg but taker-buy
+                // ratio < 30% means sellers are crushing the bid side.
+                const seller_dominance = taker_buy_ratio < sellerDomTbrCeil && vol_ratio > sellerDomMinVolRatio;
+
+                // ── iter 81 NEW: Latest-candle reversal ──
+                // Last 3 candles had >= 2 greens but most recent is RED
+                // with vol >= prior fading.  Momentum stalled.
+                let latest_reversal = false;
+                let reversal_details = {};
+                if (reversalEnabled && recent.closes.length >= 3) {
+                    const last3 = recent.closes.slice(-3);
+                    const last3o = recent.opens.slice(-3);
+                    const last3v = recent.qvols.slice(-3);
+                    const greens_in_3 = (last3[0] > last3o[0] ? 1 : 0) + (last3[1] > last3o[1] ? 1 : 0);
+                    const latest_red = last3[2] < last3o[2];
+                    // Latest vol vs median of prior 4 in window
+                    const prior4_v = recent.qvols.slice(-7, -3);
+                    const sorted_prior4 = [...prior4_v].sort((a,b) => a-b);
+                    const median_prior4 = sorted_prior4.length ? sorted_prior4[Math.floor(sorted_prior4.length/2)] : 0;
+                    const vol_fading = last3v[2] < median_prior4 * 1.5 && median_prior4 > 0;
+                    latest_reversal = greens_in_3 >= 2 && latest_red && vol_fading;
+                    reversal_details = { greens_in_3, latest_red, vol_fading,
+                                         latest_vol: Math.round(last3v[2]), median_prior_vol: Math.round(median_prior4) };
+                }
+
+                // ── iter 81 NEW: Buy near top of range without follow-through ──
+                // Current close in top 30% of last 15m range AND last 2 candles
+                // are flat or red.
+                let buy_near_top = false;
+                let near_top_details = {};
+                if (nearTopEnabled && recent.highs.length >= 3) {
+                    const hi15 = Math.max(...recent.highs);
+                    const lo15 = Math.min(...recent.lows);
+                    const range15 = hi15 - lo15;
+                    if (range15 > 0) {
+                        const pos_in_range = (c_now - lo15) / range15;
+                        const last2_o = recent.opens.slice(-2);
+                        const last2_c = recent.closes.slice(-2);
+                        const last2_flat_or_red = last2_c[0] <= last2_o[0] && last2_c[1] <= last2_o[1];
+                        buy_near_top = pos_in_range >= nearTopThreshold && last2_flat_or_red;
+                        near_top_details = { pos_in_range: +pos_in_range.toFixed(2), last2_flat_or_red };
+                    }
+                }
+
+                wp_blocked = wpEnabled && (primary_weak || wick_weak || tbr_weak ||
+                                            seller_dominance || latest_reversal || buy_near_top);
                 wp_details = {
                     window_min: winBars * 5,
                     chg_pct: +chg_pct.toFixed(3),
@@ -1515,22 +1592,33 @@ app.get('/api/check-coin', async (req, res) => {
                     avg_upper_wick_share: +avg_upper_wick_share.toFixed(2),
                     taker_buy_ratio: +taker_buy_ratio.toFixed(3),
                     triggers: {
+                        // iter 71
                         primary_weak,
                         wick_weak,
                         tbr_weak,
+                        // iter 81
+                        seller_dominance,
+                        latest_reversal,
+                        buy_near_top,
                     },
+                    reversal_details,
+                    near_top_details,
                     limits: {
                         min_chg_pct: minChg,
                         vol_decline_ratio: volDecline,
                         upper_wick_share: wickShare,
                         taker_buy_ceil: tbrCeil,
+                        // iter 81
+                        seller_dom_tbr_ceil: sellerDomTbrCeil,
+                        seller_dom_min_vol_ratio: sellerDomMinVolRatio,
+                        near_top_threshold: nearTopThreshold,
                     },
                 };
             }
         }
         filters.push({
             id: 'iter71_weak_pump',
-            name: 'iter 71 — Weak-pump filter (Price↑ + Volume↓)',
+            name: 'iter 71+81 — Weak-pump filter (Price↑ + Volume↓ + seller dominance)',
             pass: !wp_blocked,
             blocked: wp_blocked,
             enabled: wpEnabled,
@@ -1541,10 +1629,13 @@ app.get('/api/check-coin', async (req, res) => {
                     if (t.primary_weak) parts.push(`price ↑ ${wp_details.chg_pct}% but vol ratio ${wp_details.vol_ratio}× (need ≥ ${wp_details.limits.vol_decline_ratio})`);
                     if (t.wick_weak) parts.push(`upper-wick share ${wp_details.avg_upper_wick_share} ≥ ${wp_details.limits.upper_wick_share} on green bars (buyer absorption)`);
                     if (t.tbr_weak) parts.push(`taker-buy ratio ${wp_details.taker_buy_ratio} < ${wp_details.limits.taker_buy_ceil} (sellers absorbing buyers)`);
+                    if (t.seller_dominance) parts.push(`iter81 SELLER DOMINANCE: taker-buy ratio ${wp_details.taker_buy_ratio} < ${wp_details.limits.seller_dom_tbr_ceil} (>${Math.round((1-wp_details.taker_buy_ratio)*100)}% volume from sellers — would catch JTO-style buys)`);
+                    if (t.latest_reversal) parts.push(`iter81 LATEST REVERSAL: ${wp_details.reversal_details.greens_in_3} greens then RED with vol fading (latest=${wp_details.reversal_details.latest_vol} vs median=${wp_details.reversal_details.median_prior_vol})`);
+                    if (t.buy_near_top) parts.push(`iter81 BUY NEAR TOP: close ${(wp_details.near_top_details.pos_in_range*100).toFixed(0)}% into 15m range with last 2 candles flat/red`);
                     return parts.join(' OR ');
                 })()
                 : (Array.isArray(fiveMinRaw) && fiveMinRaw.length >= 9
-                    ? `price ↑ ${wp_details.chg_pct}%, vol ratio ${wp_details.vol_ratio}× — healthy momentum`
+                    ? `price ↑ ${wp_details.chg_pct}%, vol ratio ${wp_details.vol_ratio}×, TBR ${wp_details.taker_buy_ratio} — healthy`
                     : 'insufficient 5m history → pass (fail-open)'),
             details: wp_details,
         });
