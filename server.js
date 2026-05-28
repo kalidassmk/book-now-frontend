@@ -2747,6 +2747,30 @@ app.get('/api/alerts/feed', async (req, res) => {
                 }
             } catch (_) {}
         }
+        // iter 88 — Fast/Virtual Scalper signal-only events (when
+        // HARD_DISABLE_AUTOBUY blocks the buy, the scalper still
+        // publishes the signal so the operator can see what would
+        // have been bought and decide manually).
+        async function pullScalper(date, kind, key) {
+            try {
+                const raw = await redis.lrange(key + ':' + date, 0, 100);
+                for (const r of raw) {
+                    try {
+                        const ev = JSON.parse(r);
+                        if (!ev.ts || ev.ts < since) continue;
+                        events.push({
+                            ts: ev.ts, kind, symbol: ev.symbol,
+                            signal_price: ev.signal_price,
+                            source: ev.source,
+                            features: ev.features,
+                            would_buy: ev.would_buy,
+                            blocked_by: ev.blocked_by,
+                        });
+                    } catch (_) {}
+                }
+            } catch (_) {}
+        }
+
         async function pullWeakPumpSkips(date) {
             // METRICS:SKIP entries with reason containing "iter71_weak_pump"
             try {
@@ -2775,6 +2799,8 @@ app.get('/api/alerts/feed', async (req, res) => {
         await pullVsp(today);
         await pullLmc(today);
         await pullCcp(today);
+        await pullScalper(today, 'fast_scalper',    'FAST_SCALPER:DETECTIONS');     // iter88
+        await pullScalper(today, 'virtual_scalper', 'VIRTUAL_SCALPER:DETECTIONS');  // iter88
         await pullWeakPumpSkips(today);
         // Yesterday too if `since` is older than today's 00:00
         const todayStart = new Date(today + 'T00:00:00Z').getTime();
@@ -2785,6 +2811,8 @@ app.get('/api/alerts/feed', async (req, res) => {
             await pullVsp(yesterday);
             await pullLmc(yesterday);
             await pullCcp(yesterday);
+            await pullScalper(yesterday, 'fast_scalper',    'FAST_SCALPER:DETECTIONS');    // iter88
+            await pullScalper(yesterday, 'virtual_scalper', 'VIRTUAL_SCALPER:DETECTIONS'); // iter88
             await pullWeakPumpSkips(yesterday);
         }
 

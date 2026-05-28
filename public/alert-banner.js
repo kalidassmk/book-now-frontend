@@ -230,6 +230,8 @@
   function categorize(ev) {
     if (ev.kind === 'trade') return 'trade';
     if (ev.kind === 'weak_pump') return 'weak';
+    // iter 88 — scalper signal-only events
+    if (ev.kind === 'fast_scalper' || ev.kind === 'virtual_scalper') return 'watch';
     if (ev.kind === 'pump_rider') {
       const t = (ev.tier || '').toUpperCase();
       if (t === 'STRONG' || t === 'NORMAL') return 'strong';
@@ -271,6 +273,13 @@
     }
     if (ev.kind === 'weak_pump') {
       return { ic: '⚠️', text: `WEAK PUMP — ${(ev.reason || '').slice(0, 60)}` };
+    }
+    // iter 88
+    if (ev.kind === 'fast_scalper') {
+      return { ic: '⚡', text: `Fast Scalper would buy @ $${(+ev.signal_price || 0).toPrecision(4)}` };
+    }
+    if (ev.kind === 'virtual_scalper') {
+      return { ic: '🧪', text: `Virtual Scalper would buy @ $${(+ev.signal_price || 0).toPrecision(4)}` };
     }
     if (ev.kind === 'pump_rider') {
       const t = (ev.tier || '').toUpperCase();

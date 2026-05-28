@@ -640,6 +640,8 @@ if (urlSym) {
 function categorize(ev) {
   if (ev.kind === 'trade') return 'trade';
   if (ev.kind === 'weak_pump') return 'weak';
+  // iter 88 — scalper signal-only events
+  if (ev.kind === 'fast_scalper' || ev.kind === 'virtual_scalper') return 'watch';
   if (ev.kind === 'pump_rider') {
     const t = (ev.tier || '').toUpperCase();
     return (t === 'STRONG' || t === 'NORMAL') ? 'strong' : 'watch';
@@ -689,6 +691,19 @@ function describe(ev) {
   }
   if (ev.kind === 'weak_pump') {
     return { ic: '⚠️', source: 'Weak Pump · Rejected', chips: [chip((ev.reason || '').slice(0, 80), 'neg')] };
+  }
+  // iter 88 — scalper would-have-bought signal
+  if (ev.kind === 'fast_scalper' || ev.kind === 'virtual_scalper') {
+    const label = ev.kind === 'fast_scalper' ? 'Fast Scalper' : 'Virtual Scalper';
+    const chips = [chip('WOULD BUY', 'score')];
+    if (ev.signal_price != null) chips.push(chip('@ $' + (+ev.signal_price).toPrecision(4)));
+    if (ev.features && typeof ev.features === 'object') {
+      const f = ev.features;
+      if (f.vol_surge_ratio != null) chips.push(chip((+f.vol_surge_ratio).toFixed(1) + '× vol', 'vol'));
+      if (f.pre_vol_baseline_usdt) chips.push(chip('base $' + Math.round(+f.pre_vol_baseline_usdt).toLocaleString(), ''));
+    }
+    if (ev.source) chips.push(chip(ev.source));
+    return { ic: ev.kind === 'fast_scalper' ? '⚡' : '🧪', source: label, chips };
   }
   if (ev.kind === 'pump_rider') {
     const t = (ev.tier || '').toUpperCase();
