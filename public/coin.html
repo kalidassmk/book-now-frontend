@@ -147,6 +147,14 @@
   .alerts-section.s-watch  { border-left-color: var(--warn); }
   .alerts-section.s-weak   { border-left-color: #e67e22; }
   .alerts-section.s-dump   { border-left-color: var(--bad); }
+  /* iter91 — pinned Top-5 buy panel: brighter accent + glow */
+  .alerts-section.s-top5 {
+    border-left-color: #ffd54f;
+    border-left-width: 4px;
+    background: linear-gradient(180deg, rgba(255,213,79,.06), transparent 60%), var(--panel);
+    box-shadow: 0 0 0 1px rgba(255,213,79,.15), 0 6px 18px rgba(0,0,0,.25);
+  }
+  .alerts-section.s-top5 .sec-title { color: #ffd54f; }
   .alerts-section .sec-head {
     display: flex; align-items: center; justify-content: space-between;
     margin-bottom: 8px;
@@ -838,8 +846,10 @@ async function renderAlertsHome() {
       return `<span class="m-chip ${cls}" title="${n} of ${TOTAL_DETECTORS} detectors agree (last 30min): ${[...set].join(', ')}">🎯 ${n}/${TOTAL_DETECTORS}</span>`;
     }
 
+    // iter 91 — operator does not want bot-trade events on this view
+    // anymore (they're tracked elsewhere) and wants a prominent
+    // "TOP 5 LATEST BUY SIGNALS" panel at the very top.
     const sections = [
-      { key: 'trade',  title: '🛒 Trade Events',                desc: 'Bot buys, fills, sells, P&L' },
       { key: 'strong', title: '🔥 Strong Signals',              desc: 'High-confidence BUY candidates' },
       { key: 'watch',  title: '👀 Watch List',                  desc: 'Early signals, lower confidence' },
       { key: 'weak',   title: '⚠️ Weak Pumps (Rejected)',        desc: 'Price↑ + Vol↓ — bot skipped these' },
@@ -874,7 +884,7 @@ async function renderAlertsHome() {
     let html = `
       <div class="alerts-hero">
         <h2>🚨 Live Alerts Dashboard</h2>
-        <p class="sub">Categorized signals from all 5 detectors + bot trade events + weak-pump rejections. Click any symbol to deep-dive.</p>
+        <p class="sub">Categorized signals from all 5 detectors + weak-pump rejections. Click any symbol to deep-dive.</p>
         <div class="chips">
           ${sections.map(s => `<span class="chip">${s.title.split(' ')[0]} <span class="num">${buckets[s.key].length}</span></span>`).join('')}
           <span class="meta-right">${events.length} total · updated ${new Date().toLocaleTimeString()}</span>
@@ -948,6 +958,43 @@ async function renderAlertsHome() {
         }
       }
       return out;
+    }
+
+    // iter 91 — pinned "TOP 5 LATEST BUY SIGNALS" panel at top.
+    // Pulls the 5 most recent events from the Strong bucket (high-
+    // confidence BUY candidates) so the operator can act fast.
+    {
+      const topBuys = (buckets.strong || [])
+        .slice()
+        .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+        .slice(0, 5);
+      if (topBuys.length) {
+        html += `
+          <section class="alerts-section s-top5">
+            <div class="sec-head">
+              <div>
+                <span class="sec-title">🎯 Top 5 Latest Buy Signals</span>
+                <span class="sec-desc">Most recent high-confidence BUY candidates — review &amp; manually execute</span>
+              </div>
+              <span class="sec-count">${topBuys.length} latest</span>
+            </div>
+            <div class="sec-rows">
+              ${topBuys.map(renderRow).join('')}
+            </div>
+          </section>
+        `;
+      } else {
+        html += `
+          <section class="alerts-section s-top5">
+            <div class="sec-head">
+              <div>
+                <span class="sec-title">🎯 Top 5 Latest Buy Signals</span>
+                <span class="sec-desc">No strong BUY signals in the current window — check Watch List below</span>
+              </div>
+            </div>
+          </section>
+        `;
+      }
     }
 
     for (const s of sections) {
