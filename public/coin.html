@@ -179,8 +179,10 @@
     color: var(--text);
     text-decoration: none;
     transition: background .12s;
+    cursor: pointer;
   }
   .alert-row:hover { background: rgba(41,182,246,.08); }
+  .alert-row:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
   .alert-row .a-ic { font-size: 14px; text-align: center; }
   .alert-row .a-sym {
     font: 700 12px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -724,15 +726,20 @@ async function renderAlertsHome() {
             ${items.slice(0, 20).map(ev => {
               const d = describe(ev);
               const bz = (window.bnBinanceLinkHtml || (()=>''))(ev.symbol, { compact: true });
+              // iter 85 fix: outer must be <div>, NOT <a> — because we
+              // nest an <a class="bn-binance-link"> for the Binance icon,
+              // and the HTML spec auto-closes the outer <a> when a nested
+              // <a> appears, kicking the Binance icon + time-ago out of
+              // the grid (caused the "floating yellow dot" bug).
               return `
-                <a class="alert-row" href="/coin.html?sym=${ev.symbol}">
+                <div class="alert-row" role="link" tabindex="0" onclick="if(event.target.closest('.bn-binance-link'))return;location.href='/coin.html?sym=${ev.symbol}'">
                   <span class="a-ic">${d.ic}</span>
                   <span class="a-sym">${ev.symbol}</span>
                   <span class="a-source">${d.source}</span>
                   <span class="a-metrics">${(d.chips || []).join('')}</span>
                   ${bz}
                   <span class="a-ago">${ageStr(ev.ts)}</span>
-                </a>
+                </div>
               `;
             }).join('')}
             ${items.length > 20 ? `<div class="sec-more">+ ${items.length - 20} more not shown — refine filters to drill in</div>` : ''}
