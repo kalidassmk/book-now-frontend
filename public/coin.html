@@ -110,6 +110,121 @@
   /* Empty / loading */
   .empty { padding: 24px; text-align: center; color: var(--muted); font-style: italic; }
   .loading { color: var(--muted); font-style: italic; }
+
+  /* iter 85 — Redesigned alerts feed (compact, scannable, no floating dots) */
+  .alerts-hero {
+    background: linear-gradient(135deg, rgba(41,182,246,.10) 0%, var(--panel) 60%);
+    border: 1px solid rgba(41,182,246,.30);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin-bottom: 14px;
+  }
+  .alerts-hero h2 { margin: 0 0 4px; font-size: 16px; color: var(--text); text-transform: none; letter-spacing: 0; }
+  .alerts-hero .sub { color: var(--muted); font-size: 12px; margin: 0; }
+  .alerts-hero .chips { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
+  .alerts-hero .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 11px;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 11px; font-weight: 700;
+    color: var(--muted);
+  }
+  .alerts-hero .chip .num { font-variant-numeric: tabular-nums; color: var(--text); }
+  .alerts-hero .meta-right { margin-left: auto; font-size: 11px; color: var(--muted); }
+
+  .alerts-section {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left-width: 3px;
+    border-radius: 8px;
+    padding: 12px 14px 10px;
+    margin-bottom: 10px;
+  }
+  .alerts-section.s-trade  { border-left-color: #c084fc; }
+  .alerts-section.s-strong { border-left-color: var(--good); }
+  .alerts-section.s-watch  { border-left-color: var(--warn); }
+  .alerts-section.s-weak   { border-left-color: #e67e22; }
+  .alerts-section.s-dump   { border-left-color: var(--bad); }
+  .alerts-section .sec-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .alerts-section .sec-title {
+    font-size: 12px; font-weight: 700; letter-spacing: .3px;
+    text-transform: uppercase;
+  }
+  .alerts-section.s-trade  .sec-title { color: #c084fc; }
+  .alerts-section.s-strong .sec-title { color: var(--good); }
+  .alerts-section.s-watch  .sec-title { color: var(--warn); }
+  .alerts-section.s-weak   .sec-title { color: #e67e22; }
+  .alerts-section.s-dump   .sec-title { color: var(--bad); }
+  .alerts-section .sec-desc { font-size: 10px; color: var(--muted); margin-left: 8px; font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .alerts-section .sec-count {
+    font-size: 11px; font-weight: 700; color: var(--muted);
+    background: var(--panel-2); padding: 2px 8px; border-radius: 10px;
+  }
+  .alerts-section .sec-rows {
+    display: flex; flex-direction: column; gap: 2px;
+  }
+
+  .alert-row {
+    display: grid;
+    grid-template-columns: 20px minmax(110px, auto) minmax(120px, auto) 1fr auto auto;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    border-radius: 5px;
+    color: var(--text);
+    text-decoration: none;
+    transition: background .12s;
+  }
+  .alert-row:hover { background: rgba(41,182,246,.08); }
+  .alert-row .a-ic { font-size: 14px; text-align: center; }
+  .alert-row .a-sym {
+    font: 700 12px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: .3px;
+    color: var(--text);
+  }
+  .alert-row .a-source {
+    font-size: 10px; font-weight: 700; letter-spacing: .4px;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .alert-row .a-metrics {
+    display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+    font-size: 11px;
+  }
+  .alert-row .m-chip {
+    display: inline-flex; align-items: center;
+    padding: 1px 7px;
+    border-radius: 3px;
+    background: rgba(139,148,158,.12);
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+  .alert-row .m-chip.pos { background: rgba(46,204,113,.15); color: var(--good); }
+  .alert-row .m-chip.neg { background: rgba(231,76,60,.18); color: var(--bad); }
+  .alert-row .m-chip.vol { background: rgba(41,182,246,.12); color: var(--accent); }
+  .alert-row .m-chip.score { background: rgba(108,142,239,.15); color: #8eb0ff; }
+  .alert-row .a-ago {
+    font-size: 10px; color: var(--muted);
+    min-width: 60px; text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .alert-row .bn-binance-link { padding: 2px 6px; font-size: 10px; }
+  .alerts-section .sec-more {
+    text-align: center; font-size: 10px; color: var(--muted);
+    padding: 6px 0 2px; font-style: italic;
+  }
+
+  @media (max-width: 800px) {
+    .alert-row { grid-template-columns: 20px 1fr auto; row-gap: 4px; }
+    .alert-row .a-source { grid-column: 2; font-size: 9px; }
+    .alert-row .a-metrics { grid-column: 1 / -1; padding-left: 30px; }
+    .alert-row .a-ago { grid-row: 1; }
+  }
 </style>
 </head>
 <body>
@@ -488,45 +603,68 @@ function categorize(ev) {
   return 'watch';
 }
 
+// iter 85 — structured metric chips (proper layout, no floating text)
+function chip(text, cls) { return `<span class="m-chip ${cls||''}">${text}</span>`; }
+function pctChip(v, suffix) {
+  if (v == null) return '';
+  const cls = v >= 0 ? 'pos' : 'neg';
+  return chip(`${v >= 0 ? '+' : ''}${(+v).toFixed(2)}%${suffix||''}`, cls);
+}
+
 function describe(ev) {
   if (ev.kind === 'trade') {
     const a = ev.action || '';
-    const p = ev.price != null ? '$' + (+ev.price).toPrecision(4) : '';
-    const pnl = ev.realised_net != null ? ` <strong class="${ev.realised_net >= 0 ? 'pos' : 'neg'}">${ev.realised_net >= 0 ? '+' : ''}$${(+ev.realised_net).toFixed(2)}</strong>` : '';
     const ic = a === 'BUY' ? '🛒' : (ev.realised_net >= 0 ? '💰' : '🛑');
-    return { ic, source: 'Bot Trade', detail: `${a} ${p}${pnl}` };
+    const chips = [];
+    if (a) chips.push(chip(a));
+    if (ev.price != null) chips.push(chip('$' + (+ev.price).toPrecision(4)));
+    if (ev.realised_net != null) {
+      const cls = ev.realised_net >= 0 ? 'pos' : 'neg';
+      chips.push(chip(`${ev.realised_net >= 0 ? '+' : ''}$${(+ev.realised_net).toFixed(2)}`, cls));
+    }
+    return { ic, source: 'Bot Trade', chips };
   }
   if (ev.kind === 'weak_pump') {
-    return { ic: '⚠️', source: 'Weak-Pump Reject', detail: ev.reason || '' };
+    return { ic: '⚠️', source: 'Weak Pump · Rejected', chips: [chip((ev.reason || '').slice(0, 80), 'neg')] };
   }
   if (ev.kind === 'pump_rider') {
     const t = (ev.tier || '').toUpperCase();
     const ic = ({STRONG:'🔥', NORMAL:'🚀', EARLY:'👀', MEGA:'⚠️'})[t] || '⚡';
-    const c5 = ev.chg_5m != null ? `<strong>+${(+ev.chg_5m).toFixed(2)}%</strong>/5m` : '';
-    const v5 = ev.vol_surge_5m != null ? `vol <strong>${(+ev.vol_surge_5m).toFixed(1)}×</strong>` : '';
-    return { ic, source: `PumpRider ${t}`, detail: `${c5} · ${v5}` };
+    const chips = [];
+    if (t) chips.push(chip(t));
+    if (ev.chg_5m != null) chips.push(pctChip(+ev.chg_5m, '/5m'));
+    if (ev.vol_surge_5m != null) chips.push(chip(`${(+ev.vol_surge_5m).toFixed(1)}× vol`, 'vol'));
+    return { ic, source: 'PumpRider', chips };
   }
   if (ev.kind === 'early_pump') {
     const s = +ev.score || 0;
-    const c = ev.change_24h_pct != null ? `${ev.change_24h_pct >= 0 ? '+' : ''}${(+ev.change_24h_pct).toFixed(2)}% 24h` : '';
-    return { ic: s >= 80 ? '🚀' : '👀', source: 'Early Pump', detail: `score <strong>${s}</strong> · ${c}` };
+    const chips = [chip(`score ${s}`, 'score')];
+    if (ev.change_24h_pct != null) chips.push(pctChip(+ev.change_24h_pct, ' 24h'));
+    return { ic: s >= 80 ? '🚀' : '👀', source: 'Early Pump', chips };
   }
   if (ev.kind === 'vsp') {
     const l = ev.label || '';
     const ic = l.includes('BIG_PUMP') ? '🔥' : l.includes('BIG_DUMP') ? '🔴' : l.includes('MODERATE') ? '⚡' : '👀';
-    return { ic, source: 'VSP', detail: `${l} · conf <strong>${ev.confidence ?? '—'}</strong> D=${ev.direction_score ?? '?'} M=${ev.magnitude_score ?? '?'}` };
+    const chips = [chip(l, l.includes('DUMP') ? 'neg' : (l.includes('PUMP') ? 'pos' : ''))];
+    if (ev.confidence != null) chips.push(chip(`conf ${ev.confidence}`, 'score'));
+    return { ic, source: 'VSP', chips };
   }
   if (ev.kind === 'lmc') {
     const l = ev.label || '';
-    const ic = l === 'EXPLOSIVE_PUMP' ? '💎🚀' : l.includes('DUMP') ? '💎🔴' : '💎';
-    return { ic, source: 'LMC (Low MCap)', detail: `${l} · score <strong>${ev.score ?? '?'}</strong> · vol <strong>${ev.vol_surge_x ?? '?'}×</strong>` };
+    const ic = l === 'EXPLOSIVE_PUMP' ? '💎' : l.includes('DUMP') ? '💎🔴' : '💎';
+    const chips = [chip(l, l.includes('DUMP') ? 'neg' : (l.includes('PUMP') ? 'pos' : ''))];
+    if (ev.score != null) chips.push(chip(`score ${ev.score}`, 'score'));
+    if (ev.vol_surge_x != null) chips.push(chip(`${(+ev.vol_surge_x).toFixed(1)}× vol`, 'vol'));
+    return { ic, source: 'LMC', chips };
   }
   if (ev.kind === 'ccp') {
     const l = ev.label || '';
-    const ic = l === 'CALM_REVERSAL_UP' ? '🌊⬆️' : l.includes('BREAKDOWN') ? '🌊🔴' : '🌊';
-    return { ic, source: 'CCP (Consolidation)', detail: `${l} · score <strong>${ev.score ?? '?'}</strong>` };
+    const ic = l === 'CALM_REVERSAL_UP' ? '🌊' : l.includes('BREAKDOWN') ? '🌊🔴' : '🌊';
+    const chips = [chip(l, l.includes('BREAKDOWN') ? 'neg' : (l.includes('REVERSAL') ? 'pos' : ''))];
+    if (ev.score != null) chips.push(chip(`score ${ev.score}`, 'score'));
+    return { ic, source: 'CCP', chips };
   }
-  return { ic: '•', source: ev.kind || 'event', detail: '' };
+  return { ic: '•', source: ev.kind || 'event', chips: [] };
 }
 
 async function renderAlertsHome() {
@@ -543,20 +681,28 @@ async function renderAlertsHome() {
     for (const ev of events) buckets[categorize(ev)].push(ev);
 
     const sections = [
-      { key: 'trade',  title: '🛒 Trade Events',                color: '#c084fc', desc: 'Bot buys, fills, sells, P&L' },
-      { key: 'strong', title: '🔥 Strong Signals',              color: '#2ecc71', desc: 'High-confidence BUY candidates' },
-      { key: 'watch',  title: '👀 Watch List',                  color: '#f1c40f', desc: 'Early signals, lower confidence' },
-      { key: 'weak',   title: '⚠️ Weak Pumps (REJECTED)',        color: '#e67e22', desc: 'Price↑ + Vol↓ — bot skipped these' },
-      { key: 'dump',   title: '🔴 Dump Risk',                    color: '#e74c3c', desc: 'Down signals — avoid entry' },
+      { key: 'trade',  title: '🛒 Trade Events',                desc: 'Bot buys, fills, sells, P&L' },
+      { key: 'strong', title: '🔥 Strong Signals',              desc: 'High-confidence BUY candidates' },
+      { key: 'watch',  title: '👀 Watch List',                  desc: 'Early signals, lower confidence' },
+      { key: 'weak',   title: '⚠️ Weak Pumps (Rejected)',        desc: 'Price↑ + Vol↓ — bot skipped these' },
+      { key: 'dump',   title: '🔴 Dump Risk',                    desc: 'Down signals — avoid entry' },
     ];
 
+    function ageStr(ts) {
+      const sec = Math.max(0, (Date.now() - ts) / 1000);
+      if (sec < 60)   return `${sec.toFixed(0)}s`;
+      if (sec < 3600) return `${(sec/60).toFixed(0)}m`;
+      if (sec < 86400) return `${(sec/3600).toFixed(1)}h`;
+      return `${(sec/86400).toFixed(0)}d`;
+    }
+
     let html = `
-      <div class="card" style="background:linear-gradient(135deg,rgba(41,182,246,.08) 0%,var(--panel) 100%);border-color:rgba(41,182,246,.3)">
-        <h2 style="margin-bottom:6px">🚨 Live Alerts Dashboard</h2>
-        <div style="color:var(--muted);font-size:12px">Categorized signals from all 5 detectors + bot trade events + weak-pump rejections. Click any symbol to deep-dive.</div>
-        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-          ${sections.map(s => `<span style="padding:4px 10px;background:rgba(139,148,158,.10);border-radius:14px;font-size:11px;color:${s.color};font-weight:700">${s.title.split(' ')[0]} ${buckets[s.key].length}</span>`).join('')}
-          <span style="margin-left:auto;color:var(--muted);font-size:11px;align-self:center">${events.length} total · updated ${new Date().toLocaleTimeString()}</span>
+      <div class="alerts-hero">
+        <h2>🚨 Live Alerts Dashboard</h2>
+        <p class="sub">Categorized signals from all 5 detectors + bot trade events + weak-pump rejections. Click any symbol to deep-dive.</p>
+        <div class="chips">
+          ${sections.map(s => `<span class="chip">${s.title.split(' ')[0]} <span class="num">${buckets[s.key].length}</span></span>`).join('')}
+          <span class="meta-right">${events.length} total · updated ${new Date().toLocaleTimeString()}</span>
         </div>
       </div>
     `;
@@ -564,28 +710,34 @@ async function renderAlertsHome() {
     for (const s of sections) {
       const items = buckets[s.key];
       if (!items.length) continue;
+      const cls = 's-' + s.key;
       html += `
-        <div class="card" style="border-left:4px solid ${s.color}">
-          <h2 style="color:${s.color};font-size:13px">${s.title} <span style="color:var(--muted);font-weight:400;font-size:11px;text-transform:none;letter-spacing:0">— ${s.desc} · ${items.length} event${items.length === 1 ? '' : 's'}</span></h2>
-          <div style="display:flex;flex-direction:column;gap:6px">
+        <section class="alerts-section ${cls}">
+          <div class="sec-head">
+            <div>
+              <span class="sec-title">${s.title}</span>
+              <span class="sec-desc">${s.desc}</span>
+            </div>
+            <span class="sec-count">${items.length} ${items.length === 1 ? 'event' : 'events'}</span>
+          </div>
+          <div class="sec-rows">
             ${items.slice(0, 20).map(ev => {
-              const { ic, source, detail } = describe(ev);
-              const ago = ((Date.now() - ev.ts) / 1000);
-              const agoStr = ago < 60 ? `${ago.toFixed(0)}s ago` : ago < 3600 ? `${(ago/60).toFixed(0)}m ago` : `${(ago/3600).toFixed(1)}h ago`;
+              const d = describe(ev);
+              const bz = (window.bnBinanceLinkHtml || (()=>''))(ev.symbol, { compact: true });
               return `
-                <a href="/coin.html?sym=${ev.symbol}" style="display:flex;gap:12px;align-items:center;padding:9px 12px;background:var(--panel-2);border-radius:6px;text-decoration:none;color:var(--text);transition:background .12s" onmouseover="this.style.background='rgba(41,182,246,.12)'" onmouseout="this.style.background='var(--panel-2)'">
-                  <span style="font-size:18px;min-width:28px;text-align:center">${ic}</span>
-                  <span style="font-weight:700;min-width:110px;letter-spacing:.3px">${ev.symbol}</span>
-                  <span style="color:var(--muted);font-size:10px;min-width:120px;text-transform:uppercase;letter-spacing:.4px">${source}</span>
-                  <span style="flex:1;font-size:12px">${detail}</span>
-                  ${(window.bnBinanceLinkHtml || (()=>''))(ev.symbol, { compact: true })}
-                  <span style="color:var(--muted);font-size:11px;min-width:70px;text-align:right">${agoStr}</span>
+                <a class="alert-row" href="/coin.html?sym=${ev.symbol}">
+                  <span class="a-ic">${d.ic}</span>
+                  <span class="a-sym">${ev.symbol}</span>
+                  <span class="a-source">${d.source}</span>
+                  <span class="a-metrics">${(d.chips || []).join('')}</span>
+                  ${bz}
+                  <span class="a-ago">${ageStr(ev.ts)}</span>
                 </a>
               `;
             }).join('')}
-            ${items.length > 20 ? `<div style="color:var(--muted);font-size:11px;text-align:center;padding:6px">+ ${items.length - 20} more not shown</div>` : ''}
+            ${items.length > 20 ? `<div class="sec-more">+ ${items.length - 20} more not shown — refine filters to drill in</div>` : ''}
           </div>
-        </div>
+        </section>
       `;
     }
 
