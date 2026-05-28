@@ -142,11 +142,12 @@
     padding: 12px 14px 10px;
     margin-bottom: 10px;
   }
-  .alerts-section.s-trade  { border-left-color: #c084fc; }
-  .alerts-section.s-strong { border-left-color: var(--good); }
-  .alerts-section.s-watch  { border-left-color: var(--warn); }
-  .alerts-section.s-weak   { border-left-color: #e67e22; }
-  .alerts-section.s-dump   { border-left-color: var(--bad); }
+  .alerts-section.s-trade    { border-left-color: #c084fc; }
+  .alerts-section.s-mytrades { border-left-color: #c084fc; }  /* iter95 */
+  .alerts-section.s-strong   { border-left-color: var(--good); }
+  .alerts-section.s-watch    { border-left-color: var(--warn); }
+  .alerts-section.s-weak     { border-left-color: #e67e22; }
+  .alerts-section.s-dump     { border-left-color: var(--bad); }
   /* iter91 — pinned Top-5 buy panel: brighter accent + glow */
   .alerts-section.s-top5 {
     border-left-color: #ffd54f;
@@ -163,11 +164,12 @@
     font-size: 12px; font-weight: 700; letter-spacing: .3px;
     text-transform: uppercase;
   }
-  .alerts-section.s-trade  .sec-title { color: #c084fc; }
-  .alerts-section.s-strong .sec-title { color: var(--good); }
-  .alerts-section.s-watch  .sec-title { color: var(--warn); }
-  .alerts-section.s-weak   .sec-title { color: #e67e22; }
-  .alerts-section.s-dump   .sec-title { color: var(--bad); }
+  .alerts-section.s-trade    .sec-title { color: #c084fc; }
+  .alerts-section.s-mytrades .sec-title { color: #c084fc; }  /* iter95 */
+  .alerts-section.s-strong   .sec-title { color: var(--good); }
+  .alerts-section.s-watch    .sec-title { color: var(--warn); }
+  .alerts-section.s-weak     .sec-title { color: #e67e22; }
+  .alerts-section.s-dump     .sec-title { color: var(--bad); }
   .alerts-section .sec-desc { font-size: 10px; color: var(--muted); margin-left: 8px; font-weight: 400; text-transform: none; letter-spacing: 0; }
   .alerts-section .sec-count {
     font-size: 11px; font-weight: 700; color: var(--muted);
@@ -690,7 +692,7 @@ if (urlSym) {
 // trade, vsp, lmc, ccp, weak_pump).
 // ─────────────────────────────────────────────────────────────
 function categorize(ev) {
-  if (ev.kind === 'trade') return 'trade';
+  if (ev.kind === 'trade') return 'mytrades';  // iter95 — re-route trades into dedicated bucket
   if (ev.kind === 'weak_pump') return 'weak';
   // iter 88 — scalper signal-only events
   if (ev.kind === 'fast_scalper' || ev.kind === 'virtual_scalper') return 'watch';
@@ -739,16 +741,27 @@ function priceChip(p) {
 
 function describe(ev) {
   if (ev.kind === 'trade') {
-    const a = ev.action || '';
-    const ic = a === 'BUY' ? '🛒' : (ev.realised_net >= 0 ? '💰' : '🛑');
+    // iter95 — distinguish MANUAL (operator on Binance UI) from BOT trades.
+    const a = (ev.action || '').toUpperCase();
+    const lbl = (ev.rule_label || '').toUpperCase();
+    const isManual = lbl === 'MANUAL';
+    let ic;
+    if (a === 'BUY' || a === 'FILLED') {
+      ic = isManual ? '👤🛒' : '🤖🛒';
+    } else if (a === 'SELL') {
+      ic = isManual ? '👤💰' : (ev.realised_net >= 0 ? '💰' : '🛑');
+    } else {
+      ic = '📝';
+    }
     const chips = [];
-    if (a) chips.push(chip(a));
-    if (ev.price != null) chips.push(chip('$' + (+ev.price).toPrecision(4)));
+    if (a) chips.push(chip(a, isManual ? 'score' : ''));
+    if (isManual) chips.push(chip('MANUAL', 'score'));
+    if (ev.price != null) chips.push(priceChip(ev.price));
     if (ev.realised_net != null) {
       const cls = ev.realised_net >= 0 ? 'pos' : 'neg';
       chips.push(chip(`${ev.realised_net >= 0 ? '+' : ''}$${(+ev.realised_net).toFixed(2)}`, cls));
     }
-    return { ic, source: 'Bot Trade', chips };
+    return { ic, source: isManual ? 'Your Trade' : 'Bot Trade', chips };
   }
   if (ev.kind === 'weak_pump') {
     return { ic: '⚠️', source: 'Weak Pump · Rejected', chips: [chip((ev.reason || '').slice(0, 80), 'neg')] };
@@ -844,7 +857,7 @@ async function renderAlertsHome() {
     }
     const d = await r.json();
     const events = (d.events || []).sort((a, b) => (b.ts || 0) - (a.ts || 0));
-    const buckets = { trade: [], strong: [], watch: [], weak: [], dump: [] };
+    const buckets = { mytrades: [], strong: [], watch: [], weak: [], dump: [] };
     for (const ev of events) buckets[categorize(ev)].push(ev);
 
     // iter 86 — compute per-symbol consensus: how many distinct
@@ -872,6 +885,9 @@ async function renderAlertsHome() {
     // anymore (they're tracked elsewhere) and wants a prominent
     // "TOP 5 LATEST BUY SIGNALS" panel at the very top.
     const sections = [
+      // iter95 — "Your Trades" pinned at the top: every executionReport
+      // fill from your Binance UI activity shows here (BUY then SELL).
+      { key: 'mytrades', title: '👤 Your Trades',                desc: 'Your manual buys & sells on Binance (auto-tracked)' },
       { key: 'strong', title: '🔥 Strong Signals',              desc: 'High-confidence BUY candidates' },
       { key: 'watch',  title: '👀 Watch List',                  desc: 'Early signals, lower confidence' },
       { key: 'weak',   title: '⚠️ Weak Pumps (Rejected)',        desc: 'Price↑ + Vol↓ — bot skipped these' },
@@ -926,7 +942,7 @@ async function renderAlertsHome() {
       ccp:             '🌊 Calm Consolidation (CCP)',
       fast_scalper:    '⚡ Fast Scalper',
       virtual_scalper: '🧪 Virtual Scalper',
-      trade:           '🛒 Bot Trade',
+      trade:           '👤 Your Manual Trade',
       weak_pump:       '⚠️ Weak Pump',
     };
     // Render order within a section (so VSP/LMC/CCP/Scalper appear
