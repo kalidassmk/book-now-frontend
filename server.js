@@ -2727,6 +2727,10 @@ app.get('/api/alerts/feed', async (req, res) => {
                             trigger_source: ev.trigger_source,
                             surge_5m: ev.surge_5m,
                             chg_5m_pct: ev.chg_5m_pct,
+                            // iter93 — flash-dump path metrics
+                            flash_window_s:      ev.flash_window_s,
+                            flash_price_chg_pct: ev.flash_price_chg_pct,
+                            flash_vol_delta_usd: ev.flash_vol_delta_usd,
                         });
                     } catch (_) {}
                 }

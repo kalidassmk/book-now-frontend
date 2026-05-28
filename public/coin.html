@@ -708,6 +708,7 @@ function categorize(ev) {
   if (ev.kind === 'lmc') {
     const l = (ev.label || '').toUpperCase();
     if (l === 'EXPLOSIVE_PUMP') return 'strong';
+    if (l === 'FLASH_DUMP') return 'dump';   // iter93
     if (l.includes('DUMP')) return 'dump';
     return 'watch';
   }
@@ -792,10 +793,21 @@ function describe(ev) {
   }
   if (ev.kind === 'lmc') {
     const l = ev.label || '';
-    const ic = l === 'EXPLOSIVE_PUMP' ? '💎' : l.includes('DUMP') ? '💎🔴' : '💎';
+    // iter93 — FLASH_DUMP gets a thunderbolt icon to highlight 10-30s detection
+    const ic = l === 'FLASH_DUMP' ? '⚡🔴'
+             : l === 'EXPLOSIVE_PUMP' ? '💎'
+             : l.includes('DUMP') ? '💎🔴'
+             : '💎';
     const chips = [chip(l, l.includes('DUMP') ? 'neg' : (l.includes('PUMP') ? 'pos' : ''))];
     if (ev.price != null) chips.push(priceChip(ev.price));   // iter90
     if (ev.score != null) chips.push(chip(`score ${ev.score}`, 'score'));
+    // iter93 — flash-dump path chips (shown when the flash gate fired)
+    if (ev.flash_window_s != null && +ev.flash_window_s > 0) {
+      chips.push(chip(`${(+ev.flash_price_chg_pct).toFixed(2)}% in ${(+ev.flash_window_s).toFixed(0)}s`, 'neg'));
+    }
+    if (ev.flash_vol_delta_usd != null && +ev.flash_vol_delta_usd > 0) {
+      chips.push(chip(`+$${Math.round(+ev.flash_vol_delta_usd).toLocaleString()} vol`, 'vol'));
+    }
     // iter92 — fast-path 5m surge chips
     if (ev.surge_5m != null && +ev.surge_5m > 0) {
       chips.push(chip(`${(+ev.surge_5m).toFixed(1)}× vol/5m`, 'vol'));
