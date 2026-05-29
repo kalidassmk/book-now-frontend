@@ -2637,6 +2637,146 @@ app.get('/api/coin/:symbol', async (req, res) => {
     }
 });
 
+// ────────────────────────────────────────────────────────────────────────
+// iter 102 — Order Flow analysis for a single coin (last 2h by default)
+//
+// Returns per-1m-candle taker buy vs sell USDT split so the operator
+// can see distribution / accumulation patterns the detectors don't
+// catch.  ARUSDT 12:26 IST on 2026-05-29 had $119k volume but only
+// 3.2% taker-buy = clear whale distribution; gates that watch %
+// price-change or 5m vol-surge missed it.
+//
+// Binance 1m kline indices used:
+//    [0]=openTime, [1]=open, [4]=close, [7]=quoteVolume,
+//    [8]=tradesCount, [10]=takerBuyQuoteVolume
+//
+// Query params:
+//    hours       (default 2)   range 0.5–24
+//    minVolUsdt  (default 0)   if >0, only return candles with that much vol
+// ────────────────────────────────────────────────────────────────────────
+app.get('/api/coin/:symbol/orderflow', async (req, res) => {
+    const sym = String(req.params.symbol || '').toUpperCase().trim();
+    if (!sym.endsWith('USDT')) {
+        return res.status(400).json({ error: 'symbol must end with USDT' });
+    }
+    const hours = Math.max(0.5, Math.min(24, parseFloat(req.query.hours) || 2));
+    const minVolUsdt = Math.max(0, parseFloat(req.query.minVolUsdt) || 0);
+    const limit = Math.ceil(hours * 60);   // 1 candle per minute
+
+    try {
+        const url = `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=1m&limit=${limit}`;
+        const ks = await fetch(url).then(r => r.json()).catch(() => null);
+        if (!Array.isArray(ks) || ks.length === 0) {
+            return res.status(502).json({ error: 'failed to fetch klines' });
+        }
+
+        // Per-candle decomposition
+        const candles = [];
+        let totalBuy = 0, totalSell = 0, totalVol = 0, totalTrades = 0;
+        let sellerCount = 0, buyerCount = 0, mixedCount = 0, quietCount = 0;
+        let biggestDump = null, biggestBuy = null;
+
+        for (const k of ks) {
+            const ts          = k[0];
+            const open        = parseFloat(k[1]);
+            const close       = parseFloat(k[4]);
+            const volUsdt     = parseFloat(k[7])  || 0;
+            const trades      = parseInt(k[8], 10) || 0;
+            const buyUsdt     = parseFloat(k[10]) || 0;
+            const sellUsdt    = Math.max(0, volUsdt - buyUsdt);
+            const buyPct      = volUsdt > 0 ? (buyUsdt / volUsdt) * 100 : 0;
+            const chgPct      = open > 0 ? ((close - open) / open) * 100 : 0;
+
+            // Classify per Asian trader convention used in our chats.
+            // QUIET   — minimal vol, no real pressure
+            // SELLERS — buy% <= 35 with meaningful vol
+            // BUYERS  — buy% >= 65 with meaningful vol
+            // MIXED   — anywhere in-between
+            let classification = 'QUIET';
+            const meaningful = volUsdt >= 1000;   // floor for non-noise
+            if (meaningful) {
+                if (buyPct <= 35) classification = 'SELLERS';
+                else if (buyPct >= 65) classification = 'BUYERS';
+                else classification = 'MIXED';
+            }
+
+            // Human interpretation (shown as small tag in UI).
+            let interpretation = '';
+            if (classification === 'SELLERS' && volUsdt >= 50_000) interpretation = 'Big dump';
+            else if (classification === 'SELLERS' && volUsdt >= 20_000) interpretation = 'Sustained selling';
+            else if (classification === 'SELLERS') interpretation = 'Sellers only';
+            else if (classification === 'BUYERS' && volUsdt >= 50_000) interpretation = 'Big bid';
+            else if (classification === 'BUYERS' && volUsdt >= 20_000) interpretation = 'Sustained buying';
+            else if (classification === 'BUYERS') interpretation = 'Buyers only';
+            else if (classification === 'MIXED') interpretation = 'Mixed flow';
+            else interpretation = 'Quiet';
+
+            const candle = {
+                ts, open, close,
+                chg_pct:    +chgPct.toFixed(3),
+                vol_usdt:   +volUsdt.toFixed(0),
+                buy_usdt:   +buyUsdt.toFixed(0),
+                sell_usdt:  +sellUsdt.toFixed(0),
+                buy_pct:    +buyPct.toFixed(1),
+                trades,
+                classification,
+                interpretation,
+            };
+
+            totalBuy   += buyUsdt;
+            totalSell  += sellUsdt;
+            totalVol   += volUsdt;
+            totalTrades += trades;
+            if (classification === 'SELLERS') sellerCount++;
+            else if (classification === 'BUYERS') buyerCount++;
+            else if (classification === 'MIXED') mixedCount++;
+            else quietCount++;
+
+            // Track biggest sell/buy candle by vol
+            if (classification === 'SELLERS' && (!biggestDump || volUsdt > biggestDump.vol_usdt)) {
+                biggestDump = candle;
+            }
+            if (classification === 'BUYERS' && (!biggestBuy || volUsdt > biggestBuy.vol_usdt)) {
+                biggestBuy = candle;
+            }
+
+            if (volUsdt >= minVolUsdt) candles.push(candle);
+        }
+
+        const buyPctOverall = totalVol > 0 ? (totalBuy / totalVol) * 100 : 0;
+        const dominantSide  = buyPctOverall > 55 ? 'BUYERS'
+                            : buyPctOverall < 45 ? 'SELLERS'
+                            : 'MIXED';
+
+        res.json({
+            symbol: sym,
+            generated_at: Date.now(),
+            hours,
+            min_vol_usdt: minVolUsdt,
+            candles_total: ks.length,
+            candles_returned: candles.length,
+            summary: {
+                total_vol_usdt:  +totalVol.toFixed(0),
+                total_buy_usdt:  +totalBuy.toFixed(0),
+                total_sell_usdt: +totalSell.toFixed(0),
+                buy_pct_overall: +buyPctOverall.toFixed(1),
+                dominant_side:   dominantSide,
+                total_trades:    totalTrades,
+                seller_dominated_count: sellerCount,
+                buyer_dominated_count:  buyerCount,
+                mixed_count:            mixedCount,
+                quiet_count:            quietCount,
+                biggest_dump_candle: biggestDump,
+                biggest_buy_candle:  biggestBuy,
+            },
+            candles: candles.sort((a, b) => b.ts - a.ts),   // newest first
+        });
+    } catch (err) {
+        console.error('[/api/coin/:symbol/orderflow]', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // iter 60 fe (2026-05-23) — unified alert feed for the dashboard banner.
 // Pulls PUMP_RIDER:DETECTIONS, EARLY_PUMP:DETECTIONS, TRADE_ALERTS for
 // the operator's day, normalises to {ts, kind, symbol, ...}, returns

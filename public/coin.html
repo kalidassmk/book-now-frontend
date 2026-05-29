@@ -22,7 +22,74 @@
   .topnav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
   .topnav a:not(.active):hover { color: var(--text); border-color: var(--muted); }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+  .card .card-head { display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px; }
+  .card .card-head h3 { margin:0; font-size:15px; }
   .pos { color: var(--good); } .neg { color: var(--bad); } .mute { color: var(--muted); } .warn { color: var(--warn); }
+
+  /* iter 102 — Order Flow section ─────────────────────────────────── */
+  .of-summary {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px; margin-bottom: 12px;
+  }
+  .of-stat {
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 12px;
+  }
+  .of-stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); font-weight: 700; }
+  .of-stat-value { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .of-stat-sub { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+  .of-bar {
+    margin: 8px 0 14px;
+  }
+  .of-bar-track {
+    display: flex; height: 24px; border-radius: 5px; overflow: hidden;
+    background: rgba(139,148,158,.12); border: 1px solid var(--line);
+    font-size: 11px; font-weight: 800; color: #fff;
+  }
+  .of-bar-buy  { background: var(--good); display: flex; align-items: center; justify-content: center; transition: width .3s; }
+  .of-bar-sell { background: var(--bad);  display: flex; align-items: center; justify-content: center; transition: width .3s; }
+
+  .of-highlights {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;
+  }
+  .of-highlight {
+    padding: 8px 12px; border-radius: 6px; border: 1px solid;
+  }
+  .of-highlight.pos { background: rgba(46,204,113,.10); border-color: var(--good); }
+  .of-highlight.neg { background: rgba(231,76,60,.12); border-color: var(--bad); }
+  .of-highlight-title { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; }
+  .of-highlight-time  { font-size: 11px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 2px; }
+  .of-highlight-data  { font-size: 13px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+  .of-table-wrap {
+    max-height: 480px; overflow-y: auto;
+    border: 1px solid var(--line); border-radius: 6px;
+  }
+  .of-table {
+    width: 100%; border-collapse: collapse; font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .of-table thead { position: sticky; top: 0; background: var(--panel-2); z-index: 1; }
+  .of-table th {
+    padding: 8px 10px; text-align: left; font-size: 10px;
+    text-transform: uppercase; letter-spacing: .4px; color: var(--muted);
+    border-bottom: 1px solid var(--line); white-space: nowrap;
+  }
+  .of-table td {
+    padding: 5px 10px; border-bottom: 1px solid rgba(139,148,158,.08);
+    white-space: nowrap;
+  }
+  .of-table tr.of-row:hover { background: rgba(255,255,255,.02) !important; }
+  .of-table .of-time { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text); font-weight: 700; }
+  .of-table .of-close { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text); }
+  .of-table .of-chg { font-weight: 700; }
+  .of-table .of-vol, .of-table .of-buy, .of-table .of-sell { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .of-table .of-pct { font-weight: 700; color: var(--text); }
+  .of-table .of-trades { color: var(--muted); font-size: 11px; }
+  .of-table .of-class .m-chip { font-size: 9px; padding: 1px 6px; border-radius: 3px; font-weight: 700; letter-spacing: .3px; }
+  .of-table .m-chip.pos { background: rgba(46,204,113,.18); color: var(--good); }
+  .of-table .m-chip.neg { background: rgba(231,76,60,.20); color: var(--bad); }
 
   /* Search box */
   .search-row { display: flex; gap: 10px; margin-bottom: 14px; align-items: center; }
@@ -628,7 +695,32 @@ function render(payload) {
     </div>
   `;
 
-  document.getElementById('content').innerHTML = headerHtml + verdictHtml + sgHtml + detectorsHtml + filtersHtml + obHtml + priceActionHtml + posHtml + tradesHtml;
+  // iter 102 — Order Flow section (taker buy vs sell, 2h window).
+  // Renders as a placeholder; loadOrderFlow() fills it asynchronously
+  // so the main page doesn't wait on the extra Binance kline fetch.
+  const orderFlowHtml = `
+    <section class="card" id="orderflow-card">
+      <div class="card-head">
+        <h3>📊 Order Flow · <span style="color:var(--muted);font-weight:500">last 2 hours</span></h3>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="of-hours" onchange="loadOrderFlow(currentSym)" style="background:var(--panel-2);color:var(--text);border:1px solid var(--line);padding:3px 8px;border-radius:5px;font-size:11px">
+            <option value="1">1h</option>
+            <option value="2" selected>2h</option>
+            <option value="4">4h</option>
+            <option value="8">8h</option>
+          </select>
+          <span id="of-status" style="font-size:11px;color:var(--muted)">loading…</span>
+        </div>
+      </div>
+      <div id="orderflow-container">
+        <div class="empty" style="padding:20px;color:var(--muted);font-size:12px">Loading order flow…</div>
+      </div>
+    </section>
+  `;
+
+  document.getElementById('content').innerHTML = headerHtml + verdictHtml + sgHtml + detectorsHtml + filtersHtml + obHtml + priceActionHtml + orderFlowHtml + posHtml + tradesHtml;
+  // Fire-and-forget the order flow load.
+  loadOrderFlow(currentSym);
 }
 
 async function refresh() {
@@ -649,6 +741,195 @@ async function refresh() {
     document.getElementById('content').innerHTML = `<div class="card empty">Error: ${e.message}</div>`;
     document.getElementById('status').textContent = 'Error';
   }
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// iter 102 — Order Flow renderer.
+// Fetches /api/coin/:symbol/orderflow?hours=N and displays a summary
+// card + per-minute table colored by taker buy/sell dominance.
+// ──────────────────────────────────────────────────────────────────────
+function ofIstStamp(ts) {
+  if (!ts) return { date: '—', time: '—:—:—' };
+  const d = new Date(ts);
+  const fmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+  return fmt.format(d);
+}
+
+function ofClassColor(cls, volUsdt) {
+  // Stronger intensity for bigger candles.
+  const heavy = volUsdt >= 50000;
+  const mid   = volUsdt >= 20000;
+  if (cls === 'SELLERS') return heavy ? 'rgba(231,76,60,.22)' : mid ? 'rgba(231,76,60,.13)' : 'rgba(231,76,60,.07)';
+  if (cls === 'BUYERS')  return heavy ? 'rgba(46,204,113,.22)' : mid ? 'rgba(46,204,113,.13)' : 'rgba(46,204,113,.07)';
+  if (cls === 'MIXED')   return 'rgba(241,196,15,.08)';
+  return 'transparent';
+}
+
+function ofClassChip(cls) {
+  if (cls === 'SELLERS') return '<span class="m-chip neg">🔴 SELLERS</span>';
+  if (cls === 'BUYERS')  return '<span class="m-chip pos">🟢 BUYERS</span>';
+  if (cls === 'MIXED')   return '<span class="m-chip" style="background:rgba(241,196,15,.18);color:#f1c40f">⚖️ MIXED</span>';
+  return '<span class="m-chip">— quiet</span>';
+}
+
+async function loadOrderFlow(symbol) {
+  if (!symbol) return;
+  const status = document.getElementById('of-status');
+  const container = document.getElementById('orderflow-container');
+  if (!container) return;
+  const hoursSel = document.getElementById('of-hours');
+  const hours = hoursSel ? parseFloat(hoursSel.value) || 2 : 2;
+
+  if (status) status.textContent = 'loading…';
+  try {
+    // minVolUsdt=500 cuts the noise of zero-volume idle minutes but
+    // keeps every meaningful candle visible.
+    const r = await fetch(`/api/coin/${symbol}/orderflow?hours=${hours}&minVolUsdt=500`);
+    if (!r.ok) {
+      container.innerHTML = `<div class="empty" style="padding:20px;color:var(--bad)">Failed to load order flow</div>`;
+      if (status) status.textContent = 'error';
+      return;
+    }
+    const data = await r.json();
+    container.innerHTML = renderOrderFlow(data);
+    if (status) status.textContent = `${data.candles_total} candles · updated ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    container.innerHTML = `<div class="empty" style="padding:20px;color:var(--bad)">Error: ${e.message}</div>`;
+    if (status) status.textContent = 'error';
+  }
+}
+
+function renderOrderFlow(d) {
+  const s = d.summary || {};
+  const totVol = s.total_vol_usdt || 0;
+  const totBuy = s.total_buy_usdt || 0;
+  const totSell = s.total_sell_usdt || 0;
+  const buyPct = s.buy_pct_overall || 0;
+  const sellPct = 100 - buyPct;
+  const dom = s.dominant_side || 'MIXED';
+  const domColor = dom === 'SELLERS' ? 'var(--bad)' : dom === 'BUYERS' ? 'var(--good)' : '#f1c40f';
+  const domIcon  = dom === 'SELLERS' ? '🔴' : dom === 'BUYERS' ? '🟢' : '⚖️';
+  const sym = d.symbol || '';
+
+  // ── Summary card ─────────────────────────────────────────────────
+  const summaryHtml = `
+    <div class="of-summary">
+      <div class="of-stat">
+        <div class="of-stat-label">Dominant Side · ${d.hours}h</div>
+        <div class="of-stat-value" style="color:${domColor};font-size:22px">${domIcon} ${dom}</div>
+        <div class="of-stat-sub">${buyPct.toFixed(1)}% buy · ${sellPct.toFixed(1)}% sell</div>
+      </div>
+      <div class="of-stat">
+        <div class="of-stat-label">Total Flow</div>
+        <div class="of-stat-value">${fmtUsd(totVol)}</div>
+        <div class="of-stat-sub">${(s.total_trades || 0).toLocaleString()} trades</div>
+      </div>
+      <div class="of-stat">
+        <div class="of-stat-label">Taker BUY</div>
+        <div class="of-stat-value pos">${fmtUsd(totBuy)}</div>
+        <div class="of-stat-sub">market buyers</div>
+      </div>
+      <div class="of-stat">
+        <div class="of-stat-label">Taker SELL</div>
+        <div class="of-stat-value neg">${fmtUsd(totSell)}</div>
+        <div class="of-stat-sub">market sellers</div>
+      </div>
+      <div class="of-stat">
+        <div class="of-stat-label">Candle mix</div>
+        <div class="of-stat-value" style="font-size:14px">
+          <span style="color:var(--bad)">🔴 ${s.seller_dominated_count}</span> ·
+          <span style="color:var(--good)">🟢 ${s.buyer_dominated_count}</span> ·
+          <span style="color:#f1c40f">⚖️ ${s.mixed_count}</span> ·
+          <span style="color:var(--muted)">— ${s.quiet_count}</span>
+        </div>
+        <div class="of-stat-sub">sellers · buyers · mixed · quiet</div>
+      </div>
+    </div>
+  `;
+
+  // ── Stacked vol bar ──────────────────────────────────────────────
+  const buyBarPct  = buyPct.toFixed(1);
+  const sellBarPct = sellPct.toFixed(1);
+  const barHtml = `
+    <div class="of-bar">
+      <div class="of-bar-track">
+        <div class="of-bar-buy" style="width:${buyBarPct}%" title="Buy ${fmtUsd(totBuy)}">${buyPct >= 8 ? buyBarPct + '%' : ''}</div>
+        <div class="of-bar-sell" style="width:${sellBarPct}%" title="Sell ${fmtUsd(totSell)}">${sellPct >= 8 ? sellBarPct + '%' : ''}</div>
+      </div>
+    </div>
+  `;
+
+  // ── Biggest candles highlights ───────────────────────────────────
+  let highlightsHtml = '';
+  if (s.biggest_dump_candle || s.biggest_buy_candle) {
+    const bd = s.biggest_dump_candle, bb = s.biggest_buy_candle;
+    highlightsHtml = `<div class="of-highlights">`;
+    if (bd) {
+      highlightsHtml += `
+        <div class="of-highlight neg">
+          <div class="of-highlight-title">🔴 Biggest dump candle</div>
+          <div class="of-highlight-time">${ofIstStamp(bd.ts)} IST</div>
+          <div class="of-highlight-data">${fmtUsd(bd.vol_usdt)} · ${bd.buy_pct}% buy · ${bd.trades} trades</div>
+        </div>`;
+    }
+    if (bb) {
+      highlightsHtml += `
+        <div class="of-highlight pos">
+          <div class="of-highlight-title">🟢 Biggest buy candle</div>
+          <div class="of-highlight-time">${ofIstStamp(bb.ts)} IST</div>
+          <div class="of-highlight-data">${fmtUsd(bb.vol_usdt)} · ${bb.buy_pct}% buy · ${bb.trades} trades</div>
+        </div>`;
+    }
+    highlightsHtml += `</div>`;
+  }
+
+  // ── Per-candle table ─────────────────────────────────────────────
+  const rows = (d.candles || []).slice(0, 200).map(c => {
+    const bg = ofClassColor(c.classification, c.vol_usdt);
+    const chgCls = c.chg_pct >= 0 ? 'pos' : 'neg';
+    const chgSign = c.chg_pct >= 0 ? '+' : '';
+    return `
+      <tr class="of-row" style="background:${bg}">
+        <td class="of-time">${ofIstStamp(c.ts)}</td>
+        <td class="of-close">${fmtPrice(c.close)}</td>
+        <td class="of-chg ${chgCls}">${chgSign}${c.chg_pct.toFixed(3)}%</td>
+        <td class="of-vol">${fmtUsd(c.vol_usdt)}</td>
+        <td class="of-buy pos">${fmtUsd(c.buy_usdt)}</td>
+        <td class="of-sell neg">${fmtUsd(c.sell_usdt)}</td>
+        <td class="of-pct">${c.buy_pct.toFixed(1)}%</td>
+        <td class="of-class">${ofClassChip(c.classification)}</td>
+        <td class="of-trades">${c.trades}</td>
+        <td class="of-interpret" style="color:var(--muted);font-size:11px">${c.interpretation}</td>
+      </tr>`;
+  }).join('');
+
+  const tableHtml = rows ? `
+    <div class="of-table-wrap">
+      <table class="of-table">
+        <thead>
+          <tr>
+            <th>IST</th>
+            <th>Close</th>
+            <th>Δ%</th>
+            <th>Vol</th>
+            <th>BUY $</th>
+            <th>SELL $</th>
+            <th>BUY %</th>
+            <th>Class</th>
+            <th>Trades</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  ` : `<div class="empty" style="padding:20px">No candles in window.</div>`;
+
+  return summaryHtml + barHtml + highlightsHtml + tableHtml;
 }
 
 function loadSymbol() {
