@@ -2895,6 +2895,34 @@ app.get('/api/alerts/feed', async (req, res) => {
                 }
             } catch (_) {}
         }
+        // iter 103 — INSTANT_PUMP events (separate dedicated detector
+        // for 1-second buy-wall hits).  Rich payload preserved so the
+        // dashboard can show vol delta, price chg, and window seconds.
+        async function pullInstantPump(date) {
+            try {
+                const raw = await redis.lrange(`INSTANT_PUMP:DETECTIONS:${date}`, 0, 200);
+                for (const r of raw) {
+                    try {
+                        const ev = JSON.parse(r);
+                        if (!ev.ts || ev.ts < since) continue;
+                        events.push({
+                            ts: ev.ts, kind: 'instant_pump', symbol: ev.symbol,
+                            label: ev.label,
+                            score: ev.score,
+                            price: ev.trigger_price,
+                            prev_price: ev.prev_price,
+                            price_chg_pct: ev.price_chg_pct,
+                            chg_per_sec: ev.chg_per_sec,
+                            window_s: ev.window_s,
+                            vol_delta_usd: ev.vol_delta_usd,
+                            vol_per_sec: ev.vol_per_sec,
+                            chg_24h_pct: ev.chg_24h_pct,
+                        });
+                    } catch (_) {}
+                }
+            } catch (_) {}
+        }
+
         // iter 88 — Fast/Virtual Scalper signal-only events (when
         // HARD_DISABLE_AUTOBUY blocks the buy, the scalper still
         // publishes the signal so the operator can see what would
@@ -2947,6 +2975,7 @@ app.get('/api/alerts/feed', async (req, res) => {
         await pullVsp(today);
         await pullLmc(today);
         await pullCcp(today);
+        await pullInstantPump(today);   // iter103
         await pullScalper(today, 'fast_scalper',    'FAST_SCALPER:DETECTIONS');     // iter88
         await pullScalper(today, 'virtual_scalper', 'VIRTUAL_SCALPER:DETECTIONS');  // iter88
         await pullWeakPumpSkips(today);
@@ -2959,6 +2988,7 @@ app.get('/api/alerts/feed', async (req, res) => {
             await pullVsp(yesterday);
             await pullLmc(yesterday);
             await pullCcp(yesterday);
+            await pullInstantPump(yesterday);   // iter103
             await pullScalper(yesterday, 'fast_scalper',    'FAST_SCALPER:DETECTIONS');    // iter88
             await pullScalper(yesterday, 'virtual_scalper', 'VIRTUAL_SCALPER:DETECTIONS'); // iter88
             await pullWeakPumpSkips(yesterday);

@@ -975,6 +975,8 @@ if (urlSym) {
 function categorize(ev) {
   if (ev.kind === 'trade') return 'mytrades';  // iter95 — re-route trades into dedicated bucket
   if (ev.kind === 'weak_pump') return 'weak';
+  // iter 103 — INSTANT_PUMP always goes into Strong bucket (highest priority)
+  if (ev.kind === 'instant_pump') return 'strong';
   // iter 88 — scalper signal-only events
   if (ev.kind === 'fast_scalper' || ev.kind === 'virtual_scalper') return 'watch';
   if (ev.kind === 'pump_rider') {
@@ -1123,6 +1125,22 @@ function describe(ev) {
     if (ev.score != null) chips.push(chip(`score ${ev.score}`, 'score'));
     return { ic, source: 'CCP', chips };
   }
+  // iter 103 — INSTANT_PUMP (sub-second coordinated pump pattern)
+  if (ev.kind === 'instant_pump') {
+    const chips = [chip('INSTANT PUMP', 'pos')];
+    if (ev.price != null) chips.push(priceChip(ev.price));
+    if (ev.price_chg_pct != null) {
+      chips.push(chip('+' + (+ev.price_chg_pct).toFixed(2) + '% in ' + (+ev.window_s).toFixed(1) + 's', 'pos'));
+    }
+    if (ev.chg_per_sec != null && +ev.chg_per_sec >= 0.5) {
+      chips.push(chip((+ev.chg_per_sec).toFixed(2) + '%/sec', 'pos'));
+    }
+    if (ev.vol_delta_usd != null && +ev.vol_delta_usd > 0) {
+      chips.push(chip('+$' + Math.round(+ev.vol_delta_usd).toLocaleString() + ' vol', 'vol'));
+    }
+    if (ev.score != null) chips.push(chip('score ' + ev.score, 'score'));
+    return { ic: '💥', source: 'Instant Pump', chips };
+  }
   return { ic: '•', source: ev.kind || 'event', chips: [] };
 }
 
@@ -1216,6 +1234,7 @@ async function renderAlertsHome() {
     // own row block instead of being drowned by the much-more-frequent
     // PumpRider events.  Each kind shows up to PER_KIND_CAP events.
     const KIND_LABELS = {
+      instant_pump:    '💥 Instant Pump (iter103)',
       pump_rider:      '🚀 PumpRider',
       early_pump:      '👀 Early Pump',
       vsp:             '⚡ Volume Spike (VSP)',
@@ -1226,9 +1245,9 @@ async function renderAlertsHome() {
       trade:           '👤 Your Manual Trade',
       weak_pump:       '⚠️ Weak Pump',
     };
-    // Render order within a section (so VSP/LMC/CCP/Scalper appear
-    // before the noisier PumpRider block).
+    // iter 103 — INSTANT_PUMP rendered FIRST (highest priority signal).
     const KIND_RENDER_ORDER = [
+      'instant_pump',
       'fast_scalper', 'virtual_scalper',
       'vsp', 'lmc', 'ccp',
       'early_pump', 'pump_rider',
