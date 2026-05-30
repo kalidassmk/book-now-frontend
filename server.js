@@ -103,6 +103,7 @@ const SCALPER_ENDPOINTS = {
     '/api/v1/scalper/status':    '/scalper/status',
     '/api/v1/scalper/snapshots': '/scalper/snapshots',
     '/api/v1/scalper/signals':   '/scalper/signals',
+    '/api/v1/scalper/delisted':  '/scalper/delisted',
 };
 for (const [route, enginePath] of Object.entries(SCALPER_ENDPOINTS)) {
     app.get(route, async (req, res) => {
