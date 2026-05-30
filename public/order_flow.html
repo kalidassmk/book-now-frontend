@@ -25,6 +25,10 @@
   main { padding:24px; max-width:1400px; margin:0 auto; }
   .banner { display:none; margin-bottom:18px; padding:12px 16px; border-radius:10px; background:rgba(234,57,67,.12); border:1px solid rgba(234,57,67,.4); color:#ffb3b8; font-size:13px; }
   .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(380px,1fr)); gap:18px; }
+  .tier { margin-bottom:26px; }
+  .tier-head { display:flex; align-items:baseline; gap:12px; margin:18px 0 10px; border-bottom:1px solid var(--border); padding-bottom:6px; }
+  .tier-head h2 { font-size:15px; margin:0; font-weight:700; letter-spacing:.3px; }
+  .tier-meta { font-size:12px; color:var(--muted); }
   .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:18px; transition:border-color .2s; }
   .card.BUY { border-color:var(--green); box-shadow:0 0 0 1px var(--green) inset; }
   .card.SELL { border-color:var(--red); box-shadow:0 0 0 1px var(--red) inset; }
@@ -76,7 +80,7 @@
 </header>
 <main>
   <div id="banner" class="banner"></div>
-  <div id="grid" class="grid"></div>
+  <div id="groups"></div>
   <div class="sidebar">
     <div class="section-title">Recent Signals</div>
     <table class="log">
@@ -148,6 +152,30 @@ function setBanner(msg){
   const b=document.getElementById("banner");
   if(msg){ b.textContent=msg; b.style.display="block"; } else { b.style.display="none"; }
 }
+function renderGroups(snaps, status){
+  status = status || {};
+  const tierOrder = (status.tier_order && status.tier_order.length) ? status.tier_order.slice() : [];
+  const tierSyms = status.tiers || {};
+  const groups = {};
+  snaps.forEach(s => { const t = s.market_cap_tier || "Other"; (groups[t] = groups[t] || []).push(s); });
+  const order = tierOrder.slice();
+  Object.keys(groups).forEach(t => { if(!order.includes(t)) order.push(t); });
+  return order.filter(t => groups[t] && groups[t].length).map(t => {
+    const ref = tierSyms[t] || [];
+    const items = groups[t].sort((a,b) => {
+      const ia = ref.indexOf(a.symbol), ib = ref.indexOf(b.symbol);
+      return ((ia<0?1e9:ia) - (ib<0?1e9:ib)) || a.symbol.localeCompare(b.symbol);
+    });
+    const buys = items.filter(s=>s.signal==="BUY").length;
+    const sells = items.filter(s=>s.signal==="SELL").length;
+    return `<section class="tier">
+      <div class="tier-head"><h2>${t}</h2>
+        <span class="tier-meta">${items.length} coins · <span class="pos">${buys} BUY</span> · <span class="neg">${sells} SELL</span></span>
+      </div>
+      <div class="grid">${items.map(renderCard).join("")}</div>
+    </section>`;
+  }).join("");
+}
 async function tick(){
   try {
     const [stRes, snRes, sgRes] = await Promise.all([
@@ -172,8 +200,8 @@ async function tick(){
     if(!st.connected){
       setBanner("Engine is running but not yet receiving Binance market data — order-flow values will populate once the stream connects.");
     } else { setBanner(""); }
-    const snaps=(sn.snapshots||[]).sort((a,b)=>a.symbol.localeCompare(b.symbol));
-    document.getElementById("grid").innerHTML=snaps.map(renderCard).join("")
+    const snaps=(sn.snapshots||[]);
+    document.getElementById("groups").innerHTML=renderGroups(snaps, st)
       || '<div class="muted">Waiting for the first snapshot…</div>';
     renderLog(sg.signals||[]);
   } catch(err){
