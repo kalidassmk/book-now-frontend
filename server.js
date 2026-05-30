@@ -95,6 +95,28 @@ app.use(express.static(path.join(__dirname, 'public'), {
   },
 }));
 
+// ── Order-Flow Scalper (proxy to Python engine) ──────────────────────────────
+// The engine exposes /api/v1/scalper/* (snapshots, status, signals). Proxy them
+// through the dashboard origin so the Order Flow page (/order_flow.html) can poll
+// same-origin. Distinct from the SCALPER:SIGNAL: Redis feed used elsewhere.
+const SCALPER_ENDPOINTS = {
+    '/api/v1/scalper/status':    '/scalper/status',
+    '/api/v1/scalper/snapshots': '/scalper/snapshots',
+    '/api/v1/scalper/signals':   '/scalper/signals',
+};
+for (const [route, enginePath] of Object.entries(SCALPER_ENDPOINTS)) {
+    app.get(route, async (req, res) => {
+        try {
+            const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+            const response = await fetch(`${ENGINE_BASE}${enginePath}${qs}`);
+            if (!response.ok) return res.status(response.status).json({ error: `engine ${response.status}` });
+            res.json(await response.json());
+        } catch (err) {
+            res.status(502).json({ error: 'scalper engine unreachable', detail: String(err) });
+        }
+    });
+}
+
 // ── Binance Worker ───────────────────────────────────────────────────────────
 const binanceWorker = require('./binance-worker');
 binanceWorker.start(io, handleExecution);
