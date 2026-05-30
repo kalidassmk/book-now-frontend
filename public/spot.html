@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+  public/spot.html
+  ──────────────────────────────────────────────────────────────────────────
+  Binance Spot Movers — operator-facing market scanner.
+
+  iter 26 (2026-05-13): the page now polls /api/spot-tickers on the
+  Book-Now backend instead of opening a direct WebSocket to Binance.
+  Some browsers / ISPs (especially in India) block stream.binance.com,
+  so iter 25's pure browser-side WebSocket showed an empty table for
+  the operator. The backend's binance-worker already has a healthy
+  WebSocket subscription to !miniTicker@arr and exposes the cache
+  through /api/spot-tickers?window=24h. 1h/4h are fetched on the
+  backend via the rolling-window REST endpoint.
+
+  Polling cadence: every 2s. The backend cache is updated by WebSocket
+  in near-real-time so 2s polling is plenty fresh for an operator UI.
+-->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Spot Movers — Book-Now</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 18px; }
+  h1 { margin: 0 0 6px; font-size: 22px; }
+  .sub { color: var(--muted); margin-bottom: 18px; font-size: 13px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); animation: pulse 1.4s ease-in-out infinite; }
+  .live-dot.off { background: var(--bad); animation: none; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:.4;transform:scale(.85);} }
+  .topnav { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .topnav a { display: inline-block; padding: 6px 14px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 600; }
+  .topnav a.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .topnav a:not(.active):hover { color: var(--text); border-color: var(--muted); }
+  .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+  .controls label { color: var(--muted); font-size: 12px; }
+  .controls select, .controls input {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 4px; padding: 6px 12px; font-family: inherit; font-size: 13px;
+  }
+  .controls select { cursor: pointer; }
+  .counter { color: var(--muted); font-size: 11px; margin-left: auto; font-variant-numeric: tabular-nums; }
+  /* iter 29: table sizes to its content (was width:100% which spread 6
+     columns across the full viewport and left huge empty gaps). The
+     wrapping .scroll div still allows horizontal scroll on narrow
+     screens. Padding tightened slightly so rows are denser. */
+  table {
+    width: max-content;
+    max-width: 100%;
+    border-collapse: collapse;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  th, td { padding: 7px 18px; text-align: left; border-bottom: 1px solid var(--line); font-size: 13px; white-space: nowrap; }
+  th { background: #1a232e; color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.4px; position: sticky; top: 0; z-index: 1; user-select: none; cursor: pointer; }
+  th:hover { color: var(--text); }
+  th.sorted::after { content: " ↓"; color: var(--accent); }
+  th.sorted.asc::after { content: " ↑"; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(41,182,246,0.04); }
+  /* iter 28: apply .num to BOTH th and td so headers right-align with the
+     numeric data underneath. Was td.num only, so headers stayed left-
+     aligned and didn't line up with the values. */
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.symbol { font-weight: 600; }
+  td.symbol .ticker { color: var(--text); }
+  td.symbol .quote { color: var(--muted); font-size: 11px; font-weight: 400; }
+  .pos { color: var(--good); }
+  .neg { color: var(--bad); }
+  .mute { color: var(--muted); }
+  .change-cell { font-weight: 600; }
+  .empty { padding: 32px; text-align: center; color: var(--muted); }
+  .scroll { overflow-x: auto; }
+
+  /* Layout: table + analysis panel side by side */
+  .layout { display: flex; gap: 14px; align-items: flex-start; }
+  .layout > .scroll { flex: 0 0 auto; }
+  .layout > #analysisPanel { flex: 1 1 auto; min-width: 0; }
+
+  /* Analyse button in each row */
+  .analyse-btn {
+    background: var(--panel); color: var(--muted);
+    border: 1px solid var(--line); border-radius: 4px;
+    padding: 3px 10px; font-size: 11px; font-weight: 600;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .analyse-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .analyse-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* Analysis panel — slide-out on the right */
+  #analysisPanel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    padding: 16px; display: none;
+    max-height: calc(100vh - 60px); overflow-y: auto;
+  }
+  #analysisPanel.open { display: block; }
+  #analysisPanel header.ap-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+  #analysisPanel .ap-title { font-size: 18px; font-weight: 700; }
+  #analysisPanel .ap-subtitle { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  #analysisPanel .ap-close { background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 14px; }
+  #analysisPanel .ap-close:hover { color: var(--text); border-color: var(--muted); }
+  #analysisPanel section { margin-bottom: 16px; }
+  #analysisPanel h3 { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; }
+  #analysisPanel .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+  #analysisPanel .stat { background: #1a232e; border-radius: 4px; padding: 8px 10px; }
+  #analysisPanel .stat .k { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; }
+  #analysisPanel .stat .v { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  #analysisPanel .chart { background: #1a232e; border-radius: 4px; padding: 8px; }
+  #analysisPanel .chart svg { width: 100%; height: 120px; display: block; }
+  #analysisPanel .filter-row { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 12px; }
+  #analysisPanel .filter-row:last-child { border-bottom: none; }
+  #analysisPanel .filter-row .icon { font-size: 14px; line-height: 1; }
+  #analysisPanel .filter-row .rule { flex: 0 0 180px; font-weight: 600; }
+  #analysisPanel .filter-row .detail { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #analysisPanel .verdict { padding: 10px 12px; border-radius: 4px; font-weight: 600; font-size: 13px; }
+  #analysisPanel .verdict.pass { background: rgba(46,204,113,.12); color: var(--good); border-left: 3px solid var(--good); }
+  #analysisPanel .verdict.blocked { background: rgba(231,76,60,.12); color: var(--bad); border-left: 3px solid var(--bad); }
+  #analysisPanel .event-row { font-size: 11px; padding: 3px 0; color: var(--muted); }
+  #analysisPanel .event-row .ev-time { color: var(--text); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+
+
+
+<h1>Spot Movers</h1>
+<div class="sub">
+  <span class="live-dot" id="liveDot"></span>
+  <span id="liveLabel">Connecting…</span>
+  <span class="counter" id="counter">—</span>
+</div>
+
+<div class="controls">
+  <label>Timeframe</label>
+  <select id="timeframe">
+    <option value="24h" selected>24h</option>
+    <option value="1h">1h</option>
+    <option value="4h">4h</option>
+  </select>
+
+  <label>Min 24h volume (M USDT)</label>
+  <input id="minVol" type="number" min="0" step="0.5" value="2" style="width:80px" />
+
+  <label>Show</label>
+  <select id="topN">
+    <option value="50">Top 50</option>
+    <option value="100" selected>Top 100</option>
+    <option value="200">Top 200</option>
+    <option value="0">All</option>
+  </select>
+
+  <label>Filter</label>
+  <input id="filter" type="text" placeholder="e.g. BTC, BNB" style="width:120px" />
+</div>
+
+<div class="layout">
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr>
+          <th data-sort="symbol">Symbol</th>
+          <th class="num" data-sort="price">Price (USDT)</th>
+          <th class="num sorted" data-sort="change">Change %</th>
+          <th class="num" data-sort="high">High (24h)</th>
+          <th class="num" data-sort="low">Low (24h)</th>
+          <th class="num" data-sort="volume">Volume (24h)</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- Analysis panel — populated when an Analyse button is clicked. -->
+  <aside id="analysisPanel">
+    <header class="ap-head">
+      <div>
+        <div class="ap-title" id="apTitle">—</div>
+        <div class="ap-subtitle" id="apSubtitle">—</div>
+      </div>
+      <button class="ap-close" onclick="closeAnalysis()" aria-label="Close">×</button>
+    </header>
+
+    <section>
+      <h3>Last 24h price (1h candles)</h3>
+      <div class="chart" id="apChart"></div>
+    </section>
+
+    <section>
+      <h3>Key stats</h3>
+      <div class="stat-grid" id="apStats"></div>
+    </section>
+
+    <section>
+      <h3>Bot's filter verdict (live config)</h3>
+      <div id="apVerdict"></div>
+      <div id="apFilters" style="margin-top: 6px;"></div>
+    </section>
+
+    <section>
+      <h3>Bot's view today</h3>
+      <div id="apBotHistory" class="event-row">—</div>
+    </section>
+  </aside>
+</div>
+
+<script>
+// State
+let timeframe = "24h";
+let topN      = 100;
+let minVolMUsdt = 2;
+let filterTerm  = "";
+let sortKey   = "change";
+let sortAsc   = false;
+let tickers   = [];     // last snapshot from backend
+let pollTimer = null;
+let lastSuccessTs = 0;
+let selectedSymbol = null;   // currently-open analyse panel symbol
+
+function setStatus(state, label) {
+    const dot = document.getElementById("liveDot");
+    dot.classList.toggle("off", state !== "ok");
+    document.getElementById("liveLabel").textContent = label;
+}
+
+async function pollOnce() {
+    try {
+        // iter 63 — forward min volume so server-side universe matches UI
+        // filter.  For 1h/4h windows this also reduces Binance API load
+        // (fewer chunks paginated).
+        const url = `/api/spot-tickers?window=${timeframe}&min_vol_m=${minVolMUsdt}`;
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const data = await resp.json();
+        tickers = data.tickers || [];
+        lastSuccessTs = data.ts || Date.now();
+        const ageSec = (Date.now() - lastSuccessTs) / 1000;
+        setStatus("ok", `Live · ${timeframe} · ${tickers.length} symbols · refreshed ${ageSec.toFixed(0)}s ago`);
+        render();
+    } catch (e) {
+        console.warn("poll failed:", e);
+        setStatus("err", "Backend fetch failed — retrying…");
+    }
+}
+
+function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollOnce();
+    // 24h is updated by backend WS in near-real-time; poll every 2s.
+    // 1h/4h are backend REST calls; poll every 5s to be polite.
+    const interval = (timeframe === "24h") ? 2000 : 5000;
+    pollTimer = setInterval(pollOnce, interval);
+}
+
+function fmtPrice(p) {
+    if (p == null || isNaN(p)) return "—";
+    if (p >= 100)    return p.toFixed(2);
+    if (p >= 1)      return p.toFixed(4);
+    if (p >= 0.01)   return p.toFixed(6);
+    return p.toPrecision(4);
+}
+
+function fmtPct(v) {
+    if (v == null || isNaN(v)) return "—";
+    const sign = v >= 0 ? "+" : "";
+    return `${sign}${v.toFixed(2)}%`;
+}
+
+function fmtVolume(v) {
+    if (v == null || isNaN(v)) return "—";
+    if (v >= 1e9) return `${(v/1e9).toFixed(2)}B`;
+    if (v >= 1e6) return `${(v/1e6).toFixed(2)}M`;
+    if (v >= 1e3) return `${(v/1e3).toFixed(1)}K`;
+    return v.toFixed(0);
+}
+
+function render() {
+    const minVolUsdt = minVolMUsdt * 1e6;
+    const filter = filterTerm.trim().toUpperCase();
+
+    // Filter for leveraged-token noise + volume floor + name match
+    let rows = tickers.filter(t => {
+        if (!t.symbol || !t.symbol.endsWith("USDT")) return false;
+        const base = t.symbol.replace("USDT", "");
+        if (/UP$|DOWN$|BULL$|BEAR$|3L$|3S$/.test(base)) return false;
+        if (t.volume == null || t.volume < minVolUsdt) return false;
+        if (filter && !t.symbol.includes(filter)) return false;
+        return true;
+    });
+
+    // Sort
+    rows.sort((a, b) => {
+        let av, bv;
+        if (sortKey === "symbol") { av = a.symbol; bv = b.symbol; }
+        else if (sortKey === "price") { av = a.price; bv = b.price; }
+        else if (sortKey === "change") { av = a.change; bv = b.change; }
+        else if (sortKey === "high") { av = a.high; bv = b.high; }
+        else if (sortKey === "low") { av = a.low; bv = b.low; }
+        else if (sortKey === "volume") { av = a.volume; bv = b.volume; }
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        if (typeof av === "string") return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+        return sortAsc ? av - bv : bv - av;
+    });
+
+    if (topN > 0) rows = rows.slice(0, topN);
+
+    const tbody = document.getElementById("rows");
+    if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty">No symbols match (or waiting for data)…</td></tr>';
+    } else {
+        tbody.innerHTML = rows.map(t => {
+            const change = t.change;
+            const changeClass = change == null ? "mute" : (change >= 0 ? "pos" : "neg");
+            const base = t.symbol.replace("USDT", "");
+            const activeCls = (selectedSymbol === t.symbol) ? " active" : "";
+            return `<tr>
+                <td class="symbol">
+                  <span class="ticker">${base}</span>
+                  <span class="quote">/USDT</span>
+                </td>
+                <td class="num">${fmtPrice(t.price)}</td>
+                <td class="num change-cell ${changeClass}">${fmtPct(change)}</td>
+                <td class="num mute">${fmtPrice(t.high)}</td>
+                <td class="num mute">${fmtPrice(t.low)}</td>
+                <td class="num mute">${fmtVolume(t.volume)}</td>
+                <td><button class="analyse-btn${activeCls}" onclick="openAnalysis('${t.symbol}')">Analyse</button></td>
+            </tr>`;
+        }).join("");
+    }
+    document.getElementById("counter").textContent =
+        `${rows.length} shown · ${tickers.length} total · ${timeframe}`;
+}
+
+// Wire up controls
+document.getElementById("timeframe").addEventListener("change", (e) => {
+    timeframe = e.target.value;
+    startPolling();  // re-poll immediately on the new window
+});
+
+document.getElementById("topN").addEventListener("change", (e) => {
+    topN = parseInt(e.target.value, 10);
+    render();
+});
+document.getElementById("minVol").addEventListener("input", (e) => {
+    minVolMUsdt = parseFloat(e.target.value) || 0;
+    render();
+});
+document.getElementById("filter").addEventListener("input", (e) => {
+    filterTerm = e.target.value;
+    render();
+});
+
+document.querySelectorAll("th[data-sort]").forEach(th => {
+    th.addEventListener("click", () => {
+        const key = th.getAttribute("data-sort");
+        if (sortKey === key) sortAsc = !sortAsc;
+        else { sortKey = key; sortAsc = false; }
+        document.querySelectorAll("th[data-sort]").forEach(h => h.classList.remove("sorted", "asc"));
+        th.classList.add("sorted");
+        if (sortAsc) th.classList.add("asc");
+        render();
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Analyse panel — fetches deep-dive data and renders a chart + stats +
+// filter simulation.
+async function openAnalysis(symbol) {
+    selectedSymbol = symbol;
+    const panel = document.getElementById("analysisPanel");
+    panel.classList.add("open");
+    document.getElementById("apTitle").textContent = symbol.replace("USDT", "/USDT");
+    document.getElementById("apSubtitle").textContent = "Loading…";
+    document.getElementById("apStats").innerHTML = "";
+    document.getElementById("apChart").innerHTML = "";
+    document.getElementById("apFilters").innerHTML = "";
+    document.getElementById("apVerdict").innerHTML = "";
+    document.getElementById("apBotHistory").innerHTML = "—";
+    // Re-render the table so the active-button highlight updates.
+    render();
+
+    try {
+        const resp = await fetch(`/api/coin-analysis?symbol=${encodeURIComponent(symbol)}`);
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const data = await resp.json();
+        renderAnalysis(data);
+    } catch (e) {
+        document.getElementById("apSubtitle").textContent = `Load failed: ${e.message}`;
+    }
+}
+
+function closeAnalysis() {
+    selectedSymbol = null;
+    document.getElementById("analysisPanel").classList.remove("open");
+    render();
+}
+
+function renderAnalysis(d) {
+    const s = d.stats || {};
+    const subtitle = `${fmtPrice(s.price)} · ${fmtPct(s.change24h_pct)} · vol $${fmtVolume(s.vol24h)}`;
+    document.getElementById("apSubtitle").textContent = subtitle;
+
+    // Stats grid
+    const stats = [
+        ["Now",                 fmtPrice(s.price)],
+        ["24h Change",          fmtPct(s.change24h_pct), s.change24h_pct >= 0 ? "pos" : "neg"],
+        ["24h High",            fmtPrice(s.high24h)],
+        ["24h Low",             fmtPrice(s.low24h)],
+        ["7d baseline (pre)",   fmtPrice(s.baseline7d)],
+        ["Pump vs baseline",    fmtPct(s.pump_pct_vs_baseline), s.pump_pct_vs_baseline >= 30 ? "pos" : "mute"],
+        ["14d peak",            fmtPrice(s.peak14d)],
+        ["Days since peak",     s.days_since_peak != null ? `${s.days_since_peak}d` : "—"],
+        ["Off-peak",            fmtPct(-Math.abs(s.off_peak_pct))],
+        ["24h volume",          "$" + fmtVolume(s.vol24h)],
+        ["Vol surge (vs 6d avg)", s.vol_surge_ratio ? s.vol_surge_ratio.toFixed(2) + "×" : "—", s.vol_surge_ratio >= 2 ? "pos" : "mute"],
+        ["Pump started",        s.pump_start_hours_ago != null ? `${s.pump_start_hours_ago}h ago` : "—"],
+    ];
+    document.getElementById("apStats").innerHTML = stats.map(([k, v, cls]) =>
+        `<div class="stat"><div class="k">${k}</div><div class="v ${cls || ''}">${v}</div></div>`
+    ).join("");
+
+    // Chart — last 24h of 1h candles, simple SVG line + area + high/low markers
+    const k1h = (d.klines_1h || []).slice(-48); // 48h gives a richer chart
+    drawSparkline("apChart", k1h);
+
+    // Filter simulation
+    const filters = d.filters || [];
+    document.getElementById("apFilters").innerHTML = filters.map(f =>
+        `<div class="filter-row">
+            <span class="icon ${f.ok ? 'pos' : 'neg'}">${f.ok ? '✓' : '✗'}</span>
+            <span class="rule">${f.rule}</span>
+            <span class="detail">${f.detail}</span>
+        </div>`
+    ).join("");
+    const verdict = d.verdict || {};
+    document.getElementById("apVerdict").innerHTML =
+        `<div class="verdict ${verdict.state === 'pass_filters' ? 'pass' : 'blocked'}">
+            ${verdict.text || '—'}
+        </div>`;
+
+    // Bot history
+    const bot = d.bot_today || {};
+    const sigCount = bot.signals || 0;
+    const skipCount = bot.skips || 0;
+    let history = `<div>Signals today: <strong>${sigCount}</strong> · Filter skips: <strong>${skipCount}</strong></div>`;
+    if (skipCount > 0 && bot.skip_events) {
+        const top3 = bot.skip_events.slice(0, 3);
+        history += top3.map(s => {
+            const t = s.ts ? new Date(s.ts).toISOString().substr(11, 8) : "—";
+            return `<div class="event-row"><span class="ev-time">${t} UTC</span> · skipped (${s.rule || '?'}): ${s.reason || ''}</div>`;
+        }).join("");
+    }
+    if (sigCount === 0 && skipCount === 0) {
+        history += `<div class="event-row" style="margin-top: 6px;">No signals or skips today for this coin — the bot's signal generator never saw it cross its momentum gates.</div>`;
+    }
+    document.getElementById("apBotHistory").innerHTML = history;
+}
+
+function drawSparkline(containerId, klines) {
+    const el = document.getElementById(containerId);
+    if (!klines || klines.length === 0) {
+        el.innerHTML = '<div style="color:var(--muted);text-align:center;padding:30px;">No data</div>';
+        return;
+    }
+    const closes = klines.map(k => k[4]);
+    const min = Math.min(...closes);
+    const max = Math.max(...closes);
+    const range = max - min || 1;
+    const W = 600, H = 120, PAD = 4;
+    const innerW = W - PAD * 2, innerH = H - PAD * 2;
+
+    const points = closes.map((c, i) => {
+        const x = PAD + (i / (closes.length - 1 || 1)) * innerW;
+        const y = PAD + innerH - ((c - min) / range) * innerH;
+        return [x, y];
+    });
+    const path = points.map(([x, y], i) => (i === 0 ? `M ${x},${y}` : `L ${x},${y}`)).join(" ");
+    const areaPath = path + ` L ${PAD + innerW},${PAD + innerH} L ${PAD},${PAD + innerH} Z`;
+    const lastClose = closes[closes.length - 1];
+    const firstClose = closes[0];
+    const isUp = lastClose >= firstClose;
+    const colour = isUp ? "#2ecc71" : "#e74c3c";
+
+    el.innerHTML = `
+        <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="gradient-${containerId}" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%"   stop-color="${colour}" stop-opacity="0.30"/>
+              <stop offset="100%" stop-color="${colour}" stop-opacity="0.00"/>
+            </linearGradient>
+          </defs>
+          <path d="${areaPath}" fill="url(#gradient-${containerId})"/>
+          <path d="${path}" fill="none" stroke="${colour}" stroke-width="1.5"/>
+          <circle cx="${points[points.length-1][0]}" cy="${points[points.length-1][1]}" r="3" fill="${colour}"/>
+        </svg>
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;margin-top:4px;">
+          <span>Low ${fmtPrice(min)}</span>
+          <span>High ${fmtPrice(max)}</span>
+        </div>
+    `;
+}
+
+startPolling();
+</script>
+
+<script src="/nav.js"></script>
+</body>
+</html>

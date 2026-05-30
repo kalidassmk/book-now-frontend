@@ -225,11 +225,50 @@
 
         <!-- HISTORY PAGE (Hidden by default) -->
         <div id="page-history" class="hidden space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <!-- iter96 — Round Trips: matched BUY→SELL pairs with NET P&L -->
             <div class="glass rounded-[2rem] overflow-hidden">
                 <div class="p-6 border-b border-white/5 flex items-center justify-between">
-                    <h3 class="text-lg font-bold">Recent Trade History</h3>
+                    <div>
+                        <h3 class="text-lg font-bold">🔁 Round Trips · NET P&amp;L</h3>
+                        <p class="text-xs text-gray-500 mt-1">Matched BUY → SELL pairs · revenue − cost − fees (0.075% × 2)</p>
+                    </div>
+                    <div id="roundtrips-summary" class="text-right">
+                        <div class="text-[10px] uppercase tracking-widest font-bold text-gray-500">Total Net</div>
+                        <div id="roundtrips-total" class="text-2xl font-black mono text-gray-500">$0.00</div>
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-white/5 text-[10px] uppercase tracking-widest font-bold text-gray-500">
+                            <tr>
+                                <th class="px-6 py-4">Symbol</th>
+                                <th class="px-6 py-4">Buy Avg</th>
+                                <th class="px-6 py-4">Sell Avg</th>
+                                <th class="px-6 py-4">Qty</th>
+                                <th class="px-6 py-4">Cost (USDT)</th>
+                                <th class="px-6 py-4">Revenue (USDT)</th>
+                                <th class="px-6 py-4">Fees</th>
+                                <th class="px-6 py-4">Net P&amp;L</th>
+                                <th class="px-6 py-4">Net %</th>
+                                <th class="px-6 py-4">Hold</th>
+                            </tr>
+                        </thead>
+                        <tbody id="roundtrips-tbody" class="text-sm divide-y divide-white/5">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- iter96 — Grouped Orders: one row per orderId (multi-fill collapsed) -->
+            <div class="glass rounded-[2rem] overflow-hidden">
+                <div class="p-6 border-b border-white/5 flex items-center justify-between">
+                    <div>
+                        <h3 class="text-lg font-bold">Recent Trade History</h3>
+                        <p class="text-xs text-gray-500 mt-1">One row per order — multi-fill orders are collapsed with totals</p>
+                    </div>
                     <div class="flex items-center gap-2">
-                        <button class="px-4 py-2 bg-brand text-bg font-bold rounded-xl text-sm hover:brand-hover transition-all">Export CSV</button>
+                        <button onclick="exportHistoryCsv()" class="px-4 py-2 bg-brand text-bg font-bold rounded-xl text-sm hover:brand-hover transition-all">Export CSV</button>
                     </div>
                 </div>
                 <div class="overflow-x-auto">
@@ -238,8 +277,11 @@
                             <tr>
                                 <th class="px-6 py-4">Symbol</th>
                                 <th class="px-6 py-4">Side</th>
-                                <th class="px-6 py-4">Price</th>
-                                <th class="px-6 py-4">Quantity</th>
+                                <th class="px-6 py-4">Avg Price</th>
+                                <th class="px-6 py-4">Total Qty</th>
+                                <th class="px-6 py-4">Total USDT</th>
+                                <th class="px-6 py-4">Fees</th>
+                                <th class="px-6 py-4">Fills</th>
                                 <th class="px-6 py-4">Time</th>
                             </tr>
                         </thead>
@@ -404,25 +446,17 @@
             },
 
             renderHistory(history) {
-                const tbody = document.getElementById('history-tbody');
-                if (!tbody) return;
-
-                if (history.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" class="px-6 py-10 text-center text-gray-500">No history available</td></tr>';
-                    return;
-                }
-
-                tbody.innerHTML = history.map(h => `
-                    <tr class="hover:bg-white/[0.02] transition-colors">
-                        <td class="px-6 py-4 font-bold text-white uppercase">${h.symbol}</td>
-                        <td class="px-6 py-4">
-                            <span class="text-[10px] font-black ${h.isBuyer ? 'text-success' : 'text-danger'}">${h.isBuyer ? 'BUY' : 'SELL'}</span>
-                        </td>
-                        <td class="px-6 py-4 mono text-white">${parseFloat(h.price).toFixed(6)}</td>
-                        <td class="px-6 py-4 mono text-gray-300">${parseFloat(h.qty).toFixed(4)}</td>
-                        <td class="px-6 py-4 text-gray-500 text-xs">${new Date(h.time).toLocaleString()}</td>
-                    </tr>
-                `).join('');
+                // iter96 — group raw fills by orderId so multi-fill orders
+                // collapse into a single row with totals. Then derive
+                // round-trip P&L by matching consecutive BUY→SELL groups
+                // per symbol.
+                const groups = groupByOrder(history);
+                const trips  = matchRoundTrips(groups);
+                renderGroupedHistoryTable(groups);
+                renderRoundTripsTable(trips);
+                // expose for CSV export
+                window.__lastGroups = groups;
+                window.__lastTrips  = trips;
             },
 
             renderStats(stats, assets, botPositions, activePositions) {
@@ -480,6 +514,239 @@
                 // Future event binding
             }
         };
+
+        /**
+         * iter96 — Trade History Grouping + Round-Trip P&L helpers
+         *
+         * Binance returns one row per FILL.  An order may fill in many
+         * chunks at different prices — see FFUSDT 18:35:14 in the
+         * operator's screenshot (1 SELL order filled in 5 chunks).
+         * We group by `orderId` so each row represents ONE order with:
+         *   • avg_price weighted by quoteQty
+         *   • total qty
+         *   • total quoteQty (USDT spent/received)
+         *   • total commission (in USDT — converted if BNB)
+         *   • fills_count + first/last time
+         */
+        const FEE_RATE = 0.00075;   // 0.075% per side (matches backend default)
+
+        function groupByOrder(trades) {
+            const byId = new Map();
+            for (const t of (trades || [])) {
+                const oid = String(t.orderId || t.id || '');
+                if (!oid) continue;
+                let g = byId.get(oid);
+                if (!g) {
+                    g = {
+                        orderId: oid,
+                        symbol: t.symbol,
+                        isBuyer: !!t.isBuyer,
+                        qty: 0,
+                        quoteQty: 0,
+                        commissionUsdt: 0,
+                        commissionAssets: new Set(),
+                        firstTime: t.time,
+                        lastTime: t.time,
+                        fillsCount: 0,
+                    };
+                    byId.set(oid, g);
+                }
+                const q  = parseFloat(t.qty) || 0;
+                const qq = parseFloat(t.quoteQty) || 0;
+                const c  = parseFloat(t.commission) || 0;
+                const p  = parseFloat(t.price) || 0;
+                g.qty       += q;
+                g.quoteQty  += qq;
+                // iter 97 — convert ALL commission flavors to USDT so the
+                // dashboard shows the true round-trip fee cost.  Binance
+                // charges:
+                //   • USDT for SELL fills (e.g. 0.07795 USDT)
+                //   • base asset for BUY fills (e.g. 0.7721 FF for FFUSDT)
+                //   • BNB if the BNB-discount option is enabled
+                const sym = (t.symbol || '').toUpperCase();
+                const asset = (t.commissionAsset || '').toUpperCase();
+                const baseAsset = sym.endsWith('USDT') ? sym.slice(0, -4) : '';
+                if (asset === 'USDT') {
+                    g.commissionUsdt += c;
+                } else if (asset === baseAsset && p > 0) {
+                    // Base-asset commission — value = qty_fee × fill_price
+                    g.commissionUsdt += c * p;
+                } else if (asset === 'BNB' && (window.__bnbUsdtPrice || 0) > 0) {
+                    g.commissionUsdt += c * window.__bnbUsdtPrice;
+                } else {
+                    // Unknown asset — leave commissionUsdt unchanged but
+                    // show the raw asset tag so the operator sees it.
+                }
+                g.commissionAssets.add(t.commissionAsset || '');
+                g.firstTime = Math.min(g.firstTime, t.time);
+                g.lastTime  = Math.max(g.lastTime,  t.time);
+                g.fillsCount += 1;
+            }
+            // Derived fields + sort newest-first.
+            const out = [];
+            for (const g of byId.values()) {
+                g.avgPrice = g.qty > 0 ? g.quoteQty / g.qty : 0;
+                g.commissionAssetsList = [...g.commissionAssets].filter(Boolean);
+                out.push(g);
+            }
+            out.sort((a, b) => b.lastTime - a.lastTime);
+            return out;
+        }
+
+        /**
+         * Match BUY → SELL pairs per symbol, walking chronologically
+         * (oldest first).  When a SELL appears after a BUY for the same
+         * symbol, we treat the pair as one round trip.  Multiple buys
+         * before a sell are aggregated (weighted-avg cost).  Multiple
+         * sells before another buy are aggregated.  The qty doesn't need
+         * to match exactly — we cap revenue/cost by the smaller side.
+         */
+        function matchRoundTrips(groups) {
+            // Sort by symbol then time ASC.
+            const bySym = new Map();
+            for (const g of groups) {
+                if (!bySym.has(g.symbol)) bySym.set(g.symbol, []);
+                bySym.get(g.symbol).push(g);
+            }
+            const trips = [];
+            for (const [sym, arr] of bySym) {
+                arr.sort((a, b) => a.lastTime - b.lastTime);
+                // FIFO match: accumulate buys until a sell closes them.
+                let openBuyQty = 0, openBuyCost = 0, openBuyFees = 0;
+                let openBuyFirstTs = 0;
+                for (const g of arr) {
+                    if (g.isBuyer) {
+                        if (openBuyQty <= 0) openBuyFirstTs = g.firstTime;
+                        openBuyQty  += g.qty;
+                        openBuyCost += g.quoteQty;
+                        openBuyFees += g.commissionUsdt;
+                    } else if (openBuyQty > 0) {
+                        // SELL closes part/all of the open buy.
+                        const closeQty = Math.min(openBuyQty, g.qty);
+                        const portion  = closeQty / openBuyQty;
+                        const costPart = openBuyCost * portion;
+                        const feeBuyPart = openBuyFees * portion;
+                        const revenue  = g.quoteQty * (closeQty / g.qty);
+                        const feeSellPart = g.commissionUsdt * (closeQty / g.qty);
+                        const totalFees = feeBuyPart + feeSellPart;
+                        const net = revenue - costPart - totalFees;
+                        trips.push({
+                            symbol: sym,
+                            buyAvg:  closeQty > 0 ? costPart  / closeQty : 0,
+                            sellAvg: closeQty > 0 ? revenue   / closeQty : 0,
+                            qty: closeQty,
+                            cost: costPart,
+                            revenue: revenue,
+                            fees: totalFees,
+                            net: net,
+                            netPct: costPart > 0 ? (net / costPart) * 100 : 0,
+                            buyTs: openBuyFirstTs,
+                            sellTs: g.lastTime,
+                        });
+                        openBuyQty  -= closeQty;
+                        openBuyCost -= costPart;
+                        openBuyFees -= feeBuyPart;
+                        if (openBuyQty <= 0) {
+                            openBuyQty = 0; openBuyCost = 0; openBuyFees = 0;
+                        }
+                    }
+                    // Sells with no open buy (orphan) are skipped — they're
+                    // older positions whose buy is outside the trade window.
+                }
+            }
+            // Newest trip first.
+            trips.sort((a, b) => b.sellTs - a.sellTs);
+            return trips;
+        }
+
+        function holdStr(buyTs, sellTs) {
+            const s = Math.max(0, (sellTs - buyTs) / 1000);
+            if (s < 60)   return `${s.toFixed(0)}s`;
+            if (s < 3600) return `${(s/60).toFixed(0)}m`;
+            if (s < 86400) return `${(s/3600).toFixed(1)}h`;
+            return `${(s/86400).toFixed(1)}d`;
+        }
+
+        function fmtUsd(v, places=2) {
+            const sign = v < 0 ? '-' : '';
+            return sign + '$' + Math.abs(v).toLocaleString(undefined, {minimumFractionDigits: places, maximumFractionDigits: places});
+        }
+
+        function renderGroupedHistoryTable(groups) {
+            const tbody = document.getElementById('history-tbody');
+            if (!tbody) return;
+            if (!groups.length) {
+                tbody.innerHTML = '<tr><td colspan="8" class="px-6 py-10 text-center text-gray-500">No history available</td></tr>';
+                return;
+            }
+            tbody.innerHTML = groups.map(g => {
+                const sideCls = g.isBuyer ? 'text-success' : 'text-danger';
+                const sideTxt = g.isBuyer ? 'BUY' : 'SELL';
+                const feeBadge = g.commissionAssetsList.length
+                    ? `<span class="text-[10px] text-gray-500 ml-1">${g.commissionAssetsList.join(',')}</span>`
+                    : '';
+                return `
+                <tr class="hover:bg-white/[0.02] transition-colors">
+                    <td class="px-6 py-4 font-bold text-white uppercase">${g.symbol}</td>
+                    <td class="px-6 py-4"><span class="text-[10px] font-black ${sideCls}">${sideTxt}</span></td>
+                    <td class="px-6 py-4 mono text-white">${g.avgPrice.toFixed(6)}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${g.qty.toFixed(4)}</td>
+                    <td class="px-6 py-4 mono text-white">${fmtUsd(g.quoteQty)}</td>
+                    <td class="px-6 py-4 mono text-gray-400">${fmtUsd(g.commissionUsdt, 4)}${feeBadge}</td>
+                    <td class="px-6 py-4 mono text-gray-500">${g.fillsCount}</td>
+                    <td class="px-6 py-4 text-gray-500 text-xs">${new Date(g.lastTime).toLocaleString()}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        function renderRoundTripsTable(trips) {
+            const tbody = document.getElementById('roundtrips-tbody');
+            if (!tbody) return;
+            if (!trips.length) {
+                tbody.innerHTML = '<tr><td colspan="10" class="px-6 py-10 text-center text-gray-500">No matched round trips yet</td></tr>';
+                document.getElementById('roundtrips-total').textContent = '$0.00';
+                return;
+            }
+            tbody.innerHTML = trips.map(t => {
+                const netCls    = t.net >= 0 ? 'text-success' : 'text-danger';
+                const netPctCls = t.netPct >= 0 ? 'text-success' : 'text-danger';
+                return `
+                <tr class="hover:bg-white/[0.02] transition-colors">
+                    <td class="px-6 py-4 font-bold text-white uppercase">${t.symbol}</td>
+                    <td class="px-6 py-4 mono text-white">${t.buyAvg.toFixed(6)}</td>
+                    <td class="px-6 py-4 mono text-white">${t.sellAvg.toFixed(6)}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${t.qty.toFixed(4)}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${fmtUsd(t.cost)}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${fmtUsd(t.revenue)}</td>
+                    <td class="px-6 py-4 mono text-gray-400">${fmtUsd(t.fees, 4)}</td>
+                    <td class="px-6 py-4 mono font-bold ${netCls}">${t.net >= 0 ? '+' : ''}${fmtUsd(t.net)}</td>
+                    <td class="px-6 py-4 mono font-bold ${netPctCls}">${t.netPct >= 0 ? '+' : ''}${t.netPct.toFixed(2)}%</td>
+                    <td class="px-6 py-4 text-gray-500 text-xs">${holdStr(t.buyTs, t.sellTs)}</td>
+                </tr>`;
+            }).join('');
+            const totalNet = trips.reduce((s, t) => s + t.net, 0);
+            const totalEl = document.getElementById('roundtrips-total');
+            totalEl.textContent = (totalNet >= 0 ? '+' : '') + fmtUsd(totalNet);
+            totalEl.className = `text-2xl font-black mono ${totalNet >= 0 ? 'text-success' : 'text-danger'}`;
+        }
+
+        function exportHistoryCsv() {
+            const groups = window.__lastGroups || [];
+            if (!groups.length) return;
+            const header = ['orderId','symbol','side','avgPrice','totalQty','totalUsdt','feesUsdt','fillsCount','firstTime','lastTime'];
+            const rows = groups.map(g => [
+                g.orderId, g.symbol, g.isBuyer ? 'BUY' : 'SELL',
+                g.avgPrice.toFixed(8), g.qty.toFixed(8), g.quoteQty.toFixed(4),
+                g.commissionUsdt.toFixed(6), g.fillsCount,
+                new Date(g.firstTime).toISOString(), new Date(g.lastTime).toISOString(),
+            ]);
+            const csv = [header.join(','), ...rows.map(r => r.join(','))].join('\n');
+            const blob = new Blob([csv], {type: 'text/csv'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = `trade-history-${new Date().toISOString().slice(0,10)}.csv`;
+            a.click(); URL.revokeObjectURL(url);
+        }
 
         /**
          * Socket Integration

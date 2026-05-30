@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Book-Now — Live Logs</title>
+<style>
+  :root {
+    --bg: #0c1116; --panel: #141b24; --panel-2: #1a232e; --line: #1f2933;
+    --accent: #29b6f6; --good: #2ecc71; --bad: #e74c3c; --warn: #f1c40f;
+    --text: #e6edf3; --muted: #8b949e;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  .sub { color: var(--muted); margin-bottom: 14px; font-size: 13px; display: flex; align-items: center; gap: 12px; }
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:.4;transform:scale(.85);} }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+  .ctl { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .ctl select, .ctl input { padding: 6px 10px; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 5px; font: inherit; }
+  .ctl input { flex: 1; min-width: 200px; }
+  .ctl button { padding: 6px 14px; background: var(--accent); color: #fff; border: 0; border-radius: 5px; cursor: pointer; font-weight: 600; }
+  .ctl button:hover { filter: brightness(1.1); }
+  .ctl button.toggle-off { background: var(--muted); }
+  .ctl label { display: flex; gap: 6px; align-items: center; }
+  .log-meta { margin-top: 6px; font-size: 11px; color: var(--muted); }
+  .log-view {
+    background: #0a0d12;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px;
+    font: 11.5px/1.5 "SF Mono", "Menlo", "Consolas", monospace;
+    color: var(--text);
+    height: calc(100vh - 240px);
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .log-view .line { padding: 1px 0; }
+  .log-view .line.error { background: rgba(231,76,60,.10); color: #ff8a7d; }
+  .log-view .line.warn  { background: rgba(241,196,15,.08); color: #ffe28a; }
+  .log-view .line.info  { color: var(--text); }
+  .log-view .line.debug { color: var(--muted); }
+  .log-view .line.match { background: rgba(46,204,113,.15); }
+  .log-view .ts { color: var(--muted); }
+  .empty { color: var(--muted); padding: 20px; text-align: center; font-style: italic; }
+  .stat-pill { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
+  .stat-pill.live { background: rgba(46,204,113,.15); color: var(--good); border-color: rgba(46,204,113,.35); }
+  .stat-pill.paused { background: rgba(241,196,15,.15); color: var(--warn); border-color: rgba(241,196,15,.35); }
+</style>
+</head>
+<body>
+
+<h1>📜 Live Logs</h1>
+<div class="sub">
+  <span class="live-dot"></span>
+  <span id="status">Loading…</span>
+  <span class="stat-pill" id="state-pill">▶ live</span>
+</div>
+
+<div class="card">
+  <div class="ctl">
+    <label>Source:
+      <select id="source-select"><option value="">Loading…</option></select>
+    </label>
+    <label>Lines:
+      <select id="lines-select">
+        <option value="100">100</option>
+        <option value="200" selected>200</option>
+        <option value="500">500</option>
+        <option value="1000">1000</option>
+        <option value="2000">2000</option>
+      </select>
+    </label>
+    <input type="text" id="grep-input" placeholder="Filter (regex, case-insensitive) — e.g. ERROR|delegate|symbol" />
+    <button onclick="loadOnce()">↻ Refresh</button>
+    <button onclick="togglePause()" id="pause-btn">⏸ Pause</button>
+    <button onclick="downloadLog()" title="Download current view as text">⬇ Save</button>
+    <label style="margin-left:auto"><input type="checkbox" id="autoscroll" checked /> auto-scroll</label>
+  </div>
+  <div class="log-meta" id="log-meta"></div>
+</div>
+
+<div class="log-view" id="log-view"><div class="empty">Select a source above…</div></div>
+
+<script>
+let paused = false;
+let pollHandle = null;
+const POLL_MS = 3000;
+
+const stateMeta = (msg) => {
+  const pill = document.getElementById('state-pill');
+  if (paused) { pill.textContent = '⏸ paused'; pill.className = 'stat-pill paused'; }
+  else { pill.textContent = '▶ live'; pill.className = 'stat-pill live'; }
+  if (msg) document.getElementById('status').textContent = msg;
+};
+
+function getQs() {
+  const u = new URL(window.location);
+  return {
+    source: u.searchParams.get('source') || '',
+    grep: u.searchParams.get('grep') || '',
+    lines: u.searchParams.get('lines') || '200',
+  };
+}
+function setQs(k, v) {
+  const u = new URL(window.location);
+  if (v) u.searchParams.set(k, v); else u.searchParams.delete(k);
+  window.history.replaceState({}, '', u);
+}
+
+function classifyLine(text) {
+  if (/\bERROR\b|\bCRITICAL\b|Traceback|Exception/.test(text)) return 'error';
+  if (/\bWARN(ING)?\b|⚠️/.test(text)) return 'warn';
+  if (/\bDEBUG\b/.test(text)) return 'debug';
+  return 'info';
+}
+function highlightMatch(text, pattern) {
+  if (!pattern) return text.replace(/</g, '&lt;');
+  try {
+    const re = new RegExp(`(${pattern})`, 'gi');
+    return text.replace(/</g, '&lt;').replace(re, '<mark style="background:rgba(46,204,113,.35);color:#fff;padding:0 2px;border-radius:2px">$1</mark>');
+  } catch { return text.replace(/</g, '&lt;'); }
+}
+
+async function loadOnce() {
+  const sel = document.getElementById('source-select');
+  const linesSel = document.getElementById('lines-select');
+  const grepInput = document.getElementById('grep-input');
+  const source = sel.value;
+  if (!source) return;
+  const lines = linesSel.value;
+  const grep = grepInput.value.trim();
+  setQs('source', source); setQs('lines', lines); setQs('grep', grep);
+
+  try {
+    const params = new URLSearchParams({ source, lines });
+    if (grep) params.set('grep', grep);
+    const r = await fetch('/api/logs/tail?' + params);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ error: 'Request failed' }));
+      document.getElementById('log-view').innerHTML = `<div class="empty">Error: ${err.error || 'request failed'}</div>`;
+      stateMeta('Error');
+      return;
+    }
+    const d = await r.json();
+    const view = document.getElementById('log-view');
+    if (!d.lines || !d.lines.length) {
+      view.innerHTML = `<div class="empty">No matching lines (file size ${(d.size_bytes/1024).toFixed(1)} KB)</div>`;
+    } else {
+      view.innerHTML = d.lines.map(l => {
+        const cls = classifyLine(l);
+        return `<div class="line ${cls}">${highlightMatch(l, grep)}</div>`;
+      }).join('');
+      if (document.getElementById('autoscroll').checked) {
+        view.scrollTop = view.scrollHeight;
+      }
+    }
+    const sizeKb = (d.size_bytes / 1024).toFixed(1);
+    document.getElementById('log-meta').innerHTML = `
+      📄 <strong>${d.path || d.source}</strong> ·
+      ${d.returned_lines || d.lines.length} lines ·
+      ${sizeKb} KB total
+      ${grep ? ` · filter: <code style="background:rgba(41,182,246,.15);color:var(--accent);padding:1px 5px;border-radius:3px">${grep}</code>` : ''}
+    `;
+    stateMeta(`Updated ${new Date().toLocaleTimeString()}`);
+  } catch (e) {
+    stateMeta('Error: ' + e.message);
+  }
+}
+
+async function loadSources() {
+  try {
+    const r = await fetch('/api/logs/list');
+    if (!r.ok) {
+      document.getElementById('source-select').innerHTML = '<option value="">backend unreachable</option>';
+      return;
+    }
+    const d = await r.json();
+    const opts = (d.logs || []).map(l => {
+      const min = ((Date.now() - l.mtime_ms) / 60000).toFixed(0);
+      const sizeKb = (l.size_bytes / 1024).toFixed(0);
+      return `<option value="${l.source}">${l.source} (${sizeKb}KB · ${min}m ago)</option>`;
+    }).join('');
+    document.getElementById('source-select').innerHTML = opts || '<option value="">no logs found</option>';
+    // Restore from URL or default to first
+    const qs = getQs();
+    if (qs.source) {
+      document.getElementById('source-select').value = qs.source;
+    }
+    if (qs.grep) document.getElementById('grep-input').value = qs.grep;
+    if (qs.lines) document.getElementById('lines-select').value = qs.lines;
+  } catch (e) {
+    document.getElementById('source-select').innerHTML = '<option value="">error loading list</option>';
+  }
+}
+
+function togglePause() {
+  paused = !paused;
+  const btn = document.getElementById('pause-btn');
+  if (paused) {
+    btn.textContent = '▶ Resume';
+    btn.classList.add('toggle-off');
+    clearInterval(pollHandle); pollHandle = null;
+  } else {
+    btn.textContent = '⏸ Pause';
+    btn.classList.remove('toggle-off');
+    loadOnce();
+    pollHandle = setInterval(loadOnce, POLL_MS);
+  }
+  stateMeta();
+}
+
+function downloadLog() {
+  const view = document.getElementById('log-view');
+  const text = Array.from(view.querySelectorAll('.line')).map(l => l.textContent).join('\n');
+  if (!text) return;
+  const src = document.getElementById('source-select').value;
+  const blob = new Blob([text], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${src}-${new Date().toISOString().slice(0,19).replace(/[:.]/g,'-')}.log`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+}
+
+document.getElementById('source-select').addEventListener('change', loadOnce);
+document.getElementById('lines-select').addEventListener('change', loadOnce);
+document.getElementById('grep-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') loadOnce();
+});
+
+(async () => {
+  await loadSources();
+  if (document.getElementById('source-select').value) {
+    loadOnce();
+    pollHandle = setInterval(loadOnce, POLL_MS);
+  }
+  stateMeta();
+})();
+</script>
+
+<script src="/nav.js"></script>
+</body>
+</html>
