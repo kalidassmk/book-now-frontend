@@ -233,7 +233,12 @@ function currentFilters(){
   return { sig, sym: symRaw.trim().toUpperCase() };
 }
 function passesFilter(s, f){
-  if (f.sym && !String(s.symbol||'').toUpperCase().includes(f.sym)) return false;
+  // iter106-fix — when the operator types a symbol search, OVERRIDE the
+  // signal filter entirely.  Otherwise typing "BTC" looks broken when
+  // BTC is currently HOLD (and the default filter hides HOLD coins).
+  if (f.sym) {
+    return String(s.symbol||'').toUpperCase().includes(f.sym);
+  }
   if (f.sig === 'all') return true;
   if (f.sig === 'active') return s.enough_flow || s.signal === 'BUY' || s.signal === 'SELL';
   // default — only signals
@@ -279,6 +284,18 @@ function renderGroups(snaps, status){
     </section>`;
   }).join("");
 }
+// iter106-fix — cache last-known data so filter/search re-render is
+// INSTANT instead of waiting up to 1s for the next tick.
+let _lastSnaps = [];
+let _lastStatus = {};
+let _lastSignals = [];
+
+function rerenderFromCache(){
+  document.getElementById("groups").innerHTML = renderGroups(_lastSnaps, _lastStatus)
+    || '<div class="muted">Waiting for the first snapshot…</div>';
+  renderLog(_lastSignals);
+}
+
 async function tick(){
   try {
     const [stRes, snRes, sgRes] = await Promise.all([
@@ -303,16 +320,34 @@ async function tick(){
     if(!st.connected){
       setBanner("Engine is running but not yet receiving Binance market data — order-flow values will populate once the stream connects.");
     } else { setBanner(""); }
-    const snaps=(sn.snapshots||[]);
-    document.getElementById("groups").innerHTML=renderGroups(snaps, st)
-      || '<div class="muted">Waiting for the first snapshot…</div>';
-    renderLog(sg.signals||[]);
+    _lastSnaps = (sn.snapshots||[]);
+    _lastStatus = st;
+    _lastSignals = (sg.signals||[]);
+    rerenderFromCache();
   } catch(err){
     setBanner("Cannot reach the dashboard API: "+err);
     document.getElementById("dot").className="dot off";
     document.getElementById("conn").textContent="Disconnected";
   }
 }
+
+// iter106-fix — bind filter changes to immediate re-render so the UI
+// doesn't feel sluggish when typing in the search box or switching
+// the signal filter radio. Debounce the input event to 80ms so we
+// don't thrash the DOM mid-typing.
+(function bindFilters(){
+  let debounceTimer = null;
+  document.addEventListener('input', (e) => {
+    if (e.target && e.target.id === 'symfilter') {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(rerenderFromCache, 80);
+    }
+  });
+  document.addEventListener('change', (e) => {
+    if (e.target && e.target.name === 'sigfilter') rerenderFromCache();
+  });
+})();
+
 tick();
 setInterval(tick, 1000);
 </script>
