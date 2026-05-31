@@ -81,6 +81,29 @@
   }
   .sym .bn-binance-link { vertical-align:middle; }
   table.log .bn-binance-link { width:18px; height:18px; font-size:11px; margin-left:4px; }
+  /* iter 106 — filter bar */
+  .filters {
+    display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+    margin-bottom:18px; padding:12px 14px;
+    background:var(--panel); border:1px solid var(--border); border-radius:10px;
+  }
+  .filter-pill {
+    display:inline-flex; align-items:center; gap:6px;
+    padding:6px 12px; border:1px solid var(--border); border-radius:18px;
+    background:var(--panel2); cursor:pointer; font-size:12px; color:var(--muted);
+    transition:all .15s;
+  }
+  .filter-pill input { display:none; }
+  .filter-pill:hover { color:var(--text); border-color:var(--muted); }
+  .filter-pill:has(input:checked) { background:var(--blue); color:#fff; border-color:var(--blue); }
+  .symfilter {
+    flex:1; min-width:200px;
+    padding:6px 12px; border:1px solid var(--border); border-radius:18px;
+    background:var(--panel2); color:var(--text); font-size:12px;
+    outline:none;
+  }
+  .symfilter:focus { border-color:var(--blue); }
+  .filter-meta { font-size:11px; color:var(--muted); }
 </style>
 </head>
 <body>
@@ -97,6 +120,23 @@
 </header>
 <main>
   <div id="banner" class="banner"></div>
+  <!-- iter106 — filter + search bar so 400+ cards stay scannable. -->
+  <div class="filters">
+    <label class="filter-pill">
+      <input type="radio" name="sigfilter" value="signals" checked />
+      <span>🎯 Only signals (BUY / SELL)</span>
+    </label>
+    <label class="filter-pill">
+      <input type="radio" name="sigfilter" value="active" />
+      <span>⚡ Active (signals + flow)</span>
+    </label>
+    <label class="filter-pill">
+      <input type="radio" name="sigfilter" value="all" />
+      <span>📊 All coins</span>
+    </label>
+    <input id="symfilter" class="symfilter" type="text" placeholder="🔍 search symbol (e.g. BTC)" autocomplete="off" />
+    <span id="visible-count" class="filter-meta"></span>
+  </div>
   <div id="groups"></div>
   <div class="sidebar">
     <div class="section-title">Recent Signals</div>
@@ -186,14 +226,43 @@ function setBanner(msg){
   const b=document.getElementById("banner");
   if(msg){ b.textContent=msg; b.style.display="block"; } else { b.style.display="none"; }
 }
+// iter 106 — current operator filter state (re-applied on every tick).
+function currentFilters(){
+  const sig = (document.querySelector('input[name="sigfilter"]:checked')||{}).value || 'signals';
+  const symRaw = (document.getElementById('symfilter')||{}).value || '';
+  return { sig, sym: symRaw.trim().toUpperCase() };
+}
+function passesFilter(s, f){
+  if (f.sym && !String(s.symbol||'').toUpperCase().includes(f.sym)) return false;
+  if (f.sig === 'all') return true;
+  if (f.sig === 'active') return s.enough_flow || s.signal === 'BUY' || s.signal === 'SELL';
+  // default — only signals
+  return s.signal === 'BUY' || s.signal === 'SELL';
+}
+
 function renderGroups(snaps, status){
   status = status || {};
   const tierOrder = (status.tier_order && status.tier_order.length) ? status.tier_order.slice() : [];
   const tierSyms = status.tiers || {};
+  const f = currentFilters();
+
+  // Apply operator filters BEFORE grouping so the tier counts reflect what's shown.
+  const filtered = snaps.filter(s => passesFilter(s, f));
+
+  // Always-visible total counter (helps operator confirm "all coins are streaming").
+  const totalActive = snaps.length;
+  const cm = document.getElementById('visible-count');
+  if (cm) cm.textContent = `showing ${filtered.length} of ${totalActive} streaming coins`;
+
   const groups = {};
-  snaps.forEach(s => { const t = s.market_cap_tier || "Other"; (groups[t] = groups[t] || []).push(s); });
+  filtered.forEach(s => { const t = s.market_cap_tier || "Other"; (groups[t] = groups[t] || []).push(s); });
   const order = tierOrder.slice();
   Object.keys(groups).forEach(t => { if(!order.includes(t)) order.push(t); });
+  if (!Object.keys(groups).length) {
+    return `<div class="muted" style="padding:18px;text-align:center">
+      No coins match the filter. ${totalActive} streaming in total.
+    </div>`;
+  }
   return order.filter(t => groups[t] && groups[t].length).map(t => {
     const ref = tierSyms[t] || [];
     const items = groups[t].sort((a,b) => {
