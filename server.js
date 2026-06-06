@@ -2516,6 +2516,53 @@ app.get('/api/coin/:symbol', async (req, res) => {
             const cur_val = lastPrice * qty;
             const pnl = cur_val - cost;
             const pnl_pct = entry > 0 ? (lastPrice / entry - 1) * 100 : 0;
+
+            // iter 108 — find the buy fills that fund the currently-held
+            // qty. Walk the per-symbol trade history newest-first, picking
+            // BUY fills until we've covered `qty`. Return the actual
+            // quote spend + commissions (by asset) so the FE can compute
+            // a precise NET P&L and Sell Price Planner.
+            let buy_breakdown = null;
+            try {
+                const symTradesRaw = _parse(tradeHistRaw) || [];
+                const sorted = symTradesRaw.slice().sort((a, b) => (b.time || 0) - (a.time || 0));
+                let remaining = qty;
+                let q_sum = 0, c_sum = 0;
+                const commissions_by_asset = {};
+                const fills = [];
+                for (const t of sorted) {
+                    if (!t.isBuyer) continue;
+                    if (remaining <= 1e-12) break;
+                    const fq = parseFloat(t.qty) || 0;
+                    if (fq <= 0) continue;
+                    const take = Math.min(fq, remaining);
+                    const portion = take / fq;
+                    const fp = parseFloat(t.price) || 0;
+                    const fqq = parseFloat(t.quoteQty) || (fp * fq);
+                    const fc  = parseFloat(t.commission) || 0;
+                    const asset = (t.commissionAsset || '').toUpperCase();
+                    q_sum += take;
+                    c_sum += fqq * portion;
+                    commissions_by_asset[asset] = (commissions_by_asset[asset] || 0) + fc * portion;
+                    fills.push({
+                        time: t.time, price: fp, qty: take,
+                        quote: +(fqq * portion).toFixed(6),
+                        commission: +(fc * portion).toFixed(8),
+                        commission_asset: asset,
+                    });
+                    remaining -= take;
+                }
+                buy_breakdown = {
+                    matched_qty: +q_sum.toFixed(8),
+                    matched_quote_usdt: +c_sum.toFixed(6),
+                    matched_avg_price: q_sum > 0 ? +(c_sum / q_sum).toFixed(8) : entry,
+                    commissions_by_asset,
+                    fills_count: fills.length,
+                    coverage_pct: qty > 0 ? +((q_sum / qty) * 100).toFixed(2) : 0,
+                    fills,
+                };
+            } catch (_) {}
+
             position = {
                 holding: true,
                 entry_price: entry,
@@ -2527,6 +2574,8 @@ app.get('/api/coin/:symbol', async (req, res) => {
                 pnl_pct: +pnl_pct.toFixed(3),
                 status: buyState.status,
                 buy_timestamp: buyState.buyTimeStamp,
+                // iter108 — for Sell Price Planner
+                buy_breakdown,
             };
         }
 
