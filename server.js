@@ -2522,9 +2522,20 @@ app.get('/api/coin/:symbol', async (req, res) => {
             // BUY fills until we've covered `qty`. Return the actual
             // quote spend + commissions (by asset) so the FE can compute
             // a precise NET P&L and Sell Price Planner.
+            //
+            // iter108-fix: per-symbol cache key isn't populated for every
+            // coin. Fall back to BINANCE:TRADE_HISTORY:ALL filtered to
+            // this symbol so newly-bought coins still get a breakdown.
             let buy_breakdown = null;
             try {
-                const symTradesRaw = _parse(tradeHistRaw) || [];
+                let symTradesRaw = _parse(tradeHistRaw) || [];
+                if (!symTradesRaw.length) {
+                    try {
+                        const allRaw = await redis.get('BINANCE:TRADE_HISTORY:ALL');
+                        const all = _parse(allRaw) || [];
+                        symTradesRaw = all.filter(t => (t.symbol || '').toUpperCase() === sym);
+                    } catch (_) {}
+                }
                 const sorted = symTradesRaw.slice().sort((a, b) => (b.time || 0) - (a.time || 0));
                 let remaining = qty;
                 let q_sum = 0, c_sum = 0;
