@@ -303,6 +303,8 @@
                         <h3 class="text-lg font-bold">🔁 Round Trips · NET P&amp;L</h3>
                         <p class="text-xs text-gray-500 mt-1">Matched BUY → SELL pairs · revenue − cost − fees (USDT + BNB + base-asset commissions converted)</p>
                         <p id="bnb-rate-tag" class="text-[10px] text-amber-400 mt-1 mono">BNB rate: loading…</p>
+                        <!-- iter113 — shows which date range from the picker above is reflected here -->
+                        <p id="trips-range-tag" class="text-[10px] text-blue-300 mt-1 mono">showing: all history</p>
                         <!-- iter111 — toggle: one row per coin (default) vs each round trip -->
                         <div class="mt-2 inline-flex rounded-lg overflow-hidden border border-white/10 text-[11px]">
                             <label class="px-3 py-1 cursor-pointer transition-all" data-view="summary">
@@ -536,19 +538,49 @@
                 const groups = groupByOrder(history);
                 const trips  = matchRoundTrips(groups);
                 renderGroupedHistoryTable(groups);
+
+                // iter113 — Round Trips table now also respects the
+                // iter112 date range picker.  The aggregator below + the
+                // per-trip table only see trips whose sellTs lands in
+                // [from, to].  Operator selects "Today" -> only today's
+                // trades show up everywhere on this tab.
+                const filt = (typeof getPnlFilters === 'function')
+                    ? getPnlFilters() : { from: null, to: null, period: 'day' };
+                const tripsInRange = (trips || []).filter(t => {
+                    const ts = Number(t.sellTs) || 0;
+                    if (filt.from && ts < filt.from) return false;
+                    if (filt.to   && ts > filt.to)   return false;
+                    return true;
+                });
+
+                // Tell the operator which range is being shown above
+                // the table.
+                const rangeTag = document.getElementById('trips-range-tag');
+                if (rangeTag) {
+                    if (!filt.from && !filt.to) {
+                        rangeTag.textContent = 'showing: all history';
+                    } else {
+                        const fromTxt = filt.from ? ymdLocal(filt.from) : '—';
+                        const toTxt   = filt.to   ? ymdLocal(filt.to)   : '—';
+                        rangeTag.textContent = `showing: ${fromTxt} → ${toTxt} (${tripsInRange.length} trips)`;
+                    }
+                }
+
                 // iter111 — pick render mode from the operator toggle.
                 const sel = document.querySelector('input[name="trips-view"]:checked');
                 const mode = sel ? sel.value : 'summary';
                 const rows = (mode === 'summary')
-                    ? consolidateTripsBySymbol(trips)
-                    : trips;
+                    ? consolidateTripsBySymbol(tripsInRange)
+                    : tripsInRange;
                 renderRoundTripsTable(rows, mode);
-                // iter112 — also render the Daily P&L breakdown.
+                // iter112 — also render the Daily P&L breakdown using the
+                // FULL trips list (renderPnlByDay reads the same filter
+                // internally and applies it).
                 renderPnlByDay(trips);
                 // expose for CSV export
                 window.__lastGroups = groups;
                 window.__lastTrips  = trips;
-                window.__lastSummary = (mode === 'summary') ? rows : consolidateTripsBySymbol(trips);
+                window.__lastSummary = (mode === 'summary') ? rows : consolidateTripsBySymbol(tripsInRange);
             },
 
             renderStats(stats, assets, botPositions, activePositions) {
