@@ -788,19 +788,35 @@
                 return;
             }
             tbody.innerHTML = trips.map(t => {
-                const netCls    = t.net >= 0 ? 'text-success' : 'text-danger';
-                const netPctCls = t.netPct >= 0 ? 'text-success' : 'text-danger';
+                // iter110 — coerce + defensive defaults so any unexpected
+                // undefined/NaN field still produces visible cells.
+                const n = (v, d) => { const x = Number(v); return Number.isFinite(x) ? x : (d ?? 0); };
+                const sym = t.symbol || '—';
+                const buyAvg = n(t.buyAvg, 0);
+                const sellAvg = n(t.sellAvg, 0);
+                const qty = n(t.qty, 0);
+                const cost = n(t.cost, 0);
+                const revenue = n(t.revenue, 0);
+                const fees = n(t.fees, 0);
+                const net = n(t.net, 0);
+                const netPct = n(t.netPct, 0);
+                const netCls    = net >= 0 ? 'text-success' : 'text-danger';
+                const netPctCls = netPct >= 0 ? 'text-success' : 'text-danger';
+                // iter110 — small NET values (under 1¢) used to render as
+                // "$0.00" with the 2-dec format, looking like "no data".
+                // Auto-pick precision so tiny NETs are visible.
+                const netDecimals = Math.abs(net) >= 1 ? 2 : (Math.abs(net) >= 0.01 ? 3 : 4);
                 return `
                 <tr class="hover:bg-white/[0.02] transition-colors">
-                    <td class="px-6 py-4 font-bold text-white uppercase">${t.symbol}</td>
-                    <td class="px-6 py-4 mono text-white">${t.buyAvg.toFixed(6)}</td>
-                    <td class="px-6 py-4 mono text-white">${t.sellAvg.toFixed(6)}</td>
-                    <td class="px-6 py-4 mono text-gray-300">${t.qty.toFixed(4)}</td>
-                    <td class="px-6 py-4 mono text-gray-300">${fmtUsd(t.cost)}</td>
-                    <td class="px-6 py-4 mono text-gray-300">${fmtUsd(t.revenue)}</td>
-                    <td class="px-6 py-4 mono text-gray-400">${fmtUsd(t.fees, 4)}</td>
-                    <td class="px-6 py-4 mono font-bold ${netCls}">${t.net >= 0 ? '+' : ''}${fmtUsd(t.net)}</td>
-                    <td class="px-6 py-4 mono font-bold ${netPctCls}">${t.netPct >= 0 ? '+' : ''}${t.netPct.toFixed(2)}%</td>
+                    <td class="px-6 py-4 font-bold text-white uppercase">${sym}</td>
+                    <td class="px-6 py-4 mono text-white">${buyAvg.toFixed(6)}</td>
+                    <td class="px-6 py-4 mono text-white">${sellAvg.toFixed(6)}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${qty.toFixed(4)}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${fmtUsd(cost)}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${fmtUsd(revenue)}</td>
+                    <td class="px-6 py-4 mono text-gray-400">${fmtUsd(fees, 4)}</td>
+                    <td class="px-6 py-4 mono font-bold ${netCls}">${net >= 0 ? '+' : ''}${fmtUsd(net, netDecimals)}</td>
+                    <td class="px-6 py-4 mono font-bold ${netPctCls}">${netPct >= 0 ? '+' : ''}${netPct.toFixed(2)}%</td>
                     <td class="px-6 py-4 text-gray-500 text-xs">${holdStr(t.buyTs, t.sellTs)}</td>
                 </tr>`;
             }).join('');
