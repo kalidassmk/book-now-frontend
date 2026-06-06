@@ -643,15 +643,27 @@
         }
 
         /**
-         * Match BUY → SELL pairs per symbol, walking chronologically
-         * (oldest first).  When a SELL appears after a BUY for the same
-         * symbol, we treat the pair as one round trip.  Multiple buys
-         * before a sell are aggregated (weighted-avg cost).  Multiple
-         * sells before another buy are aggregated.  The qty doesn't need
-         * to match exactly — we cap revenue/cost by the smaller side.
+         * iter109 — Match BUY → SELL pairs per symbol using LIFO accounting.
+         *
+         * Why LIFO over the previous FIFO logic:
+         *   GIGGLEUSDT history (May 17 buys + sell left 0.161 unclosed,
+         *   then Jun 06 had a clean 0.199 buy + 0.199 sell).  FIFO mixed
+         *   the leftover 0.161 from $33.13 May 17 buy with the fresh
+         *   0.199 Jun 06 buy at $26.10, producing fake buy avg = $29.31
+         *   and a phantom -$0.64 NET on what was actually a flat trade.
+         *
+         *   LIFO pulls from the MOST RECENT open buy first, so the Jun 06
+         *   sell correctly matches the Jun 06 buy and the leftover stays
+         *   in the stack as an open position (it'll match the next sell
+         *   that appears, just like in real life).
+         *
+         * Algorithm:
+         *   • openBuys[] = stack of {qty, cost, fees, firstTs}, newest at end.
+         *   • On BUY: push to stack.
+         *   • On SELL: pop from end (newest first) until sell qty consumed.
+         *     One trip per SELL, summing the buys it pulled from.
          */
         function matchRoundTrips(groups) {
-            // Sort by symbol then time ASC.
             const bySym = new Map();
             for (const g of groups) {
                 if (!bySym.has(g.symbol)) bySym.set(g.symbol, []);
@@ -660,50 +672,69 @@
             const trips = [];
             for (const [sym, arr] of bySym) {
                 arr.sort((a, b) => a.lastTime - b.lastTime);
-                // FIFO match: accumulate buys until a sell closes them.
-                let openBuyQty = 0, openBuyCost = 0, openBuyFees = 0;
-                let openBuyFirstTs = 0;
+                const openBuys = [];   // LIFO stack
                 for (const g of arr) {
                     if (g.isBuyer) {
-                        if (openBuyQty <= 0) openBuyFirstTs = g.firstTime;
-                        openBuyQty  += g.qty;
-                        openBuyCost += g.quoteQty;
-                        openBuyFees += g.commissionUsdt;
-                    } else if (openBuyQty > 0) {
-                        // SELL closes part/all of the open buy.
-                        const closeQty = Math.min(openBuyQty, g.qty);
-                        const portion  = closeQty / openBuyQty;
-                        const costPart = openBuyCost * portion;
-                        const feeBuyPart = openBuyFees * portion;
-                        const revenue  = g.quoteQty * (closeQty / g.qty);
-                        const feeSellPart = g.commissionUsdt * (closeQty / g.qty);
-                        const totalFees = feeBuyPart + feeSellPart;
-                        const net = revenue - costPart - totalFees;
-                        trips.push({
-                            symbol: sym,
-                            buyAvg:  closeQty > 0 ? costPart  / closeQty : 0,
-                            sellAvg: closeQty > 0 ? revenue   / closeQty : 0,
-                            qty: closeQty,
-                            cost: costPart,
-                            revenue: revenue,
-                            fees: totalFees,
-                            net: net,
-                            netPct: costPart > 0 ? (net / costPart) * 100 : 0,
-                            buyTs: openBuyFirstTs,
-                            sellTs: g.lastTime,
+                        openBuys.push({
+                            qty: g.qty,
+                            cost: g.quoteQty,
+                            fees: g.commissionUsdt,
+                            firstTs: g.firstTime,
                         });
-                        openBuyQty  -= closeQty;
-                        openBuyCost -= costPart;
-                        openBuyFees -= feeBuyPart;
-                        if (openBuyQty <= 0) {
-                            openBuyQty = 0; openBuyCost = 0; openBuyFees = 0;
-                        }
+                        continue;
                     }
-                    // Sells with no open buy (orphan) are skipped — they're
-                    // older positions whose buy is outside the trade window.
+                    if (!openBuys.length) continue;   // orphan sell
+
+                    let remainingSell = g.qty;
+                    let trip_buyCost = 0, trip_buyFees = 0, trip_buyQty = 0;
+                    let trip_buyTs = g.firstTime;
+                    let firstPull = true;
+                    while (remainingSell > 1e-12 && openBuys.length > 0) {
+                        const buy = openBuys[openBuys.length - 1];
+                        if (buy.qty <= 1e-12) { openBuys.pop(); continue; }
+                        const take = Math.min(buy.qty, remainingSell);
+                        const portion = take / buy.qty;
+                        const costPart = buy.cost * portion;
+                        const feePart  = buy.fees * portion;
+                        trip_buyCost += costPart;
+                        trip_buyFees += feePart;
+                        trip_buyQty  += take;
+                        // Show the operator the "start of position" =
+                        // the OLDEST buy ts pulled into this trip.  In
+                        // LIFO we hit the newest first, so the LAST pull
+                        // is the oldest.  Update only if not yet set.
+                        if (firstPull) { trip_buyTs = buy.firstTs; firstPull = false; }
+                        else if (buy.firstTs < trip_buyTs) trip_buyTs = buy.firstTs;
+                        buy.qty  -= take;
+                        buy.cost -= costPart;
+                        buy.fees -= feePart;
+                        if (buy.qty <= 1e-12) openBuys.pop();
+                        remainingSell -= take;
+                    }
+                    if (trip_buyQty <= 0) continue;
+
+                    // Allocate the SELL fill's revenue + commission to
+                    // the portion of sell-qty that actually closed buys.
+                    const sellPortion = trip_buyQty / g.qty;
+                    const revenue = g.quoteQty * sellPortion;
+                    const sellFees = g.commissionUsdt * sellPortion;
+                    const totalFees = trip_buyFees + sellFees;
+                    const net = revenue - trip_buyCost - totalFees;
+                    trips.push({
+                        symbol: sym,
+                        buyAvg:  trip_buyQty > 0 ? trip_buyCost / trip_buyQty : 0,
+                        sellAvg: trip_buyQty > 0 ? revenue       / trip_buyQty : 0,
+                        qty: trip_buyQty,
+                        cost: trip_buyCost,
+                        revenue: revenue,
+                        fees: totalFees,
+                        net: net,
+                        netPct: trip_buyCost > 0 ? (net / trip_buyCost) * 100 : 0,
+                        buyTs: trip_buyTs,
+                        sellTs: g.lastTime,
+                    });
                 }
             }
-            // Newest trip first.
             trips.sort((a, b) => b.sellTs - a.sellTs);
             return trips;
         }
