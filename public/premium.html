@@ -232,6 +232,17 @@
                         <h3 class="text-lg font-bold">🔁 Round Trips · NET P&amp;L</h3>
                         <p class="text-xs text-gray-500 mt-1">Matched BUY → SELL pairs · revenue − cost − fees (USDT + BNB + base-asset commissions converted)</p>
                         <p id="bnb-rate-tag" class="text-[10px] text-amber-400 mt-1 mono">BNB rate: loading…</p>
+                        <!-- iter111 — toggle: one row per coin (default) vs each round trip -->
+                        <div class="mt-2 inline-flex rounded-lg overflow-hidden border border-white/10 text-[11px]">
+                            <label class="px-3 py-1 cursor-pointer transition-all" data-view="summary">
+                                <input type="radio" name="trips-view" value="summary" checked class="hidden" />
+                                📦 By coin (summary)
+                            </label>
+                            <label class="px-3 py-1 cursor-pointer transition-all border-l border-white/10" data-view="trips">
+                                <input type="radio" name="trips-view" value="trips" class="hidden" />
+                                🔁 Each round trip
+                            </label>
+                        </div>
                     </div>
                     <div id="roundtrips-summary" class="text-right">
                         <div class="text-[10px] uppercase tracking-widest font-bold text-gray-500">Total Net</div>
@@ -454,10 +465,17 @@
                 const groups = groupByOrder(history);
                 const trips  = matchRoundTrips(groups);
                 renderGroupedHistoryTable(groups);
-                renderRoundTripsTable(trips);
+                // iter111 — pick render mode from the operator toggle.
+                const sel = document.querySelector('input[name="trips-view"]:checked');
+                const mode = sel ? sel.value : 'summary';
+                const rows = (mode === 'summary')
+                    ? consolidateTripsBySymbol(trips)
+                    : trips;
+                renderRoundTripsTable(rows, mode);
                 // expose for CSV export
                 window.__lastGroups = groups;
                 window.__lastTrips  = trips;
+                window.__lastSummary = (mode === 'summary') ? rows : consolidateTripsBySymbol(trips);
             },
 
             renderStats(stats, assets, botPositions, activePositions) {
@@ -559,6 +577,33 @@
             } catch (_) {}
             return null;
         }
+        // iter111 — bind the "By coin (summary)" vs "Each round trip"
+        // toggle so changing it re-renders without needing a refresh.
+        document.addEventListener('change', (e) => {
+            if (e.target && e.target.name === 'trips-view') {
+                // Update visual selection on the pills.
+                document.querySelectorAll('[data-view]').forEach(el => {
+                    const v = el.getAttribute('data-view');
+                    const sel = el.querySelector('input').checked;
+                    el.classList.toggle('bg-brand', sel);
+                    el.classList.toggle('text-bg', sel);
+                    el.classList.toggle('text-gray-400', !sel);
+                });
+                if (typeof UI !== 'undefined' && UI.renderHistory) {
+                    try { UI.renderHistory((typeof state !== 'undefined' && state.history) || []); } catch (_) {}
+                }
+            }
+        });
+        // Initial visual state on load.
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('[data-view]').forEach(el => {
+                const sel = el.querySelector('input').checked;
+                el.classList.toggle('bg-brand', sel);
+                el.classList.toggle('text-bg', sel);
+                el.classList.toggle('text-gray-400', !sel);
+            });
+        });
+
         // Kick off immediately + refresh every 60s. When the price first
         // lands AFTER a render has already run, re-render so the FEES /
         // NET P&L columns update. `state` and `UI` are script-scope const
@@ -779,7 +824,44 @@
             }).join('');
         }
 
-        function renderRoundTripsTable(trips) {
+        // iter111 — aggregate trips so each symbol appears as a single row.
+        // Sums cost/revenue/fees/net and weight-averages the buy/sell prices.
+        // Hold "duration" becomes the span between the first buyTs and the
+        // last sellTs.
+        function consolidateTripsBySymbol(trips) {
+            const bySym = new Map();
+            for (const t of trips) {
+                let row = bySym.get(t.symbol);
+                if (!row) {
+                    row = {
+                        symbol: t.symbol,
+                        qty: 0, cost: 0, revenue: 0, fees: 0, net: 0,
+                        buyTs: t.buyTs, sellTs: t.sellTs,
+                        trips_count: 0,
+                    };
+                    bySym.set(t.symbol, row);
+                }
+                row.qty     += Number(t.qty)     || 0;
+                row.cost    += Number(t.cost)    || 0;
+                row.revenue += Number(t.revenue) || 0;
+                row.fees    += Number(t.fees)    || 0;
+                row.net     += Number(t.net)     || 0;
+                if (t.buyTs  && t.buyTs  < row.buyTs)  row.buyTs  = t.buyTs;
+                if (t.sellTs && t.sellTs > row.sellTs) row.sellTs = t.sellTs;
+                row.trips_count += 1;
+            }
+            const out = [...bySym.values()].map(r => ({
+                ...r,
+                buyAvg:  r.qty > 0 ? r.cost    / r.qty : 0,
+                sellAvg: r.qty > 0 ? r.revenue / r.qty : 0,
+                netPct:  r.cost > 0 ? (r.net / r.cost) * 100 : 0,
+            }));
+            // Sort by recency of most recent activity (sellTs desc).
+            out.sort((a, b) => (b.sellTs || 0) - (a.sellTs || 0));
+            return out;
+        }
+
+        function renderRoundTripsTable(trips, mode) {
             const tbody = document.getElementById('roundtrips-tbody');
             if (!tbody) return;
             if (!trips.length) {
@@ -787,6 +869,7 @@
                 document.getElementById('roundtrips-total').textContent = '$0.00';
                 return;
             }
+            const isSummary = mode === 'summary';
             tbody.innerHTML = trips.map(t => {
                 // iter110 — coerce + defensive defaults so any unexpected
                 // undefined/NaN field still produces visible cells.
@@ -806,9 +889,13 @@
                 // "$0.00" with the 2-dec format, looking like "no data".
                 // Auto-pick precision so tiny NETs are visible.
                 const netDecimals = Math.abs(net) >= 1 ? 2 : (Math.abs(net) >= 0.01 ? 3 : 4);
+                // iter111 — symbol cell shows a trips_count chip in summary mode.
+                const tripsChip = (isSummary && t.trips_count > 1)
+                    ? `<span class="ml-2 text-[10px] font-mono text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded">×${t.trips_count} trips</span>`
+                    : '';
                 return `
                 <tr class="hover:bg-white/[0.02] transition-colors">
-                    <td class="px-6 py-4 font-bold text-white uppercase">${sym}</td>
+                    <td class="px-6 py-4 font-bold text-white uppercase">${sym}${tripsChip}</td>
                     <td class="px-6 py-4 mono text-white">${buyAvg.toFixed(6)}</td>
                     <td class="px-6 py-4 mono text-white">${sellAvg.toFixed(6)}</td>
                     <td class="px-6 py-4 mono text-gray-300">${qty.toFixed(4)}</td>
