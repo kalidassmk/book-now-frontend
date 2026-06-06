@@ -230,7 +230,8 @@
                 <div class="p-6 border-b border-white/5 flex items-center justify-between">
                     <div>
                         <h3 class="text-lg font-bold">🔁 Round Trips · NET P&amp;L</h3>
-                        <p class="text-xs text-gray-500 mt-1">Matched BUY → SELL pairs · revenue − cost − fees (0.075% × 2)</p>
+                        <p class="text-xs text-gray-500 mt-1">Matched BUY → SELL pairs · revenue − cost − fees (USDT + BNB + base-asset commissions converted)</p>
+                        <p id="bnb-rate-tag" class="text-[10px] text-amber-400 mt-1 mono">BNB rate: loading…</p>
                     </div>
                     <div id="roundtrips-summary" class="text-right">
                         <div class="text-[10px] uppercase tracking-widest font-bold text-gray-500">Total Net</div>
@@ -529,6 +530,54 @@
          *   • fills_count + first/last time
          */
         const FEE_RATE = 0.00075;   // 0.075% per side (matches backend default)
+
+        // iter 107 — Fetch the live BNB/USDT spot price so commissions paid
+        // in BNB (the default when the operator has BNB-discount enabled)
+        // can be converted to USDT for the Round Trips NET P&L math.
+        //
+        // Bug it fixes: 239 of ~370 trades pay fees in BNB. Without this
+        // setter, window.__bnbUsdtPrice stayed undefined and iter97's
+        // groupByOrder() silently ignored every BNB commission line —
+        // meaning the FEES column showed $0.0000 and NET P&L was off by
+        // up to 0.15% per round trip (huge over thousands of trips).
+        let _bnbPriceTimer = null;
+        async function fetchBnbPrice() {
+            try {
+                const r = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=BNBUSDT');
+                if (!r.ok) return null;
+                const j = await r.json();
+                const p = parseFloat(j.price);
+                if (p > 0) {
+                    window.__bnbUsdtPrice = p;
+                    // Surface it in the UI so the operator knows what
+                    // conversion rate was used. Tucked next to the
+                    // total-net counter on the Round Trips header.
+                    const bnbTag = document.getElementById('bnb-rate-tag');
+                    if (bnbTag) bnbTag.textContent = `BNB rate: $${p.toFixed(2)} (used for fee conversion)`;
+                    return p;
+                }
+            } catch (_) {}
+            return null;
+        }
+        // Kick off immediately + refresh every 60s. When the price first
+        // lands AFTER a render has already run, re-render so the FEES /
+        // NET P&L columns update. `state` and `UI` are script-scope const
+        // (declared above) so we reach them directly, not via window.
+        (async () => {
+            const had = !!window.__bnbUsdtPrice;
+            await fetchBnbPrice();
+            if (!had && window.__bnbUsdtPrice && typeof UI !== 'undefined' && UI.renderHistory) {
+                try { UI.renderHistory((typeof state !== 'undefined' && state.history) || []); } catch (_) {}
+            }
+            _bnbPriceTimer = setInterval(async () => {
+                await fetchBnbPrice();
+                // Re-render every minute so the converted-fee columns track
+                // any BNB price drift (matters most over long sessions).
+                if (typeof UI !== 'undefined' && UI.renderHistory) {
+                    try { UI.renderHistory((typeof state !== 'undefined' && state.history) || []); } catch (_) {}
+                }
+            }, 60_000);
+        })();
 
         function groupByOrder(trades) {
             const byId = new Map();
