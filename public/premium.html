@@ -225,6 +225,77 @@
 
         <!-- HISTORY PAGE (Hidden by default) -->
         <div id="page-history" class="hidden space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+
+            <!-- iter112 — P&L by Day / Week / Month with date range -->
+            <div class="glass rounded-[2rem] overflow-hidden">
+                <div class="p-6 border-b border-white/5">
+                    <div class="flex items-start justify-between flex-wrap gap-4">
+                        <div>
+                            <h3 class="text-lg font-bold">📅 Daily P&amp;L</h3>
+                            <p class="text-xs text-gray-500 mt-1">Profit / loss aggregated by date — pick a range, switch period.</p>
+                        </div>
+                        <div id="pnl-range-summary" class="text-right">
+                            <div class="text-[10px] uppercase tracking-widest font-bold text-gray-500">Range Net</div>
+                            <div id="pnl-range-total" class="text-2xl font-black mono text-gray-500">$0.00</div>
+                            <div id="pnl-range-meta" class="text-[10px] text-gray-500 mt-1 mono">—</div>
+                        </div>
+                    </div>
+
+                    <!-- Date range pickers + presets -->
+                    <div class="mt-4 flex flex-wrap items-center gap-3">
+                        <label class="text-[11px] text-gray-500 uppercase tracking-widest font-bold">From</label>
+                        <input id="pnl-from" type="date" class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm" />
+                        <label class="text-[11px] text-gray-500 uppercase tracking-widest font-bold">To</label>
+                        <input id="pnl-to" type="date" class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm" />
+
+                        <div class="inline-flex rounded-lg overflow-hidden border border-white/10 text-[11px] ml-2" id="pnl-presets">
+                            <button data-preset="today" class="px-3 py-1.5 hover:bg-white/5 transition-all">Today</button>
+                            <button data-preset="yesterday" class="px-3 py-1.5 hover:bg-white/5 transition-all border-l border-white/10">Yesterday</button>
+                            <button data-preset="7d" class="px-3 py-1.5 hover:bg-white/5 transition-all border-l border-white/10">Last 7d</button>
+                            <button data-preset="30d" class="px-3 py-1.5 hover:bg-white/5 transition-all border-l border-white/10">Last 30d</button>
+                            <button data-preset="thismonth" class="px-3 py-1.5 hover:bg-white/5 transition-all border-l border-white/10">This month</button>
+                            <button data-preset="all" class="px-3 py-1.5 hover:bg-white/5 transition-all border-l border-white/10">All time</button>
+                        </div>
+
+                        <div class="inline-flex rounded-lg overflow-hidden border border-white/10 text-[11px] ml-auto" id="pnl-period">
+                            <label class="px-3 py-1.5 cursor-pointer transition-all" data-period="day">
+                                <input type="radio" name="pnl-period" value="day" checked class="hidden" />
+                                Day
+                            </label>
+                            <label class="px-3 py-1.5 cursor-pointer transition-all border-l border-white/10" data-period="week">
+                                <input type="radio" name="pnl-period" value="week" class="hidden" />
+                                Week
+                            </label>
+                            <label class="px-3 py-1.5 cursor-pointer transition-all border-l border-white/10" data-period="month">
+                                <input type="radio" name="pnl-period" value="month" class="hidden" />
+                                Month
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-white/5 text-[10px] uppercase tracking-widest font-bold text-gray-500">
+                            <tr>
+                                <th class="px-6 py-4">Period</th>
+                                <th class="px-6 py-4">Trips</th>
+                                <th class="px-6 py-4">Symbols</th>
+                                <th class="px-6 py-4">Cost (USDT)</th>
+                                <th class="px-6 py-4">Revenue (USDT)</th>
+                                <th class="px-6 py-4">Fees</th>
+                                <th class="px-6 py-4">Net P&amp;L</th>
+                                <th class="px-6 py-4">Net %</th>
+                                <th class="px-6 py-4">Win Rate</th>
+                            </tr>
+                        </thead>
+                        <tbody id="pnl-tbody" class="text-sm divide-y divide-white/5">
+                            <tr><td colspan="9" class="px-6 py-10 text-center text-gray-500">Pick a range above…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
             <!-- iter96 — Round Trips: matched BUY→SELL pairs with NET P&L -->
             <div class="glass rounded-[2rem] overflow-hidden">
                 <div class="p-6 border-b border-white/5 flex items-center justify-between">
@@ -472,6 +543,8 @@
                     ? consolidateTripsBySymbol(trips)
                     : trips;
                 renderRoundTripsTable(rows, mode);
+                // iter112 — also render the Daily P&L breakdown.
+                renderPnlByDay(trips);
                 // expose for CSV export
                 window.__lastGroups = groups;
                 window.__lastTrips  = trips;
@@ -912,6 +985,212 @@
             totalEl.textContent = (totalNet >= 0 ? '+' : '') + fmtUsd(totalNet);
             totalEl.className = `text-2xl font-black mono ${totalNet >= 0 ? 'text-success' : 'text-danger'}`;
         }
+
+        // ──────────────────────────────────────────────────────────────
+        // iter 112 — Daily P&L breakdown with date range + period bucket.
+        // Bucket trips by trip.sellTs (when the trade completed).
+        // ──────────────────────────────────────────────────────────────
+        function ymdLocal(ts) {
+            const d = new Date(ts);
+            const yyyy = d.getFullYear();
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const dd = String(d.getDate()).padStart(2, '0');
+            return `${yyyy}-${mm}-${dd}`;
+        }
+        function startOfWeek(ts) {
+            const d = new Date(ts);
+            d.setHours(0,0,0,0);
+            const day = d.getDay();           // 0=Sun
+            const diff = (day === 0 ? -6 : 1 - day);  // Monday as week start
+            d.setDate(d.getDate() + diff);
+            return d;
+        }
+        function bucketKey(ts, period) {
+            const d = new Date(ts);
+            if (period === 'week') {
+                const w = startOfWeek(ts);
+                return ymdLocal(w.getTime());
+            }
+            if (period === 'month') {
+                return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+            }
+            return ymdLocal(ts);
+        }
+        function bucketLabel(key, period) {
+            if (period === 'month') {
+                const [y, m] = key.split('-');
+                const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                return `${months[parseInt(m,10)-1]} ${y}`;
+            }
+            if (period === 'week') {
+                const d = new Date(key + 'T00:00:00');
+                const end = new Date(d); end.setDate(end.getDate() + 6);
+                const fmt = (x) => `${String(x.getMonth()+1).padStart(2,'0')}/${String(x.getDate()).padStart(2,'0')}`;
+                return `Week of ${fmt(d)} → ${fmt(end)}`;
+            }
+            // day
+            const d = new Date(key + 'T00:00:00');
+            const today = new Date(); today.setHours(0,0,0,0);
+            const yest = new Date(today); yest.setDate(yest.getDate() - 1);
+            if (d.getTime() === today.getTime()) return 'Today · ' + key;
+            if (d.getTime() === yest.getTime())  return 'Yesterday · ' + key;
+            const wd = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()];
+            return `${wd} ${key}`;
+        }
+
+        function getPnlFilters() {
+            const fromEl = document.getElementById('pnl-from');
+            const toEl   = document.getElementById('pnl-to');
+            const from = fromEl && fromEl.value ? new Date(fromEl.value + 'T00:00:00').getTime() : null;
+            const to   = toEl   && toEl.value   ? new Date(toEl.value   + 'T23:59:59').getTime() : null;
+            const p = document.querySelector('input[name="pnl-period"]:checked');
+            const period = p ? p.value : 'day';
+            return { from, to, period };
+        }
+
+        function applyPreset(preset) {
+            const fromEl = document.getElementById('pnl-from');
+            const toEl   = document.getElementById('pnl-to');
+            if (!fromEl || !toEl) return;
+            const today = new Date(); today.setHours(0,0,0,0);
+            const setRange = (from, to) => {
+                fromEl.value = from ? ymdLocal(from.getTime()) : '';
+                toEl.value   = to   ? ymdLocal(to.getTime())   : '';
+            };
+            if (preset === 'today') {
+                setRange(today, today);
+            } else if (preset === 'yesterday') {
+                const y = new Date(today); y.setDate(y.getDate() - 1);
+                setRange(y, y);
+            } else if (preset === '7d') {
+                const s = new Date(today); s.setDate(s.getDate() - 6);
+                setRange(s, today);
+            } else if (preset === '30d') {
+                const s = new Date(today); s.setDate(s.getDate() - 29);
+                setRange(s, today);
+            } else if (preset === 'thismonth') {
+                const s = new Date(today.getFullYear(), today.getMonth(), 1);
+                setRange(s, today);
+            } else if (preset === 'all') {
+                fromEl.value = '';
+                toEl.value   = '';
+            }
+            if (typeof UI !== 'undefined' && UI.renderHistory) {
+                try { UI.renderHistory(state.history || []); } catch (_) {}
+            }
+        }
+
+        function renderPnlByDay(trips) {
+            const tbody = document.getElementById('pnl-tbody');
+            if (!tbody) return;
+            const totalEl = document.getElementById('pnl-range-total');
+            const metaEl  = document.getElementById('pnl-range-meta');
+            const { from, to, period } = getPnlFilters();
+            const inRange = (trips || []).filter(t => {
+                const ts = Number(t.sellTs) || 0;
+                if (from && ts < from) return false;
+                if (to && ts > to) return false;
+                return true;
+            });
+            if (!inRange.length) {
+                tbody.innerHTML = '<tr><td colspan="9" class="px-6 py-10 text-center text-gray-500">No trades in this range</td></tr>';
+                if (totalEl) {
+                    totalEl.textContent = '$0.00';
+                    totalEl.className = 'text-2xl font-black mono text-gray-500';
+                }
+                if (metaEl) metaEl.textContent = '0 trips · 0 symbols';
+                return;
+            }
+            // Bucket
+            const buckets = new Map();
+            for (const t of inRange) {
+                const key = bucketKey(t.sellTs, period);
+                let b = buckets.get(key);
+                if (!b) {
+                    b = { key, qty:0, cost:0, revenue:0, fees:0, net:0, trips_count:0, wins:0, losses:0, symbols: new Set() };
+                    buckets.set(key, b);
+                }
+                b.qty += Number(t.qty) || 0;
+                b.cost += Number(t.cost) || 0;
+                b.revenue += Number(t.revenue) || 0;
+                b.fees += Number(t.fees) || 0;
+                b.net += Number(t.net) || 0;
+                b.trips_count += 1;
+                if ((Number(t.net) || 0) >= 0) b.wins += 1; else b.losses += 1;
+                b.symbols.add(t.symbol);
+            }
+            // Sort buckets newest first
+            const rows = [...buckets.values()].sort((a, b) => b.key.localeCompare(a.key));
+            const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : 0; };
+            tbody.innerHTML = rows.map(b => {
+                const winRate = b.trips_count > 0 ? (b.wins / b.trips_count) * 100 : 0;
+                const netPct = b.cost > 0 ? (b.net / b.cost) * 100 : 0;
+                const netCls = b.net >= 0 ? 'text-success' : 'text-danger';
+                const dec = Math.abs(b.net) >= 1 ? 2 : (Math.abs(b.net) >= 0.01 ? 3 : 4);
+                return `
+                <tr class="hover:bg-white/[0.02] transition-colors">
+                    <td class="px-6 py-4 font-bold text-white">${bucketLabel(b.key, period)}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${b.trips_count}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${b.symbols.size}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${fmtUsd(b.cost)}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${fmtUsd(b.revenue)}</td>
+                    <td class="px-6 py-4 mono text-gray-400">${fmtUsd(b.fees, 4)}</td>
+                    <td class="px-6 py-4 mono font-bold ${netCls}">${b.net >= 0 ? '+' : ''}${fmtUsd(b.net, dec)}</td>
+                    <td class="px-6 py-4 mono font-bold ${netPct >= 0 ? 'text-success' : 'text-danger'}">${netPct >= 0 ? '+' : ''}${netPct.toFixed(2)}%</td>
+                    <td class="px-6 py-4 mono text-xs text-gray-400">${winRate.toFixed(0)}% (${b.wins}/${b.trips_count})</td>
+                </tr>`;
+            }).join('');
+            // Summary card
+            const totalNet = rows.reduce((s, r) => s + r.net, 0);
+            const totalTrips = rows.reduce((s, r) => s + r.trips_count, 0);
+            const allSyms = new Set();
+            rows.forEach(r => r.symbols.forEach(s => allSyms.add(s)));
+            if (totalEl) {
+                const dec = Math.abs(totalNet) >= 1 ? 2 : (Math.abs(totalNet) >= 0.01 ? 3 : 4);
+                totalEl.textContent = (totalNet >= 0 ? '+' : '') + fmtUsd(totalNet, dec);
+                totalEl.className = `text-2xl font-black mono ${totalNet >= 0 ? 'text-success' : 'text-danger'}`;
+            }
+            if (metaEl) {
+                metaEl.textContent = `${totalTrips} trips · ${allSyms.size} symbols · ${rows.length} ${period === 'day' ? 'days' : period === 'week' ? 'weeks' : 'months'}`;
+            }
+        }
+
+        // iter112 — bind preset buttons + range / period inputs.
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-preset]');
+            if (btn) {
+                e.preventDefault();
+                applyPreset(btn.getAttribute('data-preset'));
+            }
+        });
+        document.addEventListener('change', (e) => {
+            if (!e.target) return;
+            if (e.target.id === 'pnl-from' || e.target.id === 'pnl-to' || e.target.name === 'pnl-period') {
+                if (e.target.name === 'pnl-period') {
+                    document.querySelectorAll('[data-period]').forEach(el => {
+                        const sel = el.querySelector('input').checked;
+                        el.classList.toggle('bg-brand', sel);
+                        el.classList.toggle('text-bg', sel);
+                        el.classList.toggle('text-gray-400', !sel);
+                    });
+                }
+                if (typeof UI !== 'undefined' && UI.renderHistory) {
+                    try { UI.renderHistory(state.history || []); } catch (_) {}
+                }
+            }
+        });
+        // Default to today on first load.
+        document.addEventListener('DOMContentLoaded', () => {
+            // Style initial period radio.
+            document.querySelectorAll('[data-period]').forEach(el => {
+                const sel = el.querySelector('input').checked;
+                el.classList.toggle('bg-brand', sel);
+                el.classList.toggle('text-bg', sel);
+                el.classList.toggle('text-gray-400', !sel);
+            });
+            // Default to "Today" preset on first visit so the page isn't blank.
+            applyPreset('all');
+        });
 
         function exportHistoryCsv() {
             const groups = window.__lastGroups || [];
