@@ -81,6 +81,18 @@ window.bnBinanceLinkHtml = function (sym, opts) {
         { href: '/bounce-watch.html',      label: 'Bounce Watch',     icon: '⤴️', desc: 'Oversold reversal candidates' },
       ],
     },
+    // iter122 — '💱 Spot Order' top-level menu.  Previously the manual
+    // Trade History + Round Trips + NET P&L dashboard (/premium.html)
+    // lived under 'Bots' as 'Premium', which mis-tagged it — those
+    // entries are your own manual spot trades, not bot trades.
+    {
+      key: 'spot',
+      label: 'Spot Order',
+      icon: '💱',
+      items: [
+        { href: '/premium.html',           label: 'Trades & P&L',     icon: '🧾', desc: 'Manual spot trades — history, round trips, NET P&L', highlight: true },
+      ],
+    },
     {
       key: 'analysis',
       label: 'Analysis',
@@ -105,7 +117,8 @@ window.bnBinanceLinkHtml = function (sym, opts) {
       icon: '🤖',
       items: [
         { href: '/pattern-bot.html',       label: 'Pattern Bot',      icon: '🤖', desc: 'Pattern-based auto-trader' },
-        { href: '/premium.html',           label: 'Premium',          icon: '⭐', desc: 'Premium tier' },
+        // iter122 — 'Premium' (really the manual spot Trade History page)
+        // moved to its own '💱 Spot Order' top-level menu above.
         { href: '/pro.html',               label: 'Pro',              icon: '🎖️', desc: 'Pro tier' },
       ],
     },
