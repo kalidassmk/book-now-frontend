@@ -69,7 +69,7 @@
     <div class="stat monitoring"><div class="n" id="s-monitoring">—</div><div class="l">⚠️ Monitoring tag</div></div>
     <!-- iter117 — SEED bucket retired; coins under the Seed tag are now traded normally. -->
     <div class="stat break"><div class="n" id="s-break">—</div><div class="l">⏸️ Break</div></div>
-    <div class="stat halt"><div class="n" id="s-halt">—</div><div class="l">🛑 Halt</div></div>
+    <!-- iter119 — HALT/AUCTION_MATCH stat card removed (no data). -->
     <!-- iter118 — '📰 Announcement' stat removed: the announcement scraper hasn't produced new rows recently. -->
     <div class="stat active"><div class="n" id="s-active">—</div><div class="l">Active in scalper</div></div>
   </div>
@@ -90,7 +90,7 @@
 
   <!-- iter117 — Seed-tag section removed; the operator chose to let
        newly-listed Seed projects trade.  Monitoring + Pre-delisting +
-       BREAK / HALT remain. -->
+       BREAK remain (iter119 — HALT also retired). -->
 
   <section>
     <h2>⏸️ Status: BREAK</h2>
@@ -98,11 +98,7 @@
     <div id="r-break" class="chips"></div>
   </section>
 
-  <section>
-    <h2>🛑 Status: HALT / AUCTION_MATCH</h2>
-    <p class="desc">Pairs temporarily halted (e.g. during an incident) or in scheduled auction state (<code>exchangeInfo.status = HALT</code> / <code>AUCTION_MATCH</code>).</p>
-    <div id="r-halt" class="chips"></div>
-  </section>
+  <!-- iter119 — '🛑 Status: HALT / AUCTION_MATCH' section retired: no data. -->
 
   <!-- iter118 — '📰 Delistings from announcements' section retired:
        the source announcements feed hasn't produced any rows.  When it
@@ -174,14 +170,12 @@ async function load(){
     document.getElementById("s-predelist").textContent  = counts.PRE_DELISTING ?? (buckets.PRE_DELISTING||[]).length;
     document.getElementById("s-monitoring").textContent = counts.MONITORING    ?? (buckets.MONITORING||[]).length;
     document.getElementById("s-break").textContent      = counts.BREAK         ?? (buckets.BREAK||[]).length;
-    document.getElementById("s-halt").textContent       = (counts.HALT ?? (buckets.HALT||[]).length) + (counts.AUCTION_MATCH ?? (buckets.AUCTION_MATCH||[]).length);
+    // iter119 — s-halt removed.
     // iter118 — s-announce + r-announce removed.
     document.getElementById("r-predelist").innerHTML = predelistChips(buckets.PRE_DELISTING, at);
     document.getElementById("r-monitoring").innerHTML = chips(buckets.MONITORING, "monitoring");
     document.getElementById("r-break").innerHTML      = chips(buckets.BREAK,      "break");
-    // Render HALT + AUCTION_MATCH in the same section
-    const halts = [...(buckets.HALT||[]), ...(buckets.AUCTION_MATCH||[])].sort();
-    document.getElementById("r-halt").innerHTML       = chips(halts, "halt");
+    // iter119 — r-halt removed.
     // iter118 — r-announce removed.
     document.getElementById("active").innerHTML  = chips(sc.active, "active");
     // iter117 — 'blocked' + 'seed' (legacy_skip_seed reference) elements removed;
