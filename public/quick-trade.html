@@ -179,8 +179,65 @@
   .pct-buttons button {
     flex:1; padding:5px; background:var(--panel2); border:1px solid var(--border);
     color:var(--muted); border-radius:6px; cursor:pointer; font-size:11px; font-weight:600;
+    font-variant-numeric:tabular-nums;
   }
   .pct-buttons button:hover { color:var(--text); border-color:var(--muted); }
+  /* iter131 — Wallet hint sits between the two button rows */
+  .wallet-hint {
+    margin-top:6px; font-size:10px; color:var(--muted);
+    display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;
+  }
+  .wallet-hint .hint-val {
+    color:var(--text); font-weight:700; font-variant-numeric:tabular-nums;
+    font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  }
+  .wallet-hint .hint-val.held { color:var(--amber); }
+  .wallet-hint .hint-val.free { color:var(--green); }
+  /* iter131 — Position panel above the form when SELL is selected */
+  .position-panel {
+    margin:0 14px 0; padding:10px 12px;
+    background:var(--panel2); border:1px solid var(--border); border-radius:8px;
+    font-size:11px;
+  }
+  .position-panel.empty { color:var(--muted); text-align:center; padding:14px; }
+  .position-panel .pp-row {
+    display:flex; justify-content:space-between; align-items:center;
+    padding:2px 0; font-variant-numeric:tabular-nums;
+  }
+  .position-panel .pp-row .k { color:var(--muted); }
+  .position-panel .pp-row .v {
+    font-family:"JetBrains Mono",ui-monospace,Menlo,monospace; font-weight:600; color:var(--text);
+  }
+  .position-panel .pp-row.big {
+    border-top:1px solid var(--border); margin-top:6px; padding-top:8px;
+  }
+  .position-panel .pp-row.big .k { color:var(--text); font-weight:700; }
+  .position-panel .pp-row.big .v { font-size:13px; }
+  .position-panel .pp-row .v.up { color:var(--green); }
+  .position-panel .pp-row .v.down { color:var(--red); }
+  .position-panel .pp-actions {
+    display:flex; gap:6px; margin-top:8px;
+  }
+  .position-panel .pp-actions button {
+    flex:1; padding:4px; background:var(--panel); border:1px solid var(--border);
+    color:var(--muted); border-radius:5px; cursor:pointer; font-size:10px; font-weight:600;
+    transition:all .12s;
+  }
+  .position-panel .pp-actions button:hover { color:var(--text); border-color:var(--amber); }
+  /* iter131 — Wallet strip in the top ribbon */
+  .wallet-strip {
+    display:inline-flex; gap:12px; align-items:center;
+    padding:5px 11px;
+    background:var(--panel2); border:1px solid var(--border); border-radius:14px;
+    font-size:11px;
+  }
+  .wallet-strip span { color:var(--muted); }
+  .wallet-strip .v {
+    color:var(--text); font-weight:700; font-variant-numeric:tabular-nums;
+    font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  }
+  .wallet-strip .v.free { color:var(--green); }
+  .wallet-strip .v.held { color:var(--amber); }
   .submit-btn {
     width:100%; margin-top:14px; padding:13px; border:0; border-radius:9px;
     font-size:14px; font-weight:800; letter-spacing:.3px; cursor:pointer;
@@ -269,6 +326,13 @@
     <div class="stat-mini"><div class="k">24h Low</div><div class="v" id="s-low">—</div></div>
     <div class="stat-mini"><div class="k">24h Vol</div><div class="v" id="s-vol">—</div></div>
     <a id="bn-link" class="bn-link" target="_blank" rel="noopener" href="https://www.binance.com">🟡 Binance</a>
+    <!-- iter131 — Wallet strip: USDT free + base-asset held, polled every 10s -->
+    <div class="wallet-strip" title="Your free spot balances">
+      <span>💰</span>
+      <span>USDT</span><span class="v free" id="ws-usdt">—</span>
+      <span>·</span>
+      <span id="ws-base-asset">—</span><span class="v held" id="ws-base">—</span>
+    </div>
     <div id="conn-pill" class="conn-pill"><span class="dot"></span><span id="conn-text">Connecting…</span></div>
   </div>
 
@@ -333,6 +397,9 @@
           <button id="tt-limit"  class="active" data-type="LIMIT">Limit</button>
           <button id="tt-market"             data-type="MARKET">Market</button>
         </div>
+        <!-- iter131 — Position panel: appears only when SELL is selected,
+             auto-populated from /api/trade/order-history (LIFO matching). -->
+        <div class="position-panel" id="position-panel" style="display:none;margin-top:12px"></div>
         <div class="form-body">
           <div class="field" id="price-field">
             <div class="field-label"><span>Price</span><span id="best-bid-hint" style="cursor:pointer">best bid → tap</span></div>
@@ -355,12 +422,27 @@
               <span class="unit">USDT</span>
             </div>
           </div>
-          <div class="pct-buttons">
+          <!-- iter131 — TOP row: fixed USDT amounts for scaling-in batches
+               (operator typically splits a single coin into 4–5 small entries) -->
+          <div class="pct-buttons buy-amts" id="row-amts">
             <button data-amt="5">$5</button>
             <button data-amt="10">$10</button>
             <button data-amt="20">$20</button>
             <button data-amt="50">$50</button>
             <button data-amt="100">$100</button>
+          </div>
+          <!-- iter131 — BOTTOM row: % of wallet (USDT free on BUY, base
+               held on SELL).  Live numbers from /api/wallet/balances. -->
+          <div class="pct-buttons wallet-pct" id="row-wpct">
+            <button data-wpct="10">10%</button>
+            <button data-wpct="25">25%</button>
+            <button data-wpct="50">50%</button>
+            <button data-wpct="75">75%</button>
+            <button data-wpct="100">100%</button>
+          </div>
+          <div class="wallet-hint">
+            <span id="wallet-hint-text">Loading wallet…</span>
+            <span id="wallet-hint-pct"></span>
           </div>
           <div class="field">
             <div class="field-label"><span>Take-Profit % (limit-buy only)</span><span class="unit">passed to engine TP logic</span></div>
@@ -697,12 +779,240 @@ $('f-qty').addEventListener('input', syncFromQty);
 $('f-total').addEventListener('input', syncFromTotal);
 
 // USDT preset buttons — set Total = preset, derive qty.
-document.querySelectorAll('.pct-buttons button').forEach(b => {
+// iter131 — only target the fixed-amount row; wallet-% row is handled below.
+document.querySelectorAll('#row-amts button').forEach(b => {
   b.addEventListener('click', () => {
     $('f-total').value = b.dataset.amt;
     syncFromTotal();
   });
 });
+
+// ──────────────────────────────────────────────────────────────────
+// iter131 — Wallet / position state + auto-fill helpers.
+//
+// S.usdtFree = free USDT balance (for BUY percentage buttons)
+// S.baseFree = free base-asset balance (for SELL percentage buttons)
+// S.position = { qty, cost, avgPrice } LIFO-computed from trade history
+//              (the operator's HELD position, ignoring locked-in-orders)
+// ──────────────────────────────────────────────────────────────────
+S.usdtFree = 0;
+S.baseFree = 0;
+S.position = null;
+
+async function fetchWallet(){
+  try {
+    const r = await fetch('/api/wallet/balances');
+    if (!r.ok) return;
+    const body = await r.json();
+    const arr = (body && body.balances) || [];
+    const base = baseAsset();
+    const u = arr.find(b => (b.asset || '').toUpperCase() === 'USDT');
+    const x = arr.find(b => (b.asset || '').toUpperCase() === base);
+    S.usdtFree = parseFloat((u && u.free) || 0) || 0;
+    S.baseFree = parseFloat((x && x.free) || 0) || 0;
+    renderWalletStrip();
+    renderWalletHint();
+  } catch(_) {}
+}
+
+function baseAsset(){
+  const s = (S.symbol || '').toUpperCase();
+  for (const q of ['USDT','USDC','FDUSD','BUSD','BTC','BNB','ETH']) {
+    if (s.endsWith(q) && s.length > q.length) return s.slice(0, -q.length);
+  }
+  return s;
+}
+
+function renderWalletStrip(){
+  $('ws-usdt').textContent = '$' + (S.usdtFree || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  $('ws-base-asset').textContent = baseAsset();
+  $('ws-base').textContent = (S.baseFree || 0).toLocaleString(undefined, { maximumFractionDigits: 6 });
+}
+
+function renderWalletHint(){
+  const txt = $('wallet-hint-text');
+  const pct = $('wallet-hint-pct');
+  if (!txt) return;
+  const base = baseAsset();
+  if (S.side === 'BUY') {
+    txt.innerHTML = `USDT free: <span class="hint-val free">$${(S.usdtFree || 0).toFixed(2)}</span>`;
+    if (pct) {
+      const total = parseFloat($('f-total').value) || 0;
+      const p = S.usdtFree > 0 ? (total / S.usdtFree) * 100 : 0;
+      pct.innerHTML = total > 0 ? `using <span class="hint-val">${p.toFixed(1)}%</span>` : '';
+    }
+  } else {
+    txt.innerHTML = `${base} held: <span class="hint-val held">${(S.baseFree || 0).toFixed(6)}</span>`;
+    if (pct) {
+      const q = parseFloat($('f-qty').value) || 0;
+      const p = S.baseFree > 0 ? (q / S.baseFree) * 100 : 0;
+      pct.innerHTML = q > 0 ? `selling <span class="hint-val">${p.toFixed(1)}%</span>` : '';
+    }
+  }
+}
+
+// LIFO position computation — same algorithm as iter124 Buys Summary.
+// Returns { qty, cost, avgPrice } for the CURRENT open position.
+function computeOpenLIFO(rawTrades){
+  const byId = new Map();
+  for (const t of (rawTrades || [])) {
+    const oid = String(t.orderId || t.id || '');
+    if (!oid) continue;
+    let g = byId.get(oid);
+    if (!g) {
+      g = { orderId: oid, isBuyer: !!t.isBuyer, qty: 0, quoteQty: 0, time: t.time || 0 };
+      byId.set(oid, g);
+    }
+    g.qty      += parseFloat(t.qty)      || 0;
+    g.quoteQty += parseFloat(t.quoteQty) || 0;
+    if ((t.time || 0) > g.time) g.time = t.time || 0;
+  }
+  const groups = [...byId.values()].sort((a, b) => a.time - b.time);
+  const stack = [];
+  for (const g of groups) {
+    if (g.isBuyer) {
+      stack.push({ qty: g.qty, cost: g.quoteQty });
+      continue;
+    }
+    let remaining = g.qty;
+    while (remaining > 1e-12 && stack.length) {
+      const buy = stack[stack.length - 1];
+      if (buy.qty <= 1e-12) { stack.pop(); continue; }
+      const take = Math.min(buy.qty, remaining);
+      const portion = take / buy.qty;
+      buy.qty  -= take;
+      buy.cost -= buy.cost * portion;
+      if (buy.qty <= 1e-12) stack.pop();
+      remaining -= take;
+    }
+  }
+  if (!stack.length) return { qty: 0, cost: 0, avgPrice: 0 };
+  const sum = stack.reduce((a, x) => ({ qty: a.qty + x.qty, cost: a.cost + x.cost }), { qty: 0, cost: 0 });
+  return {
+    qty: sum.qty,
+    cost: sum.cost,
+    avgPrice: sum.qty > 0 ? sum.cost / sum.qty : 0,
+  };
+}
+
+let _positionFetchToken = 0;
+async function fetchPosition(sym){
+  if (!sym) return;
+  const myToken = ++_positionFetchToken;
+  try {
+    const r = await fetch('/api/trade/order-history?symbol=' + encodeURIComponent(sym));
+    if (!r.ok) return;
+    const trades = await r.json();
+    // Drop stale result if the operator already switched symbol.
+    if (myToken !== _positionFetchToken) return;
+    S.position = computeOpenLIFO(trades || []);
+    renderPositionPanel();
+    if (S.side === 'SELL') maybeAutofillSell();
+  } catch(_) {}
+}
+
+function renderPositionPanel(){
+  const panel = $('position-panel');
+  if (!panel) return;
+  if (S.side !== 'SELL') { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  const base = baseAsset();
+  if (!S.position || S.position.qty <= 1e-9) {
+    panel.classList.add('empty');
+    panel.innerHTML = `<div>No open position in <strong>${S.symbol}</strong>. The sell form is in free-form mode.</div>`;
+    return;
+  }
+  panel.classList.remove('empty');
+  const px  = S.lastPrice || 0;
+  const mv  = S.position.qty * px;
+  const pnl = mv - S.position.cost;
+  const pct = S.position.cost > 0 ? (pnl / S.position.cost) * 100 : 0;
+  const cls = pnl >= 0 ? 'up' : 'down';
+  panel.innerHTML = `
+    <div class="pp-row"><span class="k">Holding</span><span class="v">${S.position.qty.toFixed(6)} ${base}</span></div>
+    <div class="pp-row"><span class="k">Avg buy</span><span class="v">${fmtPrice(S.position.avgPrice)}</span></div>
+    <div class="pp-row"><span class="k">Cost</span><span class="v">$${S.position.cost.toFixed(2)}</span></div>
+    <div class="pp-row"><span class="k">Current</span><span class="v">${fmtPrice(px)}</span></div>
+    <div class="pp-row big"><span class="k">Unrealised</span><span class="v ${cls}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)</span></div>
+    <div class="pp-actions">
+      <button data-pp="avg"  title="Set price = avg buy">Price = avg buy</button>
+      <button data-pp="bep"  title="Set price = avg buy + 0.20% fee buffer (true break-even)">Break-even +fees</button>
+      <button data-pp="full" title="Set qty = full held position">Qty = full</button>
+      <button data-pp="reset" title="Re-pull position + auto-fill">↻ Refill</button>
+    </div>
+  `;
+}
+
+// Pre-populate price + qty when operator flips to SELL and the form is empty.
+function maybeAutofillSell(){
+  if (S.side !== 'SELL' || !S.position || S.position.qty <= 1e-9) return;
+  if (!$('f-price').value) $('f-price').value = +S.position.avgPrice.toFixed(8);
+  if (!$('f-qty').value)   $('f-qty').value   = +S.position.qty.toFixed(8);
+  syncFromPrice();
+  renderWalletHint();
+}
+
+// Wire position-panel action buttons.
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('.position-panel .pp-actions button');
+  if (!b || !S.position) return;
+  const k = b.dataset.pp;
+  if (k === 'avg') {
+    $('f-price').value = +S.position.avgPrice.toFixed(8);
+  } else if (k === 'bep') {
+    // Avg buy + 0.20% rough round-trip fee buffer so the operator nets 0.
+    $('f-price').value = +(S.position.avgPrice * 1.002).toFixed(8);
+  } else if (k === 'full') {
+    $('f-qty').value = +S.position.qty.toFixed(8);
+  } else if (k === 'reset') {
+    $('f-price').value = ''; $('f-qty').value = ''; $('f-total').value = '';
+    maybeAutofillSell();
+    return;
+  }
+  syncFromPrice();
+  renderWalletHint();
+});
+
+// Wallet-% buttons — BUY: % of USDT free.  SELL: % of base-asset free.
+document.querySelectorAll('#row-wpct button').forEach(b => {
+  b.addEventListener('click', () => {
+    const pct = parseFloat(b.dataset.wpct) / 100;
+    if (S.side === 'BUY') {
+      const total = (S.usdtFree || 0) * pct;
+      $('f-total').value = total.toFixed(2);
+      syncFromTotal();
+    } else {
+      const qty = (S.baseFree || 0) * pct;
+      $('f-qty').value = +qty.toFixed(8);
+      syncFromQty();
+    }
+    renderWalletHint();
+  });
+});
+
+// Update wallet hint whenever the user edits a field.
+['f-price','f-qty','f-total'].forEach(id => {
+  $(id).addEventListener('input', renderWalletHint);
+});
+
+// Side switch → re-render hint + position panel + maybe autofill.
+const _origSideHandler = null;  // (just for clarity — side toggle below already fires)
+document.querySelectorAll('.side-toggle button').forEach(b => {
+  b.addEventListener('click', () => {
+    // Already updates S.side via the existing handler above; this listener
+    // runs AFTER and refreshes the iter131 UI.
+    setTimeout(() => {
+      renderWalletHint();
+      renderPositionPanel();
+      if (S.side === 'SELL') maybeAutofillSell();
+    }, 0);
+  });
+});
+
+// Poll wallet every 10s + after every order placement.
+setInterval(fetchWallet, 10_000);
+// Poll position every 20s — changes less often than wallet.
+setInterval(() => fetchPosition(S.symbol), 20_000);
 
 // ── Symbol picker ───────────────────────────────────────────────────
 function applySymbol(raw){
@@ -737,6 +1047,12 @@ function applySymbol(raw){
   $('s-vol').textContent  = '—';
   connectWs();
   loadOpenOrders();
+  // iter131 — pull fresh wallet + position for the new symbol so the
+  // sizing buttons and SELL auto-fill reflect what the operator actually
+  // holds.  Wallet is global; position is per-symbol.
+  S.position = null;
+  fetchWallet();
+  fetchPosition(s);
   document.title = `${s} · Quick Trade · BookNow`;
 }
 $('sym-input').addEventListener('keydown', (e) => {
@@ -845,6 +1161,10 @@ async function submitOrder(){
         : `${qty} ${sym} @ ${$('f-price').value}`);
       toast('ok', `${mode} sent`, summary);
       loadOpenOrders();
+      // iter131 — order changed our wallet + position; refresh both
+      // so the next click reflects the new state instantly.
+      fetchWallet();
+      fetchPosition(S.symbol);
     }
   } catch (e) {
     toast('error', 'Network error', e.message);

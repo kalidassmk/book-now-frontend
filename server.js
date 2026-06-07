@@ -1090,6 +1090,20 @@ app.get('/api/trade/quick-limit-sell/:symbol', async (req, res) => {
     }
 });
 
+// iter131 — Wallet snapshot for the Quick Trade sizing buttons.
+// Reads the same `BINANCE:BALANCES:ALL` Redis key the existing socket
+// broadcast uses, so it's instant and zero-load on the engine.  Each
+// entry: { asset, free, locked }.
+app.get('/api/wallet/balances', async (req, res) => {
+    try {
+        const raw = await redis.get('BINANCE:BALANCES:ALL');
+        const balances = raw ? JSON.parse(raw) : [];
+        return res.json({ ok: true, balances });
+    } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message, balances: [] });
+    }
+});
+
 // Open orders snapshot — engine reads from Binance.
 app.get('/api/trade/quick-open-orders', async (req, res) => {
     try {
