@@ -289,6 +289,58 @@
   .oo-row .cancel:hover { color:var(--red); border-color:var(--red); }
   .empty { padding:24px 14px; text-align:center; color:var(--muted); font-size:12px; }
 
+  /* iter137 — Open Orders summary chip + per-symbol cards */
+  .oo-chip {
+    display:inline-flex; gap:10px; align-items:center;
+    font-size:10px; font-weight:600; letter-spacing:.2px;
+    font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  }
+  .oo-chip .oo-chip-grp { color:var(--muted); }
+  .oo-chip .oo-chip-grp.up { color:var(--green); }
+  .oo-chip .oo-chip-grp.down { color:var(--red); }
+  .oo-summary {
+    display:flex; flex-direction:column; gap:6px;
+    padding:10px 14px;
+    background:var(--panel2);
+    border-bottom:1px solid var(--border);
+  }
+  .oos-card {
+    padding:8px 10px;
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-radius:8px;
+  }
+  .oos-head {
+    font-size:12px; font-weight:700; margin-bottom:6px; letter-spacing:.3px;
+  }
+  .oos-side {
+    display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+    padding:3px 0; font-size:11px;
+    font-variant-numeric:tabular-nums;
+  }
+  .oos-side.buy  .oos-tag { color:var(--green); }
+  .oos-side.sell .oos-tag { color:var(--red); }
+  .oos-tag { font-weight:800; min-width:38px; font-size:10px; letter-spacing:.4px; }
+  .oos-stat { display:inline-flex; gap:4px; align-items:baseline; }
+  .oos-stat .k {
+    color:var(--muted); text-transform:uppercase; letter-spacing:.4px; font-size:9px;
+  }
+  .oos-stat .v {
+    font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;
+    color:var(--text); font-weight:600;
+  }
+  .oos-round {
+    font-size:11px; padding-top:6px; border-top:1px solid var(--border); margin-top:5px;
+    display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;
+  }
+  .oos-round.muted { color:var(--muted); }
+  .oos-round .k { color:var(--muted); text-transform:uppercase; letter-spacing:.3px; font-size:9px; }
+  .oos-round .v {
+    font-family:"JetBrains Mono",ui-monospace,Menlo,monospace; font-weight:700; color:var(--text);
+  }
+  .oos-round .v.up   { color:var(--green); }
+  .oos-round .v.down { color:var(--red); }
+
   /* ── iter132 — Edit-open-order modal + pencil button ── */
   .oo-row .edit {
     background:transparent; border:1px solid var(--border);
@@ -523,7 +575,13 @@
       </div>
 
       <div class="panel">
-        <div class="panel-head">Open Orders <span class="sub" id="oo-sub">auto-refresh 5s</span></div>
+        <div class="panel-head">
+          <span>Open Orders <span class="sub" id="oo-sub">auto-refresh 5s</span></span>
+          <!-- iter137 — compact totals chip filled in by renderOpenOrdersSummary -->
+          <span id="oo-summary-chip" class="oo-chip" style="display:none"></span>
+        </div>
+        <!-- iter137 — per-symbol summary cards (BUY avg / SELL avg / round-trip projection) -->
+        <div id="oo-summary" class="oo-summary" style="display:none"></div>
         <div id="open-orders" class="open-orders">
           <div class="empty">No open orders</div>
         </div>
@@ -1247,6 +1305,8 @@ async function loadOpenOrders(){
     const body = await r.json().catch(() => ({}));
     const list = (body.ok && Array.isArray(body.orders)) ? body.orders : [];
     const el = $('open-orders');
+    // iter137 — render summary chip + per-symbol cards every poll.
+    renderOpenOrdersSummary(list);
     if (!list.length) {
       el.innerHTML = '<div class="empty">No open orders</div>';
       return;
@@ -1273,6 +1333,163 @@ async function loadOpenOrders(){
     }).join('');
   } catch (_) { /* ignore */ }
 }
+
+// ──────────────────────────────────────────────────────────────────
+// iter137 — Open-Orders summary
+//
+// Group open orders by symbol, separate BUY vs SELL, and project
+// what happens if everything fills:
+//   • BUY side:  weighted avg buy + total qty + total cost
+//   • SELL side: weighted avg sell + total qty + total revenue
+//   • Round trip: min(buyQty, sellQty) matched, gross/fees/NET
+// Fee model: 0.075% per side × 2 sides ≈ 0.15% round-trip (matches
+// the iter97 / iter109 NET P&L calc on /premium.html).
+// ──────────────────────────────────────────────────────────────────
+const OO_FEE_PER_SIDE = 0.00075;
+
+function summarizeOpenOrders(orders){
+  const bySym = new Map();
+  for (const o of (orders || [])) {
+    const sym = (o.symbol || '').toUpperCase();
+    if (!sym) continue;
+    const px  = parseFloat(o.price ?? o.limitPrice ?? 0) || 0;
+    const qty = parseFloat(o.origQty ?? o.qty ?? 0) || 0;
+    const side = (o.side || '').toUpperCase();
+    if (px <= 0 || qty <= 0) continue;
+    let s = bySym.get(sym);
+    if (!s) {
+      s = {
+        symbol: sym,
+        buy:  { qty: 0, cost: 0, avg: 0 },
+        sell: { qty: 0, rev:  0, avg: 0 },
+        buyOrders: 0, sellOrders: 0,
+      };
+      bySym.set(sym, s);
+    }
+    if (side === 'BUY') {
+      s.buy.qty  += qty;
+      s.buy.cost += qty * px;
+      s.buyOrders += 1;
+    } else if (side === 'SELL') {
+      s.sell.qty += qty;
+      s.sell.rev += qty * px;
+      s.sellOrders += 1;
+    }
+  }
+  let totBuyCost = 0, totSellRev = 0, totNet = 0;
+  let totBuyOrders = 0, totSellOrders = 0;
+  const out = [];
+  for (const s of bySym.values()) {
+    s.buy.avg  = s.buy.qty  > 0 ? s.buy.cost / s.buy.qty : 0;
+    s.sell.avg = s.sell.qty > 0 ? s.sell.rev / s.sell.qty : 0;
+    const matched = Math.min(s.buy.qty, s.sell.qty);
+    if (matched > 0) {
+      const cost = matched * s.buy.avg;
+      const rev  = matched * s.sell.avg;
+      const fees = OO_FEE_PER_SIDE * (cost + rev);
+      const net  = rev - cost - fees;
+      s.round = {
+        matched, cost, rev, fees,
+        gross: rev - cost,
+        net,
+        netPct: cost > 0 ? (net / cost) * 100 : 0,
+      };
+      totNet += net;
+    } else {
+      s.round = null;
+    }
+    totBuyCost   += s.buy.cost;
+    totSellRev   += s.sell.rev;
+    totBuyOrders += s.buyOrders;
+    totSellOrders+= s.sellOrders;
+    out.push(s);
+  }
+  out.sort((a, b) => a.symbol.localeCompare(b.symbol));
+  return {
+    perSymbol: out,
+    totals: {
+      symbols: out.length,
+      buyOrders: totBuyOrders,
+      sellOrders: totSellOrders,
+      totalBuyCost: totBuyCost,
+      totalSellRev: totSellRev,
+      totalNet: totNet,
+    },
+  };
+}
+
+function renderOpenOrdersSummary(orders){
+  const summary = summarizeOpenOrders(orders);
+  const t = summary.totals;
+  // Compact chip in the panel header.
+  const chip = $('oo-summary-chip');
+  if (chip) {
+    if (t.buyOrders + t.sellOrders === 0) {
+      chip.style.display = 'none';
+      chip.innerHTML = '';
+    } else {
+      chip.style.display = '';
+      const netCls = t.totalNet >= 0 ? 'up' : 'down';
+      const netSign = t.totalNet >= 0 ? '+' : '';
+      const netStr = `${netSign}$${t.totalNet.toFixed(2)}`;
+      chip.innerHTML =
+        `<span class="oo-chip-grp">${t.buyOrders + t.sellOrders} open</span>` +
+        `<span class="oo-chip-grp"><span style="color:var(--green)">${t.buyOrders} BUY</span> / <span style="color:var(--red)">${t.sellOrders} SELL</span></span>` +
+        `<span class="oo-chip-grp ${netCls}">if-all-fill ${netStr}</span>`;
+    }
+  }
+  // Per-symbol cards.
+  const panel = $('oo-summary');
+  if (!panel) return;
+  if (!summary.perSymbol.length) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+    return;
+  }
+  panel.style.display = '';
+  panel.innerHTML = summary.perSymbol.map(s => {
+    const buyHtml = s.buy.qty > 0 ? `
+      <div class="oos-side buy">
+        <span class="oos-tag">BUY</span>
+        <span class="oos-stat"><span class="k">avg</span><span class="v">${fmtPrice(s.buy.avg)}</span></span>
+        <span class="oos-stat"><span class="k">qty</span><span class="v">${fmtQty(s.buy.qty)}</span></span>
+        <span class="oos-stat"><span class="k">cost</span><span class="v">$${s.buy.cost.toFixed(2)}</span></span>
+        <span class="oos-stat"><span class="k">orders</span><span class="v">${s.buyOrders}</span></span>
+      </div>` : '';
+    const sellHtml = s.sell.qty > 0 ? `
+      <div class="oos-side sell">
+        <span class="oos-tag">SELL</span>
+        <span class="oos-stat"><span class="k">avg</span><span class="v">${fmtPrice(s.sell.avg)}</span></span>
+        <span class="oos-stat"><span class="k">qty</span><span class="v">${fmtQty(s.sell.qty)}</span></span>
+        <span class="oos-stat"><span class="k">rev</span><span class="v">$${s.sell.rev.toFixed(2)}</span></span>
+        <span class="oos-stat"><span class="k">orders</span><span class="v">${s.sellOrders}</span></span>
+      </div>` : '';
+    let rtHtml = '';
+    if (s.round) {
+      const r = s.round;
+      const cls = r.net >= 0 ? 'up' : 'down';
+      const sign = r.net >= 0 ? '+' : '';
+      rtHtml = `<div class="oos-round">
+        🔁
+        <span class="oos-stat"><span class="k">matched</span><span class="v">${fmtQty(r.matched)}</span></span>
+        <span class="oos-stat"><span class="k">gross</span><span class="v">${sign}$${r.gross.toFixed(2)}</span></span>
+        <span class="oos-stat"><span class="k">fees</span><span class="v">−$${r.fees.toFixed(2)}</span></span>
+        <span class="oos-stat"><span class="k">NET</span><span class="v ${cls}">${sign}$${r.net.toFixed(2)} (${r.netPct >= 0 ? '+' : ''}${r.netPct.toFixed(2)}%)</span></span>
+      </div>`;
+    } else if (s.buy.qty > 0 && s.sell.qty === 0) {
+      rtHtml = `<div class="oos-round muted">No matching SELL — set a target above $${(s.buy.avg * 1.002).toFixed(6)} to lock in profit (after fees).</div>`;
+    } else if (s.sell.qty > 0 && s.buy.qty === 0) {
+      rtHtml = `<div class="oos-round muted">SELL only — reduces an existing held position (compare against your average buy on the SELL Position panel above).</div>`;
+    }
+    return `<div class="oos-card">
+      <div class="oos-head">${s.symbol}</div>
+      ${buyHtml}
+      ${sellHtml}
+      ${rtHtml}
+    </div>`;
+  }).join('');
+}
+
 async function cancelOrder(sym, oid){
   if (!confirm(`Cancel ${sym} order ${oid}?`)) return;
   try {
