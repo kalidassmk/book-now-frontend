@@ -1007,49 +1007,95 @@ function renderWalletHint(){
   }
 }
 
-// LIFO position computation — same algorithm as iter124 Buys Summary
-// (premium.html).  iter138 extended to also track fees so the SELL-side
-// summary card can show "how much you actually paid" for the held qty.
+// LIFO position computation.  Auto-detects two input shapes:
+//
+//   per-ORDER  (what /api/trade/order-history returns — /allOrders API):
+//     { side: 'BUY'|'SELL', status, executedQty, cummulativeQuoteQty,
+//       updateTime|time, type, ... }
+//     ⚠️ no per-order commission — fees approximated at 0.075% per side.
+//
+//   per-FILL  (legacy — what /myTrades returns):
+//     { isBuyer, qty, quoteQty, commission, commissionAsset, price, time }
+//     ⚠️ multiple fills can share an orderId — grouped here for accuracy.
+//
+// iter139 — Earlier versions only handled the per-fill shape; the live
+// endpoint returns the per-order shape, which silently produced
+// {qty:0, cost:0} and made HELD + iter131 Position panel always say
+// "no position".  Now both shapes work.
 //
 // Returns { qty, cost, fees, avgPrice } for the CURRENT open position.
-function computeOpenLIFO(rawTrades){
-  const byId = new Map();
-  for (const t of (rawTrades || [])) {
-    const oid = String(t.orderId || t.id || '');
-    if (!oid) continue;
-    let g = byId.get(oid);
-    if (!g) {
-      g = {
-        orderId: oid, isBuyer: !!t.isBuyer,
-        qty: 0, quoteQty: 0, commissionUsdt: 0,
-        symbol: (t.symbol || ''), time: t.time || 0,
-      };
-      byId.set(oid, g);
+const FEE_APPROX_PER_SIDE = 0.00075;   // Binance maker/taker default
+
+function computeOpenLIFO(rawData){
+  const ordersByTime = [];
+  // ── Group per-fill data by orderId (multi-fill orders) ─────────────
+  const fillsByOrderId = new Map();
+  for (const t of (rawData || [])) {
+    if (!t || typeof t !== 'object') continue;
+
+    const looksLikeOrder = ('executedQty' in t) || ('cummulativeQuoteQty' in t)
+                         || ('side' in t && ('status' in t || 'type' in t));
+    const looksLikeFill  = ('isBuyer' in t) || ('commissionAsset' in t);
+
+    if (looksLikeOrder) {
+      // Only count fills (FILLED or PARTIALLY_FILLED).
+      const status = String(t.status || '').toUpperCase();
+      if (status && status !== 'FILLED' && status !== 'PARTIALLY_FILLED') continue;
+      const qty  = parseFloat(t.executedQty) || 0;
+      const cost = parseFloat(t.cummulativeQuoteQty) || 0;
+      if (qty <= 1e-12 || cost <= 0) continue;
+      const side = String(t.side || '').toUpperCase();
+      const time = parseInt(t.updateTime || t.time || 0, 10) || 0;
+      ordersByTime.push({
+        isBuyer:  side === 'BUY',
+        qty,
+        quoteQty: cost,
+        fees: cost * FEE_APPROX_PER_SIDE,   // approximated — see header
+        time,
+      });
+    } else if (looksLikeFill) {
+      // Group per-fill rows into per-order rollups so multi-fill orders
+      // don't get processed as N separate stack entries.
+      const oid = String(t.orderId || t.id || '');
+      if (!oid) continue;
+      let g = fillsByOrderId.get(oid);
+      if (!g) {
+        g = {
+          isBuyer: !!t.isBuyer,
+          qty: 0, quoteQty: 0, fees: 0,
+          time: parseInt(t.time || 0, 10) || 0,
+        };
+        fillsByOrderId.set(oid, g);
+      }
+      g.qty      += parseFloat(t.qty)      || 0;
+      g.quoteQty += parseFloat(t.quoteQty) || 0;
+      // Convert commission to USDT (matches iter97 on premium.html).
+      const c = parseFloat(t.commission) || 0;
+      const p = parseFloat(t.price) || 0;
+      const sym = String(t.symbol || '').toUpperCase();
+      const asset = String(t.commissionAsset || '').toUpperCase();
+      const base = sym.endsWith('USDT') ? sym.slice(0, -4) : '';
+      if (asset === 'USDT')                        g.fees += c;
+      else if (asset === base && p > 0)            g.fees += c * p;
+      else if (asset === 'BNB' && (window.__bnbUsdtPrice || 0) > 0) {
+        g.fees += c * window.__bnbUsdtPrice;
+      }
+      if ((t.time || 0) > g.time) g.time = parseInt(t.time, 10) || g.time;
     }
-    g.qty      += parseFloat(t.qty)      || 0;
-    g.quoteQty += parseFloat(t.quoteQty) || 0;
-    // iter138 — convert commission to USDT (USDT/base/BNB), matching
-    // the iter97 logic on premium.html.  Unknown asset → left as 0.
-    const c = parseFloat(t.commission) || 0;
-    const p = parseFloat(t.price) || 0;
-    const sym = String(t.symbol || '').toUpperCase();
-    const asset = String(t.commissionAsset || '').toUpperCase();
-    const base = sym.endsWith('USDT') ? sym.slice(0, -4) : '';
-    if (asset === 'USDT')                              g.commissionUsdt += c;
-    else if (asset === base && p > 0)                  g.commissionUsdt += c * p;
-    else if (asset === 'BNB' && (window.__bnbUsdtPrice || 0) > 0) {
-      g.commissionUsdt += c * window.__bnbUsdtPrice;
-    }
-    if ((t.time || 0) > g.time) g.time = t.time || 0;
   }
-  const groups = [...byId.values()].sort((a, b) => a.time - b.time);
+  for (const g of fillsByOrderId.values()) ordersByTime.push(g);
+
+  ordersByTime.sort((a, b) => a.time - b.time);
+
+  // ── LIFO walk: BUY pushes, SELL pops the newest open buy first. ───
   const stack = [];
-  for (const g of groups) {
-    if (g.isBuyer) {
-      stack.push({ qty: g.qty, cost: g.quoteQty, fees: g.commissionUsdt });
+  for (const o of ordersByTime) {
+    if (o.qty <= 1e-12) continue;
+    if (o.isBuyer) {
+      stack.push({ qty: o.qty, cost: o.quoteQty, fees: o.fees });
       continue;
     }
-    let remaining = g.qty;
+    let remaining = o.qty;
     while (remaining > 1e-12 && stack.length) {
       const buy = stack[stack.length - 1];
       if (buy.qty <= 1e-12) { stack.pop(); continue; }
@@ -1062,6 +1108,7 @@ function computeOpenLIFO(rawTrades){
       remaining -= take;
     }
   }
+
   if (!stack.length) return { qty: 0, cost: 0, fees: 0, avgPrice: 0 };
   const sum = stack.reduce(
     (a, x) => ({ qty: a.qty + x.qty, cost: a.cost + x.cost, fees: a.fees + x.fees }),
