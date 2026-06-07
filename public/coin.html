@@ -1401,6 +1401,9 @@ async function toggleNotif(){
       });
       setTimeout(() => { try { n.close(); } catch(_){} }, 5000);
     } catch(_){}
+    // iter123 — initialise the WebAudio context inside the user gesture
+    // so the first real ping can play (browsers gate ctx on a gesture).
+    try { bnPlayPing(); } catch(_){}
   } else {
     updateNotifButton();
   }
@@ -1428,40 +1431,111 @@ function updateNotifButton(){
   }
 }
 
+// iter123 — in-tab cues (audio ping + title flash) that work even if
+// the browser has notifications blocked or the operator hasn't yet
+// clicked '🔕 Enable pop-ups'.  WebAudio context is created lazily
+// (browsers gate it on a user gesture, which clicking the toggle
+// provides; otherwise the first ping silently fails and the title
+// flash still works).
+let _bnAudioCtx = null;
+function bnPlayPing(){
+  try {
+    if (!_bnAudioCtx) _bnAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = _bnAudioCtx;
+    const now = ctx.currentTime;
+    // Two-tone chirp: short rising "ding"
+    [
+      { freq: 880,  start: 0.00, dur: 0.10 },
+      { freq: 1320, start: 0.10, dur: 0.14 },
+    ].forEach(t => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = t.freq;
+      gain.gain.setValueAtTime(0.0001, now + t.start);
+      gain.gain.exponentialRampToValueAtTime(0.18, now + t.start + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + t.start + t.dur);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now + t.start);
+      osc.stop(now + t.start + t.dur + 0.02);
+    });
+  } catch(_){}
+}
+
+let _bnOriginalTitle = null;
+let _bnTitleFlashTimer = null;
+let _bnTitleFlashStep = 0;
+function bnFlashTitle(label){
+  if (_bnOriginalTitle == null) _bnOriginalTitle = document.title;
+  if (_bnTitleFlashTimer) clearInterval(_bnTitleFlashTimer);
+  _bnTitleFlashStep = 0;
+  const flashLabel = '🔥 ' + label;
+  const tick = () => {
+    document.title = (_bnTitleFlashStep % 2 === 0) ? flashLabel : _bnOriginalTitle;
+    _bnTitleFlashStep++;
+    if (_bnTitleFlashStep >= 16){
+      clearInterval(_bnTitleFlashTimer);
+      _bnTitleFlashTimer = null;
+      document.title = _bnOriginalTitle;
+    }
+  };
+  tick();
+  _bnTitleFlashTimer = setInterval(tick, 750);
+  // Stop flashing once the operator focuses the tab again.
+  const stopOnFocus = () => {
+    if (_bnTitleFlashTimer){ clearInterval(_bnTitleFlashTimer); _bnTitleFlashTimer = null; }
+    document.title = _bnOriginalTitle || document.title;
+    window.removeEventListener('focus', stopOnFocus);
+  };
+  window.addEventListener('focus', stopOnFocus, { once: true });
+}
+
 function notifyNewBuys(topBuys){
-  if (!notifLive() || !topBuys || !topBuys.length) return;
-  const newestTs = topBuys.reduce((m, e) => Math.max(m, e.ts || 0), 0);
-  // If the tab is in focus, the operator is already watching — bump
-  // the watermark silently so we don't spam them while they scroll.
-  if (document.visibilityState === 'visible' && document.hasFocus()){
+  if (!topBuys || !topBuys.length) return;
+  // iter123 — watermark is shared by ALL in-tab cues (audio + title
+  // + pop-up).  If pop-ups are off but audio/title are on the page,
+  // we still want each new signal to fire exactly once.
+  const watermark = parseInt(sessionStorage.getItem(NOTIF_TS_KEY) || '0', 10);
+  // On the FIRST tick after page load, if no watermark exists, anchor
+  // it to the newest current entry so we don't ping for back-history.
+  if (!watermark){
+    const newestTs = topBuys.reduce((m, e) => Math.max(m, e.ts || 0), 0);
     if (newestTs) sessionStorage.setItem(NOTIF_TS_KEY, String(newestTs));
     return;
   }
-  const watermark = parseInt(sessionStorage.getItem(NOTIF_TS_KEY) || '0', 10);
-  // Fire in chronological order, cap to most-recent 3 so we never
-  // throw 5 pop-ups at once.
   const fresh = topBuys
     .filter(e => (e.ts || 0) > watermark)
     .sort((a, b) => (a.ts || 0) - (b.ts || 0))
-    .slice(-3);
+    .slice(-3);  // cap so a burst of 5 doesn't fire 5 pop-ups
   if (!fresh.length) return;
-  for (const ev of fresh){
-    try {
-      const sym = ev.symbol || '?';
-      const detector = (ev.kind || 'signal').toUpperCase().replace(/_/g, ' ');
-      const priceStr = (ev.signal_price != null ? ev.signal_price
-                      : ev.price != null ? ev.price : null);
-      const priceTail = priceStr != null ? ` @ $${(+priceStr).toPrecision(6)}` : '';
-      const n = new Notification(`🔥 ${sym} — ${detector}`, {
-        body: `Strong BUY signal${priceTail}. Click to open dashboard.`,
-        tag: `bn-buy-${sym}-${ev.kind}-${ev.ts}`,  // de-dup if two ticks race
-        renotify: false,
-      });
-      n.onclick = () => { try { window.focus(); } catch(_){} n.close(); };
-      // Auto-close after 12s — many OSs already auto-hide, but enforce it.
-      setTimeout(() => { try { n.close(); } catch(_){} }, 12000);
-    } catch(_){}
+
+  // In-tab cues — fire ONCE per tick regardless of how many fresh
+  // entries arrived.  Always fires (no permission needed).
+  try { bnPlayPing(); } catch(_){}
+  try { bnFlashTitle(`${fresh.length} new BUY signal${fresh.length === 1 ? '' : 's'}`); } catch(_){}
+
+  // Browser pop-up — gated on the permission toggle.  iter123 drops
+  // the focus-skip so the operator sees the pop-up even while the
+  // BookNow tab is in front (Chrome handles that gracefully).
+  if (notifLive()){
+    for (const ev of fresh){
+      try {
+        const sym = ev.symbol || '?';
+        const detector = (ev.kind || 'signal').toUpperCase().replace(/_/g, ' ');
+        const priceStr = (ev.signal_price != null ? ev.signal_price
+                        : ev.price != null ? ev.price : null);
+        const priceTail = priceStr != null ? ` @ $${(+priceStr).toPrecision(6)}` : '';
+        const n = new Notification(`🔥 ${sym} — ${detector}`, {
+          body: `Strong BUY signal${priceTail}. Click to open dashboard.`,
+          tag: `bn-buy-${sym}-${ev.kind}-${ev.ts}`,  // de-dup if two ticks race
+          renotify: false,
+        });
+        n.onclick = () => { try { window.focus(); } catch(_){} n.close(); };
+        setTimeout(() => { try { n.close(); } catch(_){} }, 12000);
+      } catch(_){}
+    }
   }
+
   sessionStorage.setItem(NOTIF_TS_KEY, String(fresh[fresh.length - 1].ts));
 }
 
