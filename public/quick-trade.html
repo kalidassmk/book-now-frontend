@@ -57,6 +57,40 @@
   }
   .bn-link:hover { background:rgba(240,185,11,.22); }
 
+  /* ── Chart panel (iter126) ── */
+  .chart-wrap { background:var(--panel); border:1px solid var(--border); border-radius:12px; margin-bottom:14px; overflow:hidden; }
+  .chart-head {
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    padding:8px 14px; border-bottom:1px solid var(--border);
+    font-size:11px; color:var(--muted);
+  }
+  .tf-tabs { display:flex; gap:2px; }
+  .tf-tabs button {
+    padding:4px 10px; background:transparent; border:0; cursor:pointer;
+    color:var(--muted); font-weight:600; font-size:11px; border-radius:5px;
+    font-variant-numeric:tabular-nums;
+  }
+  .tf-tabs button:hover { color:var(--text); background:rgba(255,255,255,.04); }
+  .tf-tabs button.active { background:var(--panel2); color:var(--amber); }
+  .ohlc-strip {
+    display:flex; gap:14px; flex-wrap:wrap; font-size:11px;
+    font-variant-numeric:tabular-nums; font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  }
+  .ohlc-strip span { color:var(--muted); }
+  .ohlc-strip .lbl { color:var(--muted); }
+  .ohlc-strip .v { color:var(--text); font-weight:600; }
+  .ohlc-strip .v.up { color:var(--green); }
+  .ohlc-strip .v.down { color:var(--red); }
+  .chart-meta { margin-left:auto; font-size:10px; color:var(--muted); }
+  .chart-canvas { position:relative; width:100%; height:380px; background:var(--panel); }
+  .ma-legend { display:flex; gap:10px; font-size:11px; }
+  .ma-legend .ma { display:inline-flex; align-items:center; gap:4px; color:var(--muted); }
+  .ma-legend .ma .swatch { width:10px; height:3px; border-radius:2px; }
+  .chart-hint {
+    font-size:10px; color:var(--muted); text-align:center;
+    padding:4px 14px; border-top:1px solid var(--border); background:var(--panel2);
+  }
+
   /* ── Main grid ── */
   .grid {
     display:grid;
@@ -238,6 +272,42 @@
     <div id="conn-pill" class="conn-pill"><span class="dot"></span><span id="conn-text">Connecting…</span></div>
   </div>
 
+  <!-- iter126 — Live candlestick chart panel.  Historical klines via REST,
+       live updates via <sym>@kline_<tf> WebSocket on a separate connection so
+       flipping the timeframe doesn't disrupt the order book. -->
+  <div class="chart-wrap">
+    <div class="chart-head">
+      <span class="lbl">Time</span>
+      <div class="tf-tabs" id="tf-tabs">
+        <button data-tf="1s"  >1s</button>
+        <button data-tf="1m" class="active">1m</button>
+        <button data-tf="5m"  >5m</button>
+        <button data-tf="15m" >15m</button>
+        <button data-tf="1h"  >1h</button>
+        <button data-tf="4h"  >4h</button>
+        <button data-tf="1d"  >1d</button>
+        <button data-tf="1w"  >1w</button>
+        <button data-tf="1M"  >1M</button>
+      </div>
+      <div class="ohlc-strip" id="ohlc-strip">
+        <span><span class="lbl" id="ohlc-time">—</span></span>
+        <span><span class="lbl">Open</span> <span class="v" id="ohlc-o">—</span></span>
+        <span><span class="lbl">High</span> <span class="v" id="ohlc-h">—</span></span>
+        <span><span class="lbl">Low</span> <span class="v" id="ohlc-l">—</span></span>
+        <span><span class="lbl">Close</span> <span class="v" id="ohlc-c">—</span></span>
+        <span><span class="lbl">Change</span> <span class="v" id="ohlc-chg">—</span></span>
+        <span><span class="lbl">Range</span> <span class="v" id="ohlc-rng">—</span></span>
+      </div>
+      <div class="ma-legend">
+        <span class="ma"><span class="swatch" style="background:#f0b90b"></span>MA(7) <span class="v" id="ma7-val">—</span></span>
+        <span class="ma"><span class="swatch" style="background:#e91e63"></span>MA(25) <span class="v" id="ma25-val">—</span></span>
+      </div>
+      <span class="chart-meta" id="chart-meta">—</span>
+    </div>
+    <div id="chart-canvas" class="chart-canvas"></div>
+    <div class="chart-hint">💡 Click any candle to copy its CLOSE price into the order form · scroll to zoom · drag to pan</div>
+  </div>
+
   <!-- 3-column trading grid -->
   <div class="grid">
     <!-- LEFT — order book -->
@@ -331,6 +401,10 @@
 
 <div id="toasts" class="toasts"></div>
 
+<!-- iter126 — TradingView lightweight-charts (~40KB gz, Apache 2.0).
+     Loaded from jsdelivr CDN; falls back to unpkg if jsdelivr is down. -->
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"
+        onerror="this.onerror=null;this.src='https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js'"></script>
 <script>
 /* ─── iter125 — Quick Trade ─────────────────────────────────────────────
    Browser ↔ Binance WS gives us depth20@100ms + ticker + aggTrade —
@@ -816,6 +890,233 @@ async function cancelOrder(sym, oid){
 }
 window.cancelOrder = cancelOrder;
 setInterval(loadOpenOrders, 5000);
+
+// ── iter126 — Candlestick chart (TradingView lightweight-charts) ────
+// Two pieces:
+//   1. Historical klines via Binance REST  (one-shot per symbol+tf)
+//   2. Live updates via <sym>@kline_<tf> WS on a SEPARATE connection
+//      so changing the timeframe doesn't disrupt the order book.
+const SUPPORTED_TFS = new Set(['1s','1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d','3d','1w','1M']);
+const TF_SEC = {
+  '1s':1, '1m':60, '3m':180, '5m':300, '15m':900, '30m':1800,
+  '1h':3600, '2h':7200, '4h':14400, '6h':21600, '8h':28800, '12h':43200,
+  '1d':86400, '3d':259200, '1w':604800, '1M':2592000,
+};
+
+let chart = null;
+let candleSeries = null;
+let volSeries = null;
+let ma7Series = null;
+let ma25Series = null;
+let klineWs = null;
+let _candles = [];  // local cache of {time, open, high, low, close, volume}
+let _currentTf = '1m';
+let _resizeBound = false;
+
+function initChart(){
+  if (chart) return;
+  if (!window.LightweightCharts) {
+    setTimeout(initChart, 200); return;  // CDN not arrived yet
+  }
+  const container = $('chart-canvas');
+  chart = LightweightCharts.createChart(container, {
+    layout: { background: { color: '#141925' }, textColor: '#8a93a6' },
+    grid:   { vertLines: { color: '#1b2130' }, horzLines: { color: '#1b2130' } },
+    crosshair: { mode: 0 },  // magnet off → free crosshair
+    rightPriceScale: { borderColor: '#232b3d', scaleMargins: { top: 0.06, bottom: 0.28 } },
+    timeScale:       { borderColor: '#232b3d', timeVisible: true, secondsVisible: true },
+    width: container.clientWidth, height: container.clientHeight,
+  });
+  candleSeries = chart.addCandlestickSeries({
+    upColor: '#16c784', downColor: '#ea3943',
+    wickUpColor: '#16c784', wickDownColor: '#ea3943',
+    borderVisible: false, priceLineVisible: true,
+  });
+  volSeries = chart.addHistogramSeries({
+    priceFormat: { type: 'volume' }, priceScaleId: '',
+    color: 'rgba(75,159,255,.45)',
+  });
+  volSeries.priceScale().applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
+  ma7Series  = chart.addLineSeries({ color: '#f0b90b', lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+  ma25Series = chart.addLineSeries({ color: '#e91e63', lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+
+  // Click any candle → copy CLOSE into the price field
+  chart.subscribeClick(param => {
+    const c = param.seriesData.get(candleSeries);
+    if (c && c.close != null) {
+      $('f-price').value = c.close;
+      syncFromPrice();
+      toast('ok', 'Price copied', `${fmtPrice(c.close)} → order form`);
+    }
+  });
+
+  // Crosshair-move updates OHLC strip
+  chart.subscribeCrosshairMove(param => {
+    if (!param || !param.seriesData) return updateOhlcStrip(_candles[_candles.length - 1]);
+    const c = param.seriesData.get(candleSeries);
+    if (c) updateOhlcStrip({ ...c, time: param.time });
+    else   updateOhlcStrip(_candles[_candles.length - 1]);
+  });
+
+  // Resize chart on window resize
+  if (!_resizeBound) {
+    window.addEventListener('resize', () => {
+      if (chart && $('chart-canvas')) chart.applyOptions({
+        width: $('chart-canvas').clientWidth,
+        height: $('chart-canvas').clientHeight,
+      });
+    });
+    _resizeBound = true;
+  }
+}
+
+function fmtUnixToLabel(ts, tf){
+  if (!ts) return '—';
+  const ms = (ts < 1e12) ? ts * 1000 : ts;
+  const d = new Date(ms);
+  const intra = ['1s','1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h'].includes(tf);
+  if (intra) {
+    return d.toLocaleString(undefined, { hour12: false, year:'2-digit', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+  }
+  return d.toLocaleDateString();
+}
+
+function updateOhlcStrip(c){
+  if (!c) return;
+  const o = +c.open, h = +c.high, l = +c.low, cl = +c.close;
+  const chg = (o > 0) ? ((cl - o) / o) * 100 : 0;
+  const rng = (o > 0) ? ((h - l) / o) * 100 : 0;
+  $('ohlc-time').textContent = fmtUnixToLabel(c.time, _currentTf);
+  $('ohlc-o').textContent = fmtPrice(o);
+  $('ohlc-h').textContent = fmtPrice(h);
+  $('ohlc-l').textContent = fmtPrice(l);
+  $('ohlc-c').textContent = fmtPrice(cl);
+  $('ohlc-c').className = 'v ' + (cl >= o ? 'up' : 'down');
+  $('ohlc-chg').textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
+  $('ohlc-chg').className = 'v ' + (chg >= 0 ? 'up' : 'down');
+  $('ohlc-rng').textContent = rng.toFixed(2) + '%';
+}
+
+function computeMA(period){
+  if (_candles.length < period) return [];
+  const out = [];
+  let sum = 0;
+  for (let i = 0; i < _candles.length; i++){
+    sum += _candles[i].close;
+    if (i >= period) sum -= _candles[i - period].close;
+    if (i >= period - 1) out.push({ time: _candles[i].time, value: sum / period });
+  }
+  return out;
+}
+
+function updateMA(){
+  if (!ma7Series || !ma25Series) return;
+  const ma7 = computeMA(7);
+  const ma25 = computeMA(25);
+  ma7Series.setData(ma7);
+  ma25Series.setData(ma25);
+  if (ma7.length) $('ma7-val').textContent = fmtPrice(ma7[ma7.length - 1].value);
+  if (ma25.length) $('ma25-val').textContent = fmtPrice(ma25[ma25.length - 1].value);
+}
+
+async function loadHistoricalKlines(symbol, interval){
+  // Binance REST — public, no auth needed.  500 bars is plenty.
+  const url = `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=500`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('klines HTTP ' + r.status);
+  const arr = await r.json();
+  _candles = arr.map(row => ({
+    time:   Math.floor(row[0] / 1000),       // open-time → unix seconds
+    open:   parseFloat(row[1]),
+    high:   parseFloat(row[2]),
+    low:    parseFloat(row[3]),
+    close:  parseFloat(row[4]),
+    volume: parseFloat(row[5]),
+  }));
+  if (!candleSeries) return;
+  candleSeries.setData(_candles.map(c => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
+  volSeries.setData(_candles.map(c => ({
+    time: c.time, value: c.volume,
+    color: c.close >= c.open ? 'rgba(22,199,132,.55)' : 'rgba(234,57,67,.55)',
+  })));
+  updateMA();
+  updateOhlcStrip(_candles[_candles.length - 1]);
+  $('chart-meta').textContent = `${_candles.length} bars · ${interval}`;
+}
+
+function connectKlineWs(symbol, interval){
+  if (klineWs) {
+    try { klineWs.close(); } catch(_){}
+    klineWs = null;
+  }
+  const s = String(symbol).toLowerCase();
+  const url = `wss://stream.binance.com:9443/ws/${s}@kline_${interval}`;
+  let ws;
+  try { ws = new WebSocket(url); } catch(_) { return; }
+  klineWs = ws;
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch(_) { return; }
+    if (msg.e !== 'kline' || !msg.k) return;
+    const k = msg.k;
+    const candle = {
+      time:   Math.floor(k.t / 1000),
+      open:   parseFloat(k.o),
+      high:   parseFloat(k.h),
+      low:    parseFloat(k.l),
+      close:  parseFloat(k.c),
+      volume: parseFloat(k.v),
+    };
+    // Replace last if same open-time, else append a new bar.
+    const last = _candles[_candles.length - 1];
+    if (last && last.time === candle.time) {
+      _candles[_candles.length - 1] = candle;
+    } else if (!last || candle.time > last.time) {
+      _candles.push(candle);
+      if (_candles.length > 1000) _candles.shift();
+    }
+    if (candleSeries) candleSeries.update({ time: candle.time, open: candle.open, high: candle.high, low: candle.low, close: candle.close });
+    if (volSeries) volSeries.update({
+      time: candle.time, value: candle.volume,
+      color: candle.close >= candle.open ? 'rgba(22,199,132,.55)' : 'rgba(234,57,67,.55)',
+    });
+    updateMA();
+    updateOhlcStrip(candle);
+  };
+  ws.onclose = () => {
+    // Auto-reconnect after 1.5s, but only if this is still the current ws (avoid races on tf change).
+    setTimeout(() => {
+      if (klineWs === ws) connectKlineWs(S.symbol, _currentTf);
+    }, 1500);
+  };
+}
+
+async function applyTimeframe(tf){
+  if (!SUPPORTED_TFS.has(tf)) return;
+  _currentTf = tf;
+  document.querySelectorAll('#tf-tabs button').forEach(b => {
+    b.classList.toggle('active', b.dataset.tf === tf);
+  });
+  initChart();
+  try {
+    await loadHistoricalKlines(S.symbol, tf);
+    connectKlineWs(S.symbol, tf);
+  } catch (e) {
+    toast('error', 'Chart load failed', e.message);
+  }
+}
+
+document.querySelectorAll('#tf-tabs button').forEach(b => {
+  b.addEventListener('click', () => applyTimeframe(b.dataset.tf));
+});
+
+// Hook into applySymbol: whenever the symbol changes, reload chart for the same tf.
+const _origApplySymbol = applySymbol;
+applySymbol = function(raw){
+  _origApplySymbol(raw);
+  // Reload chart for the new symbol with whatever tf is currently active.
+  applyTimeframe(_currentTf);
+};
 
 // ── Boot ────────────────────────────────────────────────────────────
 (function boot(){
