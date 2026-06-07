@@ -51,17 +51,18 @@
             </div>
 
             <nav class="flex-1 space-y-1">
-                <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl bg-brand/10 text-brand font-medium group transition-all" data-page="dashboard">
+                <!-- iter114 — Trade History is now the default landing; Dashboard demoted to second item -->
+                <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl bg-brand/10 text-brand font-medium group transition-all" data-page="history">
+                    <i data-lucide="history" class="w-5 h-5"></i>
+                    Trade History
+                </a>
+                <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-all" data-page="dashboard">
                     <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
                     Dashboard
                 </a>
                 <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-all" data-page="orders">
                     <i data-lucide="list-ordered" class="w-5 h-5"></i>
                     Open Orders
-                </a>
-                <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-all" data-page="history">
-                    <i data-lucide="history" class="w-5 h-5"></i>
-                    Trade History
                 </a>
                 <a href="#" class="flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-white/5 text-gray-400 hover:text-white transition-all" data-page="scanner">
                     <i data-lucide="zap" class="w-5 h-5"></i>
@@ -87,7 +88,7 @@
         <!-- Header -->
         <header class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-10">
             <div>
-                <h2 class="text-2xl font-bold text-white mb-1" id="page-title">Portfolio Overview</h2>
+                <h2 class="text-2xl font-bold text-white mb-1" id="page-title">Trade History</h2>
                 <p class="text-gray-500 text-sm">Real-time performance and asset tracking</p>
             </div>
             
@@ -104,8 +105,8 @@
             </div>
         </header>
 
-        <!-- DASHBOARD PAGE -->
-        <div id="page-dashboard" class="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <!-- DASHBOARD PAGE — iter114: hidden by default, Trade History is now landing -->
+        <div id="page-dashboard" class="hidden space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             
             <!-- Account Summary Cards -->
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -224,13 +225,99 @@
         </div>
 
         <!-- HISTORY PAGE (Hidden by default) -->
-        <div id="page-history" class="hidden space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <!-- iter114 — Trade History is now the default landing page -->
+        <div id="page-history" class="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+
+            <!-- iter112 — P&L by Day / Week / Month with date range -->
+            <div class="glass rounded-[2rem] overflow-hidden">
+                <div class="p-6 border-b border-white/5">
+                    <div class="flex items-start justify-between flex-wrap gap-4">
+                        <div>
+                            <h3 class="text-lg font-bold">📅 Daily P&amp;L</h3>
+                            <p class="text-xs text-gray-500 mt-1">Profit / loss aggregated by date — pick a range, switch period.</p>
+                        </div>
+                        <div id="pnl-range-summary" class="text-right">
+                            <div class="text-[10px] uppercase tracking-widest font-bold text-gray-500">Range Net</div>
+                            <div id="pnl-range-total" class="text-2xl font-black mono text-gray-500">$0.00</div>
+                            <div id="pnl-range-meta" class="text-[10px] text-gray-500 mt-1 mono">—</div>
+                        </div>
+                    </div>
+
+                    <!-- Date range pickers + presets -->
+                    <div class="mt-4 flex flex-wrap items-center gap-3">
+                        <label class="text-[11px] text-gray-500 uppercase tracking-widest font-bold">From</label>
+                        <input id="pnl-from" type="date" class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm" />
+                        <label class="text-[11px] text-gray-500 uppercase tracking-widest font-bold">To</label>
+                        <input id="pnl-to" type="date" class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm" />
+
+                        <div class="inline-flex rounded-lg overflow-hidden border border-white/10 text-[11px] ml-2" id="pnl-presets">
+                            <button data-preset="today" class="px-3 py-1.5 hover:bg-white/5 transition-all">Today</button>
+                            <button data-preset="yesterday" class="px-3 py-1.5 hover:bg-white/5 transition-all border-l border-white/10">Yesterday</button>
+                            <button data-preset="7d" class="px-3 py-1.5 hover:bg-white/5 transition-all border-l border-white/10">Last 7d</button>
+                            <button data-preset="30d" class="px-3 py-1.5 hover:bg-white/5 transition-all border-l border-white/10">Last 30d</button>
+                            <button data-preset="thismonth" class="px-3 py-1.5 hover:bg-white/5 transition-all border-l border-white/10">This month</button>
+                            <button data-preset="all" class="px-3 py-1.5 hover:bg-white/5 transition-all border-l border-white/10">All time</button>
+                        </div>
+
+                        <div class="inline-flex rounded-lg overflow-hidden border border-white/10 text-[11px] ml-auto" id="pnl-period">
+                            <label class="px-3 py-1.5 cursor-pointer transition-all" data-period="day">
+                                <input type="radio" name="pnl-period" value="day" checked class="hidden" />
+                                Day
+                            </label>
+                            <label class="px-3 py-1.5 cursor-pointer transition-all border-l border-white/10" data-period="week">
+                                <input type="radio" name="pnl-period" value="week" class="hidden" />
+                                Week
+                            </label>
+                            <label class="px-3 py-1.5 cursor-pointer transition-all border-l border-white/10" data-period="month">
+                                <input type="radio" name="pnl-period" value="month" class="hidden" />
+                                Month
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-white/5 text-[10px] uppercase tracking-widest font-bold text-gray-500">
+                            <tr>
+                                <th class="px-6 py-4">Period</th>
+                                <th class="px-6 py-4">Trips</th>
+                                <th class="px-6 py-4">Symbols</th>
+                                <th class="px-6 py-4">Cost (USDT)</th>
+                                <th class="px-6 py-4">Revenue (USDT)</th>
+                                <th class="px-6 py-4">Fees</th>
+                                <th class="px-6 py-4">Net P&amp;L</th>
+                                <th class="px-6 py-4">Net %</th>
+                                <th class="px-6 py-4">Win Rate</th>
+                            </tr>
+                        </thead>
+                        <tbody id="pnl-tbody" class="text-sm divide-y divide-white/5">
+                            <tr><td colspan="9" class="px-6 py-10 text-center text-gray-500">Pick a range above…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
             <!-- iter96 — Round Trips: matched BUY→SELL pairs with NET P&L -->
             <div class="glass rounded-[2rem] overflow-hidden">
                 <div class="p-6 border-b border-white/5 flex items-center justify-between">
                     <div>
                         <h3 class="text-lg font-bold">🔁 Round Trips · NET P&amp;L</h3>
-                        <p class="text-xs text-gray-500 mt-1">Matched BUY → SELL pairs · revenue − cost − fees (0.075% × 2)</p>
+                        <p class="text-xs text-gray-500 mt-1">Matched BUY → SELL pairs · revenue − cost − fees (USDT + BNB + base-asset commissions converted)</p>
+                        <p id="bnb-rate-tag" class="text-[10px] text-amber-400 mt-1 mono">BNB rate: loading…</p>
+                        <!-- iter113 — shows which date range from the picker above is reflected here -->
+                        <p id="trips-range-tag" class="text-[10px] text-blue-300 mt-1 mono">showing: all history</p>
+                        <!-- iter111 — toggle: one row per coin (default) vs each round trip -->
+                        <div class="mt-2 inline-flex rounded-lg overflow-hidden border border-white/10 text-[11px]">
+                            <label class="px-3 py-1 cursor-pointer transition-all" data-view="summary">
+                                <input type="radio" name="trips-view" value="summary" checked class="hidden" />
+                                📦 By coin (summary)
+                            </label>
+                            <label class="px-3 py-1 cursor-pointer transition-all border-l border-white/10" data-view="trips">
+                                <input type="radio" name="trips-view" value="trips" class="hidden" />
+                                🔁 Each round trip
+                            </label>
+                        </div>
                     </div>
                     <div id="roundtrips-summary" class="text-right">
                         <div class="text-[10px] uppercase tracking-widest font-bold text-gray-500">Total Net</div>
@@ -310,7 +397,7 @@
             history: [],
             stats: {},
             btcPrice: 0,
-            activePage: 'dashboard',
+            activePage: 'history',   // iter114 — Trade History is the new landing page
             
             listeners: [],
             subscribe(callback) {
@@ -453,10 +540,49 @@
                 const groups = groupByOrder(history);
                 const trips  = matchRoundTrips(groups);
                 renderGroupedHistoryTable(groups);
-                renderRoundTripsTable(trips);
+
+                // iter113 — Round Trips table now also respects the
+                // iter112 date range picker.  The aggregator below + the
+                // per-trip table only see trips whose sellTs lands in
+                // [from, to].  Operator selects "Today" -> only today's
+                // trades show up everywhere on this tab.
+                const filt = (typeof getPnlFilters === 'function')
+                    ? getPnlFilters() : { from: null, to: null, period: 'day' };
+                const tripsInRange = (trips || []).filter(t => {
+                    const ts = Number(t.sellTs) || 0;
+                    if (filt.from && ts < filt.from) return false;
+                    if (filt.to   && ts > filt.to)   return false;
+                    return true;
+                });
+
+                // Tell the operator which range is being shown above
+                // the table.
+                const rangeTag = document.getElementById('trips-range-tag');
+                if (rangeTag) {
+                    if (!filt.from && !filt.to) {
+                        rangeTag.textContent = 'showing: all history';
+                    } else {
+                        const fromTxt = filt.from ? ymdLocal(filt.from) : '—';
+                        const toTxt   = filt.to   ? ymdLocal(filt.to)   : '—';
+                        rangeTag.textContent = `showing: ${fromTxt} → ${toTxt} (${tripsInRange.length} trips)`;
+                    }
+                }
+
+                // iter111 — pick render mode from the operator toggle.
+                const sel = document.querySelector('input[name="trips-view"]:checked');
+                const mode = sel ? sel.value : 'summary';
+                const rows = (mode === 'summary')
+                    ? consolidateTripsBySymbol(tripsInRange)
+                    : tripsInRange;
+                renderRoundTripsTable(rows, mode);
+                // iter112 — also render the Daily P&L breakdown using the
+                // FULL trips list (renderPnlByDay reads the same filter
+                // internally and applies it).
+                renderPnlByDay(trips);
                 // expose for CSV export
                 window.__lastGroups = groups;
                 window.__lastTrips  = trips;
+                window.__lastSummary = (mode === 'summary') ? rows : consolidateTripsBySymbol(tripsInRange);
             },
 
             renderStats(stats, assets, botPositions, activePositions) {
@@ -530,6 +656,81 @@
          */
         const FEE_RATE = 0.00075;   // 0.075% per side (matches backend default)
 
+        // iter 107 — Fetch the live BNB/USDT spot price so commissions paid
+        // in BNB (the default when the operator has BNB-discount enabled)
+        // can be converted to USDT for the Round Trips NET P&L math.
+        //
+        // Bug it fixes: 239 of ~370 trades pay fees in BNB. Without this
+        // setter, window.__bnbUsdtPrice stayed undefined and iter97's
+        // groupByOrder() silently ignored every BNB commission line —
+        // meaning the FEES column showed $0.0000 and NET P&L was off by
+        // up to 0.15% per round trip (huge over thousands of trips).
+        let _bnbPriceTimer = null;
+        async function fetchBnbPrice() {
+            try {
+                const r = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=BNBUSDT');
+                if (!r.ok) return null;
+                const j = await r.json();
+                const p = parseFloat(j.price);
+                if (p > 0) {
+                    window.__bnbUsdtPrice = p;
+                    // Surface it in the UI so the operator knows what
+                    // conversion rate was used. Tucked next to the
+                    // total-net counter on the Round Trips header.
+                    const bnbTag = document.getElementById('bnb-rate-tag');
+                    if (bnbTag) bnbTag.textContent = `BNB rate: $${p.toFixed(2)} (used for fee conversion)`;
+                    return p;
+                }
+            } catch (_) {}
+            return null;
+        }
+        // iter111 — bind the "By coin (summary)" vs "Each round trip"
+        // toggle so changing it re-renders without needing a refresh.
+        document.addEventListener('change', (e) => {
+            if (e.target && e.target.name === 'trips-view') {
+                // Update visual selection on the pills.
+                document.querySelectorAll('[data-view]').forEach(el => {
+                    const v = el.getAttribute('data-view');
+                    const sel = el.querySelector('input').checked;
+                    el.classList.toggle('bg-brand', sel);
+                    el.classList.toggle('text-bg', sel);
+                    el.classList.toggle('text-gray-400', !sel);
+                });
+                if (typeof UI !== 'undefined' && UI.renderHistory) {
+                    try { UI.renderHistory((typeof state !== 'undefined' && state.history) || []); } catch (_) {}
+                }
+            }
+        });
+        // Initial visual state on load.
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('[data-view]').forEach(el => {
+                const sel = el.querySelector('input').checked;
+                el.classList.toggle('bg-brand', sel);
+                el.classList.toggle('text-bg', sel);
+                el.classList.toggle('text-gray-400', !sel);
+            });
+        });
+
+        // Kick off immediately + refresh every 60s. When the price first
+        // lands AFTER a render has already run, re-render so the FEES /
+        // NET P&L columns update. `state` and `UI` are script-scope const
+        // (declared above) so we reach them directly, not via window.
+        (async () => {
+            const had = !!window.__bnbUsdtPrice;
+            await fetchBnbPrice();
+            if (!had && window.__bnbUsdtPrice && typeof UI !== 'undefined' && UI.renderHistory) {
+                try { UI.renderHistory((typeof state !== 'undefined' && state.history) || []); } catch (_) {}
+            }
+            _bnbPriceTimer = setInterval(async () => {
+                await fetchBnbPrice();
+                // Re-render every minute so the converted-fee columns track
+                // any BNB price drift (matters most over long sessions).
+                if (typeof UI !== 'undefined' && UI.renderHistory) {
+                    try { UI.renderHistory((typeof state !== 'undefined' && state.history) || []); } catch (_) {}
+                }
+            }, 60_000);
+        })();
+
         function groupByOrder(trades) {
             const byId = new Map();
             for (const t of (trades || [])) {
@@ -594,15 +795,27 @@
         }
 
         /**
-         * Match BUY → SELL pairs per symbol, walking chronologically
-         * (oldest first).  When a SELL appears after a BUY for the same
-         * symbol, we treat the pair as one round trip.  Multiple buys
-         * before a sell are aggregated (weighted-avg cost).  Multiple
-         * sells before another buy are aggregated.  The qty doesn't need
-         * to match exactly — we cap revenue/cost by the smaller side.
+         * iter109 — Match BUY → SELL pairs per symbol using LIFO accounting.
+         *
+         * Why LIFO over the previous FIFO logic:
+         *   GIGGLEUSDT history (May 17 buys + sell left 0.161 unclosed,
+         *   then Jun 06 had a clean 0.199 buy + 0.199 sell).  FIFO mixed
+         *   the leftover 0.161 from $33.13 May 17 buy with the fresh
+         *   0.199 Jun 06 buy at $26.10, producing fake buy avg = $29.31
+         *   and a phantom -$0.64 NET on what was actually a flat trade.
+         *
+         *   LIFO pulls from the MOST RECENT open buy first, so the Jun 06
+         *   sell correctly matches the Jun 06 buy and the leftover stays
+         *   in the stack as an open position (it'll match the next sell
+         *   that appears, just like in real life).
+         *
+         * Algorithm:
+         *   • openBuys[] = stack of {qty, cost, fees, firstTs}, newest at end.
+         *   • On BUY: push to stack.
+         *   • On SELL: pop from end (newest first) until sell qty consumed.
+         *     One trip per SELL, summing the buys it pulled from.
          */
         function matchRoundTrips(groups) {
-            // Sort by symbol then time ASC.
             const bySym = new Map();
             for (const g of groups) {
                 if (!bySym.has(g.symbol)) bySym.set(g.symbol, []);
@@ -611,50 +824,69 @@
             const trips = [];
             for (const [sym, arr] of bySym) {
                 arr.sort((a, b) => a.lastTime - b.lastTime);
-                // FIFO match: accumulate buys until a sell closes them.
-                let openBuyQty = 0, openBuyCost = 0, openBuyFees = 0;
-                let openBuyFirstTs = 0;
+                const openBuys = [];   // LIFO stack
                 for (const g of arr) {
                     if (g.isBuyer) {
-                        if (openBuyQty <= 0) openBuyFirstTs = g.firstTime;
-                        openBuyQty  += g.qty;
-                        openBuyCost += g.quoteQty;
-                        openBuyFees += g.commissionUsdt;
-                    } else if (openBuyQty > 0) {
-                        // SELL closes part/all of the open buy.
-                        const closeQty = Math.min(openBuyQty, g.qty);
-                        const portion  = closeQty / openBuyQty;
-                        const costPart = openBuyCost * portion;
-                        const feeBuyPart = openBuyFees * portion;
-                        const revenue  = g.quoteQty * (closeQty / g.qty);
-                        const feeSellPart = g.commissionUsdt * (closeQty / g.qty);
-                        const totalFees = feeBuyPart + feeSellPart;
-                        const net = revenue - costPart - totalFees;
-                        trips.push({
-                            symbol: sym,
-                            buyAvg:  closeQty > 0 ? costPart  / closeQty : 0,
-                            sellAvg: closeQty > 0 ? revenue   / closeQty : 0,
-                            qty: closeQty,
-                            cost: costPart,
-                            revenue: revenue,
-                            fees: totalFees,
-                            net: net,
-                            netPct: costPart > 0 ? (net / costPart) * 100 : 0,
-                            buyTs: openBuyFirstTs,
-                            sellTs: g.lastTime,
+                        openBuys.push({
+                            qty: g.qty,
+                            cost: g.quoteQty,
+                            fees: g.commissionUsdt,
+                            firstTs: g.firstTime,
                         });
-                        openBuyQty  -= closeQty;
-                        openBuyCost -= costPart;
-                        openBuyFees -= feeBuyPart;
-                        if (openBuyQty <= 0) {
-                            openBuyQty = 0; openBuyCost = 0; openBuyFees = 0;
-                        }
+                        continue;
                     }
-                    // Sells with no open buy (orphan) are skipped — they're
-                    // older positions whose buy is outside the trade window.
+                    if (!openBuys.length) continue;   // orphan sell
+
+                    let remainingSell = g.qty;
+                    let trip_buyCost = 0, trip_buyFees = 0, trip_buyQty = 0;
+                    let trip_buyTs = g.firstTime;
+                    let firstPull = true;
+                    while (remainingSell > 1e-12 && openBuys.length > 0) {
+                        const buy = openBuys[openBuys.length - 1];
+                        if (buy.qty <= 1e-12) { openBuys.pop(); continue; }
+                        const take = Math.min(buy.qty, remainingSell);
+                        const portion = take / buy.qty;
+                        const costPart = buy.cost * portion;
+                        const feePart  = buy.fees * portion;
+                        trip_buyCost += costPart;
+                        trip_buyFees += feePart;
+                        trip_buyQty  += take;
+                        // Show the operator the "start of position" =
+                        // the OLDEST buy ts pulled into this trip.  In
+                        // LIFO we hit the newest first, so the LAST pull
+                        // is the oldest.  Update only if not yet set.
+                        if (firstPull) { trip_buyTs = buy.firstTs; firstPull = false; }
+                        else if (buy.firstTs < trip_buyTs) trip_buyTs = buy.firstTs;
+                        buy.qty  -= take;
+                        buy.cost -= costPart;
+                        buy.fees -= feePart;
+                        if (buy.qty <= 1e-12) openBuys.pop();
+                        remainingSell -= take;
+                    }
+                    if (trip_buyQty <= 0) continue;
+
+                    // Allocate the SELL fill's revenue + commission to
+                    // the portion of sell-qty that actually closed buys.
+                    const sellPortion = trip_buyQty / g.qty;
+                    const revenue = g.quoteQty * sellPortion;
+                    const sellFees = g.commissionUsdt * sellPortion;
+                    const totalFees = trip_buyFees + sellFees;
+                    const net = revenue - trip_buyCost - totalFees;
+                    trips.push({
+                        symbol: sym,
+                        buyAvg:  trip_buyQty > 0 ? trip_buyCost / trip_buyQty : 0,
+                        sellAvg: trip_buyQty > 0 ? revenue       / trip_buyQty : 0,
+                        qty: trip_buyQty,
+                        cost: trip_buyCost,
+                        revenue: revenue,
+                        fees: totalFees,
+                        net: net,
+                        netPct: trip_buyCost > 0 ? (net / trip_buyCost) * 100 : 0,
+                        buyTs: trip_buyTs,
+                        sellTs: g.lastTime,
+                    });
                 }
             }
-            // Newest trip first.
             trips.sort((a, b) => b.sellTs - a.sellTs);
             return trips;
         }
@@ -699,7 +931,44 @@
             }).join('');
         }
 
-        function renderRoundTripsTable(trips) {
+        // iter111 — aggregate trips so each symbol appears as a single row.
+        // Sums cost/revenue/fees/net and weight-averages the buy/sell prices.
+        // Hold "duration" becomes the span between the first buyTs and the
+        // last sellTs.
+        function consolidateTripsBySymbol(trips) {
+            const bySym = new Map();
+            for (const t of trips) {
+                let row = bySym.get(t.symbol);
+                if (!row) {
+                    row = {
+                        symbol: t.symbol,
+                        qty: 0, cost: 0, revenue: 0, fees: 0, net: 0,
+                        buyTs: t.buyTs, sellTs: t.sellTs,
+                        trips_count: 0,
+                    };
+                    bySym.set(t.symbol, row);
+                }
+                row.qty     += Number(t.qty)     || 0;
+                row.cost    += Number(t.cost)    || 0;
+                row.revenue += Number(t.revenue) || 0;
+                row.fees    += Number(t.fees)    || 0;
+                row.net     += Number(t.net)     || 0;
+                if (t.buyTs  && t.buyTs  < row.buyTs)  row.buyTs  = t.buyTs;
+                if (t.sellTs && t.sellTs > row.sellTs) row.sellTs = t.sellTs;
+                row.trips_count += 1;
+            }
+            const out = [...bySym.values()].map(r => ({
+                ...r,
+                buyAvg:  r.qty > 0 ? r.cost    / r.qty : 0,
+                sellAvg: r.qty > 0 ? r.revenue / r.qty : 0,
+                netPct:  r.cost > 0 ? (r.net / r.cost) * 100 : 0,
+            }));
+            // Sort by recency of most recent activity (sellTs desc).
+            out.sort((a, b) => (b.sellTs || 0) - (a.sellTs || 0));
+            return out;
+        }
+
+        function renderRoundTripsTable(trips, mode) {
             const tbody = document.getElementById('roundtrips-tbody');
             if (!tbody) return;
             if (!trips.length) {
@@ -707,20 +976,41 @@
                 document.getElementById('roundtrips-total').textContent = '$0.00';
                 return;
             }
+            const isSummary = mode === 'summary';
             tbody.innerHTML = trips.map(t => {
-                const netCls    = t.net >= 0 ? 'text-success' : 'text-danger';
-                const netPctCls = t.netPct >= 0 ? 'text-success' : 'text-danger';
+                // iter110 — coerce + defensive defaults so any unexpected
+                // undefined/NaN field still produces visible cells.
+                const n = (v, d) => { const x = Number(v); return Number.isFinite(x) ? x : (d ?? 0); };
+                const sym = t.symbol || '—';
+                const buyAvg = n(t.buyAvg, 0);
+                const sellAvg = n(t.sellAvg, 0);
+                const qty = n(t.qty, 0);
+                const cost = n(t.cost, 0);
+                const revenue = n(t.revenue, 0);
+                const fees = n(t.fees, 0);
+                const net = n(t.net, 0);
+                const netPct = n(t.netPct, 0);
+                const netCls    = net >= 0 ? 'text-success' : 'text-danger';
+                const netPctCls = netPct >= 0 ? 'text-success' : 'text-danger';
+                // iter110 — small NET values (under 1¢) used to render as
+                // "$0.00" with the 2-dec format, looking like "no data".
+                // Auto-pick precision so tiny NETs are visible.
+                const netDecimals = Math.abs(net) >= 1 ? 2 : (Math.abs(net) >= 0.01 ? 3 : 4);
+                // iter111 — symbol cell shows a trips_count chip in summary mode.
+                const tripsChip = (isSummary && t.trips_count > 1)
+                    ? `<span class="ml-2 text-[10px] font-mono text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded">×${t.trips_count} trips</span>`
+                    : '';
                 return `
                 <tr class="hover:bg-white/[0.02] transition-colors">
-                    <td class="px-6 py-4 font-bold text-white uppercase">${t.symbol}</td>
-                    <td class="px-6 py-4 mono text-white">${t.buyAvg.toFixed(6)}</td>
-                    <td class="px-6 py-4 mono text-white">${t.sellAvg.toFixed(6)}</td>
-                    <td class="px-6 py-4 mono text-gray-300">${t.qty.toFixed(4)}</td>
-                    <td class="px-6 py-4 mono text-gray-300">${fmtUsd(t.cost)}</td>
-                    <td class="px-6 py-4 mono text-gray-300">${fmtUsd(t.revenue)}</td>
-                    <td class="px-6 py-4 mono text-gray-400">${fmtUsd(t.fees, 4)}</td>
-                    <td class="px-6 py-4 mono font-bold ${netCls}">${t.net >= 0 ? '+' : ''}${fmtUsd(t.net)}</td>
-                    <td class="px-6 py-4 mono font-bold ${netPctCls}">${t.netPct >= 0 ? '+' : ''}${t.netPct.toFixed(2)}%</td>
+                    <td class="px-6 py-4 font-bold text-white uppercase">${sym}${tripsChip}</td>
+                    <td class="px-6 py-4 mono text-white">${buyAvg.toFixed(6)}</td>
+                    <td class="px-6 py-4 mono text-white">${sellAvg.toFixed(6)}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${qty.toFixed(4)}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${fmtUsd(cost)}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${fmtUsd(revenue)}</td>
+                    <td class="px-6 py-4 mono text-gray-400">${fmtUsd(fees, 4)}</td>
+                    <td class="px-6 py-4 mono font-bold ${netCls}">${net >= 0 ? '+' : ''}${fmtUsd(net, netDecimals)}</td>
+                    <td class="px-6 py-4 mono font-bold ${netPctCls}">${netPct >= 0 ? '+' : ''}${netPct.toFixed(2)}%</td>
                     <td class="px-6 py-4 text-gray-500 text-xs">${holdStr(t.buyTs, t.sellTs)}</td>
                 </tr>`;
             }).join('');
@@ -729,6 +1019,212 @@
             totalEl.textContent = (totalNet >= 0 ? '+' : '') + fmtUsd(totalNet);
             totalEl.className = `text-2xl font-black mono ${totalNet >= 0 ? 'text-success' : 'text-danger'}`;
         }
+
+        // ──────────────────────────────────────────────────────────────
+        // iter 112 — Daily P&L breakdown with date range + period bucket.
+        // Bucket trips by trip.sellTs (when the trade completed).
+        // ──────────────────────────────────────────────────────────────
+        function ymdLocal(ts) {
+            const d = new Date(ts);
+            const yyyy = d.getFullYear();
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const dd = String(d.getDate()).padStart(2, '0');
+            return `${yyyy}-${mm}-${dd}`;
+        }
+        function startOfWeek(ts) {
+            const d = new Date(ts);
+            d.setHours(0,0,0,0);
+            const day = d.getDay();           // 0=Sun
+            const diff = (day === 0 ? -6 : 1 - day);  // Monday as week start
+            d.setDate(d.getDate() + diff);
+            return d;
+        }
+        function bucketKey(ts, period) {
+            const d = new Date(ts);
+            if (period === 'week') {
+                const w = startOfWeek(ts);
+                return ymdLocal(w.getTime());
+            }
+            if (period === 'month') {
+                return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+            }
+            return ymdLocal(ts);
+        }
+        function bucketLabel(key, period) {
+            if (period === 'month') {
+                const [y, m] = key.split('-');
+                const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                return `${months[parseInt(m,10)-1]} ${y}`;
+            }
+            if (period === 'week') {
+                const d = new Date(key + 'T00:00:00');
+                const end = new Date(d); end.setDate(end.getDate() + 6);
+                const fmt = (x) => `${String(x.getMonth()+1).padStart(2,'0')}/${String(x.getDate()).padStart(2,'0')}`;
+                return `Week of ${fmt(d)} → ${fmt(end)}`;
+            }
+            // day
+            const d = new Date(key + 'T00:00:00');
+            const today = new Date(); today.setHours(0,0,0,0);
+            const yest = new Date(today); yest.setDate(yest.getDate() - 1);
+            if (d.getTime() === today.getTime()) return 'Today · ' + key;
+            if (d.getTime() === yest.getTime())  return 'Yesterday · ' + key;
+            const wd = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()];
+            return `${wd} ${key}`;
+        }
+
+        function getPnlFilters() {
+            const fromEl = document.getElementById('pnl-from');
+            const toEl   = document.getElementById('pnl-to');
+            const from = fromEl && fromEl.value ? new Date(fromEl.value + 'T00:00:00').getTime() : null;
+            const to   = toEl   && toEl.value   ? new Date(toEl.value   + 'T23:59:59').getTime() : null;
+            const p = document.querySelector('input[name="pnl-period"]:checked');
+            const period = p ? p.value : 'day';
+            return { from, to, period };
+        }
+
+        function applyPreset(preset) {
+            const fromEl = document.getElementById('pnl-from');
+            const toEl   = document.getElementById('pnl-to');
+            if (!fromEl || !toEl) return;
+            const today = new Date(); today.setHours(0,0,0,0);
+            const setRange = (from, to) => {
+                fromEl.value = from ? ymdLocal(from.getTime()) : '';
+                toEl.value   = to   ? ymdLocal(to.getTime())   : '';
+            };
+            if (preset === 'today') {
+                setRange(today, today);
+            } else if (preset === 'yesterday') {
+                const y = new Date(today); y.setDate(y.getDate() - 1);
+                setRange(y, y);
+            } else if (preset === '7d') {
+                const s = new Date(today); s.setDate(s.getDate() - 6);
+                setRange(s, today);
+            } else if (preset === '30d') {
+                const s = new Date(today); s.setDate(s.getDate() - 29);
+                setRange(s, today);
+            } else if (preset === 'thismonth') {
+                const s = new Date(today.getFullYear(), today.getMonth(), 1);
+                setRange(s, today);
+            } else if (preset === 'all') {
+                fromEl.value = '';
+                toEl.value   = '';
+            }
+            if (typeof UI !== 'undefined' && UI.renderHistory) {
+                try { UI.renderHistory(state.history || []); } catch (_) {}
+            }
+        }
+
+        function renderPnlByDay(trips) {
+            const tbody = document.getElementById('pnl-tbody');
+            if (!tbody) return;
+            const totalEl = document.getElementById('pnl-range-total');
+            const metaEl  = document.getElementById('pnl-range-meta');
+            const { from, to, period } = getPnlFilters();
+            const inRange = (trips || []).filter(t => {
+                const ts = Number(t.sellTs) || 0;
+                if (from && ts < from) return false;
+                if (to && ts > to) return false;
+                return true;
+            });
+            if (!inRange.length) {
+                tbody.innerHTML = '<tr><td colspan="9" class="px-6 py-10 text-center text-gray-500">No trades in this range</td></tr>';
+                if (totalEl) {
+                    totalEl.textContent = '$0.00';
+                    totalEl.className = 'text-2xl font-black mono text-gray-500';
+                }
+                if (metaEl) metaEl.textContent = '0 trips · 0 symbols';
+                return;
+            }
+            // Bucket
+            const buckets = new Map();
+            for (const t of inRange) {
+                const key = bucketKey(t.sellTs, period);
+                let b = buckets.get(key);
+                if (!b) {
+                    b = { key, qty:0, cost:0, revenue:0, fees:0, net:0, trips_count:0, wins:0, losses:0, symbols: new Set() };
+                    buckets.set(key, b);
+                }
+                b.qty += Number(t.qty) || 0;
+                b.cost += Number(t.cost) || 0;
+                b.revenue += Number(t.revenue) || 0;
+                b.fees += Number(t.fees) || 0;
+                b.net += Number(t.net) || 0;
+                b.trips_count += 1;
+                if ((Number(t.net) || 0) >= 0) b.wins += 1; else b.losses += 1;
+                b.symbols.add(t.symbol);
+            }
+            // Sort buckets newest first
+            const rows = [...buckets.values()].sort((a, b) => b.key.localeCompare(a.key));
+            const n = (v) => { const x = Number(v); return Number.isFinite(x) ? x : 0; };
+            tbody.innerHTML = rows.map(b => {
+                const winRate = b.trips_count > 0 ? (b.wins / b.trips_count) * 100 : 0;
+                const netPct = b.cost > 0 ? (b.net / b.cost) * 100 : 0;
+                const netCls = b.net >= 0 ? 'text-success' : 'text-danger';
+                const dec = Math.abs(b.net) >= 1 ? 2 : (Math.abs(b.net) >= 0.01 ? 3 : 4);
+                return `
+                <tr class="hover:bg-white/[0.02] transition-colors">
+                    <td class="px-6 py-4 font-bold text-white">${bucketLabel(b.key, period)}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${b.trips_count}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${b.symbols.size}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${fmtUsd(b.cost)}</td>
+                    <td class="px-6 py-4 mono text-gray-300">${fmtUsd(b.revenue)}</td>
+                    <td class="px-6 py-4 mono text-gray-400">${fmtUsd(b.fees, 4)}</td>
+                    <td class="px-6 py-4 mono font-bold ${netCls}">${b.net >= 0 ? '+' : ''}${fmtUsd(b.net, dec)}</td>
+                    <td class="px-6 py-4 mono font-bold ${netPct >= 0 ? 'text-success' : 'text-danger'}">${netPct >= 0 ? '+' : ''}${netPct.toFixed(2)}%</td>
+                    <td class="px-6 py-4 mono text-xs text-gray-400">${winRate.toFixed(0)}% (${b.wins}/${b.trips_count})</td>
+                </tr>`;
+            }).join('');
+            // Summary card
+            const totalNet = rows.reduce((s, r) => s + r.net, 0);
+            const totalTrips = rows.reduce((s, r) => s + r.trips_count, 0);
+            const allSyms = new Set();
+            rows.forEach(r => r.symbols.forEach(s => allSyms.add(s)));
+            if (totalEl) {
+                const dec = Math.abs(totalNet) >= 1 ? 2 : (Math.abs(totalNet) >= 0.01 ? 3 : 4);
+                totalEl.textContent = (totalNet >= 0 ? '+' : '') + fmtUsd(totalNet, dec);
+                totalEl.className = `text-2xl font-black mono ${totalNet >= 0 ? 'text-success' : 'text-danger'}`;
+            }
+            if (metaEl) {
+                metaEl.textContent = `${totalTrips} trips · ${allSyms.size} symbols · ${rows.length} ${period === 'day' ? 'days' : period === 'week' ? 'weeks' : 'months'}`;
+            }
+        }
+
+        // iter112 — bind preset buttons + range / period inputs.
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-preset]');
+            if (btn) {
+                e.preventDefault();
+                applyPreset(btn.getAttribute('data-preset'));
+            }
+        });
+        document.addEventListener('change', (e) => {
+            if (!e.target) return;
+            if (e.target.id === 'pnl-from' || e.target.id === 'pnl-to' || e.target.name === 'pnl-period') {
+                if (e.target.name === 'pnl-period') {
+                    document.querySelectorAll('[data-period]').forEach(el => {
+                        const sel = el.querySelector('input').checked;
+                        el.classList.toggle('bg-brand', sel);
+                        el.classList.toggle('text-bg', sel);
+                        el.classList.toggle('text-gray-400', !sel);
+                    });
+                }
+                if (typeof UI !== 'undefined' && UI.renderHistory) {
+                    try { UI.renderHistory(state.history || []); } catch (_) {}
+                }
+            }
+        });
+        // Default to today on first load.
+        document.addEventListener('DOMContentLoaded', () => {
+            // Style initial period radio.
+            document.querySelectorAll('[data-period]').forEach(el => {
+                const sel = el.querySelector('input').checked;
+                el.classList.toggle('bg-brand', sel);
+                el.classList.toggle('text-bg', sel);
+                el.classList.toggle('text-gray-400', !sel);
+            });
+            // Default to "Today" preset on first visit so the page isn't blank.
+            applyPreset('all');
+        });
 
         function exportHistoryCsv() {
             const groups = window.__lastGroups || [];

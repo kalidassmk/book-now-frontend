@@ -64,6 +64,46 @@
   table.log td.sig-BUY { color:var(--green); font-weight:700; }
   table.log td.sig-SELL { color:var(--red); font-weight:700; }
   .muted { color:var(--muted); }
+  /* iter 105 — small Binance trade-page link, inline next to symbols. */
+  .bn-binance-link {
+    display:inline-flex; align-items:center; justify-content:center;
+    width:22px; height:22px; margin-left:6px;
+    border:1px solid rgba(240,185,11,.45); border-radius:5px;
+    background:rgba(240,185,11,.08);
+    text-decoration:none; font-size:13px;
+    transition:background .15s, border-color .15s, transform .15s;
+    vertical-align:middle;
+  }
+  .bn-binance-link:hover {
+    background:rgba(240,185,11,.20);
+    border-color:var(--amber);
+    transform:scale(1.08);
+  }
+  .sym .bn-binance-link { vertical-align:middle; }
+  table.log .bn-binance-link { width:18px; height:18px; font-size:11px; margin-left:4px; }
+  /* iter 106 — filter bar */
+  .filters {
+    display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+    margin-bottom:18px; padding:12px 14px;
+    background:var(--panel); border:1px solid var(--border); border-radius:10px;
+  }
+  .filter-pill {
+    display:inline-flex; align-items:center; gap:6px;
+    padding:6px 12px; border:1px solid var(--border); border-radius:18px;
+    background:var(--panel2); cursor:pointer; font-size:12px; color:var(--muted);
+    transition:all .15s;
+  }
+  .filter-pill input { display:none; }
+  .filter-pill:hover { color:var(--text); border-color:var(--muted); }
+  .filter-pill:has(input:checked) { background:var(--blue); color:#fff; border-color:var(--blue); }
+  .symfilter {
+    flex:1; min-width:200px;
+    padding:6px 12px; border:1px solid var(--border); border-radius:18px;
+    background:var(--panel2); color:var(--text); font-size:12px;
+    outline:none;
+  }
+  .symfilter:focus { border-color:var(--blue); }
+  .filter-meta { font-size:11px; color:var(--muted); }
 </style>
 </head>
 <body>
@@ -80,6 +120,23 @@
 </header>
 <main>
   <div id="banner" class="banner"></div>
+  <!-- iter106 — filter + search bar so 400+ cards stay scannable. -->
+  <div class="filters">
+    <label class="filter-pill">
+      <input type="radio" name="sigfilter" value="signals" checked />
+      <span>🎯 Only signals (BUY / SELL)</span>
+    </label>
+    <label class="filter-pill">
+      <input type="radio" name="sigfilter" value="active" />
+      <span>⚡ Active (signals + flow)</span>
+    </label>
+    <label class="filter-pill">
+      <input type="radio" name="sigfilter" value="all" />
+      <span>📊 All coins</span>
+    </label>
+    <input id="symfilter" class="symfilter" type="text" placeholder="🔍 search symbol (e.g. BTC)" autocomplete="off" />
+    <span id="visible-count" class="filter-meta"></span>
+  </div>
   <div id="groups"></div>
   <div class="sidebar">
     <div class="section-title">Recent Signals</div>
@@ -105,6 +162,23 @@ const SELL_LABELS = {
 };
 function fmtPrice(p){ if(p==null) return "—"; return Number(p).toLocaleString(undefined,{maximumFractionDigits:8}); }
 function fmtTime(ts){ if(!ts) return "—"; return new Date(ts*1000).toLocaleTimeString(); }
+
+// iter 105 — small Binance icon link. Uses the global helper from nav.js
+// (iter83); falls back to an inline href in case nav.js hasn't finished
+// loading by the first render.  URL splits SYMBOL at the quote currency
+// so ID + USDT → https://www.binance.com/en/trade/ID_USDT?type=spot.
+function binanceIcon(sym){
+  if (window.bnBinanceLinkHtml) return window.bnBinanceLinkHtml(sym, { compact:true });
+  const s = String(sym||'').toUpperCase();
+  let url = 'https://www.binance.com/en/trade';
+  for (const q of ['USDT','BUSD','FDUSD','USDC','BTC','BNB','ETH']) {
+    if (s.endsWith(q) && s.length > q.length) {
+      url = `https://www.binance.com/en/trade/${s.slice(0,-q.length)}_${q}?type=spot`;
+      break;
+    }
+  }
+  return `<a class="bn-binance-link" href="${url}" target="_blank" rel="noopener noreferrer" title="Open ${s} on Binance" onclick="event.stopPropagation()">🟡</a>`;
+}
 function checklist(conditions,labels){
   return Object.entries(labels).map(([key,label])=>{
     const ok=!!(conditions||{})[key];
@@ -121,7 +195,7 @@ function renderCard(s){
   if(w.has_sell_wall) walls.push(`<span class="wall-tag sell">🔴 Sell wall @ ${fmtPrice(w.sell_wall_price)} (${fmtPrice(w.sell_wall_qty)})</span>`);
   if(!walls.length) walls.push(`<span class="wall-tag muted">No significant walls</span>`);
   return `<div class="card ${s.signal}">
-    <div class="card-head"><span class="sym">${s.symbol}</span><span class="price">${fmtPrice(s.last_price)}</span></div>
+    <div class="card-head"><span class="sym">${s.symbol}${binanceIcon(s.symbol)}</span><span class="price">${fmtPrice(s.last_price)}</span></div>
     <span class="badge ${s.signal}">${s.signal}</span>
     ${s.enough_flow?"":'<span class="muted" style="font-size:11px;margin-left:8px">low flow</span>'}
     <div class="section-title">Before BUY (${s.buy_score}/${s.buy_score_max})</div>
@@ -143,7 +217,7 @@ function renderCard(s){
 }
 function renderLog(signals){
   document.getElementById("log").innerHTML=(signals||[]).map(s=>`
-    <tr><td class="muted">${fmtTime(s.timestamp)}</td><td>${s.symbol}</td>
+    <tr><td class="muted">${fmtTime(s.timestamp)}</td><td>${s.symbol}${binanceIcon(s.symbol)}</td>
     <td class="sig-${s.signal}">${s.signal}</td><td>${fmtPrice(s.price)}</td>
     <td>${s.metrics?s.metrics.delta:"—"}</td><td>${s.metrics?s.metrics.volume_ratio+"×":"—"}</td></tr>`
   ).join("")||'<tr><td colspan="6" class="muted">No signals yet…</td></tr>';
@@ -152,14 +226,48 @@ function setBanner(msg){
   const b=document.getElementById("banner");
   if(msg){ b.textContent=msg; b.style.display="block"; } else { b.style.display="none"; }
 }
+// iter 106 — current operator filter state (re-applied on every tick).
+function currentFilters(){
+  const sig = (document.querySelector('input[name="sigfilter"]:checked')||{}).value || 'signals';
+  const symRaw = (document.getElementById('symfilter')||{}).value || '';
+  return { sig, sym: symRaw.trim().toUpperCase() };
+}
+function passesFilter(s, f){
+  // iter106-fix — when the operator types a symbol search, OVERRIDE the
+  // signal filter entirely.  Otherwise typing "BTC" looks broken when
+  // BTC is currently HOLD (and the default filter hides HOLD coins).
+  if (f.sym) {
+    return String(s.symbol||'').toUpperCase().includes(f.sym);
+  }
+  if (f.sig === 'all') return true;
+  if (f.sig === 'active') return s.enough_flow || s.signal === 'BUY' || s.signal === 'SELL';
+  // default — only signals
+  return s.signal === 'BUY' || s.signal === 'SELL';
+}
+
 function renderGroups(snaps, status){
   status = status || {};
   const tierOrder = (status.tier_order && status.tier_order.length) ? status.tier_order.slice() : [];
   const tierSyms = status.tiers || {};
+  const f = currentFilters();
+
+  // Apply operator filters BEFORE grouping so the tier counts reflect what's shown.
+  const filtered = snaps.filter(s => passesFilter(s, f));
+
+  // Always-visible total counter (helps operator confirm "all coins are streaming").
+  const totalActive = snaps.length;
+  const cm = document.getElementById('visible-count');
+  if (cm) cm.textContent = `showing ${filtered.length} of ${totalActive} streaming coins`;
+
   const groups = {};
-  snaps.forEach(s => { const t = s.market_cap_tier || "Other"; (groups[t] = groups[t] || []).push(s); });
+  filtered.forEach(s => { const t = s.market_cap_tier || "Other"; (groups[t] = groups[t] || []).push(s); });
   const order = tierOrder.slice();
   Object.keys(groups).forEach(t => { if(!order.includes(t)) order.push(t); });
+  if (!Object.keys(groups).length) {
+    return `<div class="muted" style="padding:18px;text-align:center">
+      No coins match the filter. ${totalActive} streaming in total.
+    </div>`;
+  }
   return order.filter(t => groups[t] && groups[t].length).map(t => {
     const ref = tierSyms[t] || [];
     const items = groups[t].sort((a,b) => {
@@ -176,6 +284,18 @@ function renderGroups(snaps, status){
     </section>`;
   }).join("");
 }
+// iter106-fix — cache last-known data so filter/search re-render is
+// INSTANT instead of waiting up to 1s for the next tick.
+let _lastSnaps = [];
+let _lastStatus = {};
+let _lastSignals = [];
+
+function rerenderFromCache(){
+  document.getElementById("groups").innerHTML = renderGroups(_lastSnaps, _lastStatus)
+    || '<div class="muted">Waiting for the first snapshot…</div>';
+  renderLog(_lastSignals);
+}
+
 async function tick(){
   try {
     const [stRes, snRes, sgRes] = await Promise.all([
@@ -200,18 +320,39 @@ async function tick(){
     if(!st.connected){
       setBanner("Engine is running but not yet receiving Binance market data — order-flow values will populate once the stream connects.");
     } else { setBanner(""); }
-    const snaps=(sn.snapshots||[]);
-    document.getElementById("groups").innerHTML=renderGroups(snaps, st)
-      || '<div class="muted">Waiting for the first snapshot…</div>';
-    renderLog(sg.signals||[]);
+    _lastSnaps = (sn.snapshots||[]);
+    _lastStatus = st;
+    _lastSignals = (sg.signals||[]);
+    rerenderFromCache();
   } catch(err){
     setBanner("Cannot reach the dashboard API: "+err);
     document.getElementById("dot").className="dot off";
     document.getElementById("conn").textContent="Disconnected";
   }
 }
+
+// iter106-fix — bind filter changes to immediate re-render so the UI
+// doesn't feel sluggish when typing in the search box or switching
+// the signal filter radio. Debounce the input event to 80ms so we
+// don't thrash the DOM mid-typing.
+(function bindFilters(){
+  let debounceTimer = null;
+  document.addEventListener('input', (e) => {
+    if (e.target && e.target.id === 'symfilter') {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(rerenderFromCache, 80);
+    }
+  });
+  document.addEventListener('change', (e) => {
+    if (e.target && e.target.name === 'sigfilter') rerenderFromCache();
+  });
+})();
+
 tick();
 setInterval(tick, 1000);
 </script>
+
+<!-- iter104 — universal nav so this page gets the same header as the rest -->
+<script src="/nav.js"></script>
 </body>
 </html>

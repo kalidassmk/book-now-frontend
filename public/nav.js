@@ -60,6 +60,8 @@ window.bnBinanceLinkHtml = function (sym, opts) {
       icon: '📊',
       items: [
         { href: '/',                       label: 'Monitor',          icon: '📊', desc: 'Live signals + scanner' },
+        // iter104 — Order Flow scalper UI added by other-laptop work, surfaced in header.
+        { href: '/order_flow.html',        label: 'Order Flow',       icon: '🌊', desc: 'Scalper — taker BUY/SELL per symbol grouped by mcap tier', highlight: true },
         { href: '/active-monitors.html',   label: 'Active Monitors',  icon: '🎛️', desc: 'Currently held positions' },
         { href: '/pending-monitor.html',   label: 'Pending Buys',     icon: '⏳', desc: 'Limit orders waiting to fill' },
         { href: '/spot.html',              label: 'Spot Tickers',     icon: '📋', desc: 'Top movers + volume leaders' },
@@ -115,6 +117,8 @@ window.bnBinanceLinkHtml = function (sym, opts) {
         { href: '/logs.html',              label: 'Live Logs',        icon: '📜', desc: 'Real-time tail of every subprocess log', highlight: true },
         { href: '/admin.html',             label: 'Service Controls', icon: '🛠️', desc: 'Restart backend, flush Redis, diagnostics' },
         { href: '/scalper-diagnostic.html', label: 'Scalper Diagnostic', icon: '🔬', desc: 'Smart-restart watcher + crash history' },
+        // iter104 — Delisted coins page (scraped Binance announcements) added by other-laptop work.
+        { href: '/delisted.html',          label: 'Delisted Coins',   icon: '🚫', desc: 'Binance scraped delistings — scalper auto-blocks these' },
       ],
     },
   ];

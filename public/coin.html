@@ -26,6 +26,30 @@
   .card .card-head h3 { margin:0; font-size:15px; }
   .pos { color: var(--good); } .neg { color: var(--bad); } .mute { color: var(--muted); } .warn { color: var(--warn); }
 
+  /* iter 108 — Sell Price Planner ──────────────────────────────────── */
+  .card.sell-planner h2 { color: var(--warn); }
+  .planner-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:start; }
+  @media (max-width: 800px) { .planner-grid { grid-template-columns: 1fr; } }
+  .planner-stat { padding:10px 12px; background: var(--panel-2); border:1px solid var(--line); border-radius:6px; margin-bottom:8px; }
+  .planner-stat .label { display:block; font-size:10px; text-transform:uppercase; letter-spacing:.4px; color: var(--muted); font-weight:700; }
+  .planner-stat .value { display:block; font-size:18px; font-weight:800; font-variant-numeric:tabular-nums; margin-top:2px; }
+  .planner-stat .value.strong { font-size:22px; color: var(--warn); }
+  .planner-stat .sub { display:block; font-size:11px; color:var(--muted); margin-top:2px; }
+  .planner-feeparts { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .planner-feeparts .fee-line { font-size:10px; color:var(--muted); }
+  .planner-feeparts .fee-line.muted { font-style:italic; }
+  .planner-calc { margin-bottom:14px; padding:12px; background: var(--panel-2); border:1px solid var(--line); border-radius:6px; }
+  .planner-calc input { width:100%; padding:8px 10px; font-size:18px; font-weight:700; background:var(--panel); border:1px solid var(--line); color:var(--text); border-radius:5px; font-variant-numeric:tabular-nums; }
+  .planner-calc .label { display:block; font-size:11px; color:var(--muted); margin-bottom:4px; }
+  .planner-result { font-size:14px; margin-top:6px; color:var(--text); }
+  .planner-result .pos { color: var(--good); }
+  .planner-result .neg { color: var(--bad); }
+  .planner-presets { display:flex; flex-wrap:wrap; gap:6px; padding-top:6px; }
+  .planner-presets .label { width:100%; font-size:11px; color:var(--muted); margin-bottom:4px; }
+  .preset-btn { background:var(--panel-2); border:1px solid var(--line); color:var(--text); font-size:11px; padding:5px 9px; border-radius:4px; cursor:pointer; font-variant-numeric:tabular-nums; transition:all .15s; }
+  .preset-btn:hover { background: var(--accent); border-color:var(--accent); color:#fff; }
+  .planner-note { font-size:10px; color:var(--muted); margin-top:12px; font-style:italic; text-align:center; }
+
   /* iter 102 — Order Flow section ─────────────────────────────────── */
   .of-summary {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -372,6 +396,20 @@
 <script>
 let currentSym = null;
 
+// iter 108 — fetch live BNB/USDT so commissions paid in BNB convert to
+// USDT for the Sell Price Planner.  Mirrors iter107 in premium.html.
+async function fetchBnbPrice() {
+  try {
+    const r = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=BNBUSDT');
+    if (!r.ok) return;
+    const j = await r.json();
+    const p = parseFloat(j.price);
+    if (p > 0) window.__bnbUsdtPrice = p;
+  } catch (_) {}
+}
+fetchBnbPrice();
+setInterval(fetchBnbPrice, 60000);
+
 function fmtPrice(p) {
   if (p == null || isNaN(p)) return '—';
   if (p >= 100) return p.toFixed(2);
@@ -639,16 +677,177 @@ function render(payload) {
 
   // Position
   const pos = p.position;
-  const posHtml = pos ? `
-    <div class="card">
-      <h2>Current Position (HOLDING)</h2>
-      <div class="grid-3">
-        <div class="ob-block"><div class="label">Entry $</div><div class="value">${fmtPrice(pos.entry_price)}</div><div class="sub">qty ${pos.qty}</div></div>
-        <div class="ob-block"><div class="label">Last $</div><div class="value">${fmtPrice(pos.last_price)}</div><div class="sub">val ${fmtUsd(pos.current_value_usdt)}</div></div>
-        <div class="ob-block"><div class="label">P&L</div><div class="value ${pos.pnl_usdt >= 0 ? 'pos' : 'neg'}">${fmtUsd(pos.pnl_usdt)}</div><div class="sub">${fmtPct(pos.pnl_pct)}</div></div>
+
+  // iter 108 — Sell Price Planner.
+  // Computes precise NET P&L using actual buy fees (BNB / USDT / base
+  // asset commissions converted), shows break-even, and lets the
+  // operator either pick a sell price OR a target net to see what to
+  // place on Binance.
+  // ────────────────────────────────────────────────────────────────
+  function planSellComputeFees(bd) {
+    // bd = pos.buy_breakdown (server iter108 payload)
+    // Returns { buy_fee_usdt, buy_fee_breakdown }.
+    if (!bd || !bd.commissions_by_asset) return { buy_fee_usdt: 0, parts: [] };
+    const symBase = (currentSym || '').toUpperCase().replace(/USDT$/, '');
+    const lastPrice = (p.market && p.market.last_price) || pos.last_price || 0;
+    const avgBuyPrice = bd.matched_avg_price || 0;
+    const bnb = window.__bnbUsdtPrice || 0;
+    let total = 0;
+    const parts = [];
+    for (const [asset, qty] of Object.entries(bd.commissions_by_asset)) {
+      if (!asset || !(qty > 0)) continue;
+      let usd = 0; let note = '';
+      if (asset === 'USDT') {
+        usd = qty;
+        note = `${qty.toFixed(6)} USDT (direct)`;
+      } else if (asset === 'BNB' && bnb > 0) {
+        usd = qty * bnb;
+        note = `${qty.toFixed(8)} BNB × $${bnb.toFixed(2)}`;
+      } else if (asset === symBase && avgBuyPrice > 0) {
+        usd = qty * avgBuyPrice;
+        note = `${qty.toFixed(6)} ${asset} × $${avgBuyPrice}`;
+      } else if (lastPrice > 0) {
+        usd = qty * lastPrice;
+        note = `${qty.toFixed(6)} ${asset} × ~$${lastPrice.toFixed(8)} (approx)`;
+      }
+      total += usd;
+      parts.push({ asset, qty, usd, note });
+    }
+    return { buy_fee_usdt: total, parts };
+  }
+
+  let posHtml = '';
+  if (pos) {
+    const bd = pos.buy_breakdown || null;
+    const { buy_fee_usdt, parts } = planSellComputeFees(bd);
+    // True buy cost = actual sum of quoteQty across matched fills
+    const buyCost = (bd && bd.matched_quote_usdt) || pos.cost_usdt;
+    const totalCostIn = buyCost + buy_fee_usdt;
+    const qty = pos.qty;
+    // Sell-side fee rate.  Binance default 0.075% per side; with the
+    // BNB-discount (-25%) it becomes 0.05625%.  We can't be 100% sure
+    // which one the operator's account uses for sells without inspecting
+    // a known sell.  Default to the discounted rate since BNB-discount
+    // is on (iter107 confirmed 70% of fees are BNB).
+    const sellFeeRate = 0.0005625;   // 0.075% × 0.75
+    // Break-even sell price: revenue × (1 - sellFeeRate) = totalCostIn
+    const breakEven = qty > 0 ? totalCostIn / (qty * (1 - sellFeeRate)) : 0;
+    // Initial "Sell at price" default = current last price (so the box
+    // shows current unrealised net immediately).
+    const defaultSell = pos.last_price || pos.entry_price;
+    // Net at break-even = 0; show current unrealised net at default.
+    function netAtPrice(p) {
+      const rev = p * qty;
+      const sellFee = rev * sellFeeRate;
+      return rev - buyCost - buy_fee_usdt - sellFee;
+    }
+    function priceForNet(target) {
+      return (target + buyCost + buy_fee_usdt) / (qty * (1 - sellFeeRate));
+    }
+    const currentNet = netAtPrice(pos.last_price);
+
+    const feePartsHtml = parts.length
+      ? parts.map(p => `<div class="fee-line">${p.note} = <strong>$${p.usd.toFixed(6)}</strong></div>`).join('')
+      : '<div class="fee-line muted">no commission data in trade history</div>';
+
+    posHtml = `
+      <div class="card">
+        <h2>Current Position (HOLDING)</h2>
+        <div class="grid-3">
+          <div class="ob-block"><div class="label">Entry $</div><div class="value">${fmtPrice(pos.entry_price)}</div><div class="sub">qty ${pos.qty}</div></div>
+          <div class="ob-block"><div class="label">Last $</div><div class="value">${fmtPrice(pos.last_price)}</div><div class="sub">val ${fmtUsd(pos.current_value_usdt)}</div></div>
+          <div class="ob-block"><div class="label">P&L (raw)</div><div class="value ${pos.pnl_usdt >= 0 ? 'pos' : 'neg'}">${fmtUsd(pos.pnl_usdt)}</div><div class="sub">${fmtPct(pos.pnl_pct)}</div></div>
+        </div>
       </div>
-    </div>
-  ` : '';
+
+      <div class="card sell-planner">
+        <h2>💰 Sell Price Planner</h2>
+        <div class="planner-grid">
+          <div class="planner-col">
+            <div class="planner-stat">
+              <span class="label">Buy cost (actual)</span>
+              <span class="value">${fmtUsd(buyCost)}</span>
+              <span class="sub">${bd ? bd.fills_count + ' fills · avg $' + (bd.matched_avg_price || 0).toFixed(6) : 'from BUY record'}</span>
+            </div>
+            <div class="planner-stat">
+              <span class="label">Buy fees (converted)</span>
+              <span class="value">${fmtUsd(buy_fee_usdt)}</span>
+              <span class="sub planner-feeparts">${feePartsHtml}</span>
+            </div>
+            <div class="planner-stat">
+              <span class="label">TOTAL cost in</span>
+              <span class="value strong">${fmtUsd(totalCostIn)}</span>
+              <span class="sub">cost + buy fees</span>
+            </div>
+            <div class="planner-stat">
+              <span class="label">Break-even sell price</span>
+              <span class="value strong">${fmtPrice(breakEven)}</span>
+              <span class="sub">net = 0 (sell fee ${(sellFeeRate*100).toFixed(4)}% included)</span>
+            </div>
+            <div class="planner-stat">
+              <span class="label">Current unrealised net</span>
+              <span class="value ${currentNet >= 0 ? 'pos' : 'neg'}">${fmtUsd(currentNet)}</span>
+              <span class="sub">if you sold now @ ${fmtPrice(pos.last_price)}</span>
+            </div>
+          </div>
+
+          <div class="planner-col">
+            <div class="planner-calc">
+              <label class="label">Sell at price →</label>
+              <input id="plan-price" type="number" step="any" value="${defaultSell}" />
+              <div class="planner-result" id="plan-price-result">net = ${fmtUsd(netAtPrice(defaultSell))}</div>
+            </div>
+            <div class="planner-calc">
+              <label class="label">Target NET $ →</label>
+              <input id="plan-net" type="number" step="any" value="0.5" />
+              <div class="planner-result" id="plan-net-result">place sell @ ${fmtPrice(priceForNet(0.5))}</div>
+            </div>
+            <div class="planner-presets">
+              <span class="label">Quick targets:</span>
+              ${[0.10, 0.50, 1.00, 2.50, 5.00, 10.00].map(v => `
+                <button class="preset-btn" data-target="${v}">+$${v.toFixed(2)} → ${fmtPrice(priceForNet(v))}</button>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+        <div class="planner-note">
+          Math: revenue = sell × qty · sell fee = revenue × ${(sellFeeRate*100).toFixed(4)}% · NET = revenue − buy cost − buy fees − sell fee
+        </div>
+      </div>
+    `;
+
+    // Bind interactive recalculation after innerHTML is set.
+    setTimeout(() => {
+      const priceInput = document.getElementById('plan-price');
+      const netInput = document.getElementById('plan-net');
+      const priceResult = document.getElementById('plan-price-result');
+      const netResult = document.getElementById('plan-net-result');
+      if (priceInput) priceInput.addEventListener('input', () => {
+        const v = parseFloat(priceInput.value);
+        if (!isFinite(v) || v <= 0) { priceResult.textContent = '—'; return; }
+        const n = netAtPrice(v);
+        priceResult.innerHTML = `net = <strong class="${n>=0?'pos':'neg'}">${fmtUsd(n)}</strong>`;
+      });
+      if (netInput) netInput.addEventListener('input', () => {
+        const v = parseFloat(netInput.value);
+        if (!isFinite(v)) { netResult.textContent = '—'; return; }
+        const sp = priceForNet(v);
+        netResult.innerHTML = `place sell @ <strong>${fmtPrice(sp)}</strong>`;
+      });
+      document.querySelectorAll('.preset-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const v = parseFloat(btn.getAttribute('data-target'));
+          if (netInput) netInput.value = v;
+          const sp = priceForNet(v);
+          if (netResult) netResult.innerHTML = `place sell @ <strong>${fmtPrice(sp)}</strong>`;
+          if (priceInput) {
+            priceInput.value = sp;
+            priceInput.dispatchEvent(new Event('input'));
+          }
+        });
+      });
+    }, 0);
+  }
 
   // Trades
   const trades = p.trades_recent || [];

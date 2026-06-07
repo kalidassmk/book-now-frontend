@@ -32,6 +32,19 @@
   .chip.block { border-color:rgba(234,57,67,.5); color:#ffb3b8; }
   .chip.active { border-color:rgba(22,199,132,.45); color:#9ff0cf; }
   .chip.seed { color:var(--muted); }
+  /* iter 115 — Monitoring + Seed Binance tag chips */
+  .chip.monitoring { border-color:rgba(240,185,11,.5); color:#ffe28a; }
+  .chip.seedtag { border-color:rgba(75,159,255,.5); color:#a6cfff; }
+  .stat.monitoring .n { color:#ffe28a; }
+  .stat.seedtag .n { color:#a6cfff; }
+  /* iter 116 — pre-delisting chips have a stronger "alarm" look */
+  .chip.predelist { border-color:rgba(234,57,67,.7); background:rgba(234,57,67,.08); color:#ffb3b8; font-weight:600; }
+  .chip.predelist .when { color:var(--amber); margin-left:6px; font-size:11px; }
+  .chip.break { border-color:rgba(138,147,166,.5); color:#cbd0d8; }
+  .chip.halt { border-color:rgba(241,196,15,.6); color:#ffd76b; }
+  .stat.predelist .n { color:#ff7a85; }
+  .stat.break .n { color:#cbd0d8; }
+  .stat.halt .n { color:#ffd76b; }
   .empty { color:var(--muted); font-size:13px; }
   .banner { display:none; margin-bottom:18px; padding:12px 16px; border-radius:10px; background:rgba(234,57,67,.12); border:1px solid rgba(234,57,67,.4); color:#ffb3b8; font-size:13px; }
   .legend { font-size:11px; color:var(--muted); margin-top:8px; }
@@ -51,22 +64,58 @@
   <div id="banner" class="banner"></div>
 
   <div class="summary">
-    <div class="stat"><div class="n" id="s-scraped">—</div><div class="l">Binance delisted</div></div>
-    <div class="stat blocked"><div class="n" id="s-blocked">—</div><div class="l">Blocked from scalper</div></div>
+    <div class="stat"><div class="n" id="s-scraped">—</div><div class="l">Total blocked</div></div>
+    <div class="stat predelist"><div class="n" id="s-predelist">—</div><div class="l">🚨 Pre-delisting</div></div>
+    <div class="stat monitoring"><div class="n" id="s-monitoring">—</div><div class="l">⚠️ Monitoring tag</div></div>
+    <div class="stat seedtag"><div class="n" id="s-seed">—</div><div class="l">🌱 Seed tag</div></div>
+    <div class="stat break"><div class="n" id="s-break">—</div><div class="l">⏸️ Break</div></div>
+    <div class="stat halt"><div class="n" id="s-halt">—</div><div class="l">🛑 Halt</div></div>
+    <div class="stat blocked"><div class="n" id="s-announce">—</div><div class="l">📰 Announcement</div></div>
     <div class="stat active"><div class="n" id="s-active">—</div><div class="l">Active in scalper</div></div>
-    <div class="stat"><div class="n" id="s-configured">—</div><div class="l">Configured</div></div>
   </div>
 
+  <!-- iter 116 — PRE_DELISTING is the highest-priority bucket -->
   <section>
-    <h2>🔴 Blocked from the scalper</h2>
-    <p class="desc">Coins that were configured for the scalper but are excluded because Binance delisted them. These are not streamed or shown on the Order Flow tab.</p>
-    <div id="blocked" class="chips"></div>
+    <h2>🚨 Pre-delisting (scheduled by Binance)</h2>
+    <p class="desc">Coins Binance has officially announced for delisting on a specific date (BAPI <code>pom: true</code>). DUSDT on 2026-06-19 is the canonical example. We block these from every algorithm.</p>
+    <div id="r-predelist" class="chips"></div>
+  </section>
+
+  <!-- iter 115 — bucketed by reason so the operator sees WHY each coin was blocked -->
+  <section>
+    <h2>⚠️ Binance MONITORING tag</h2>
+    <p class="desc">Coins Binance flagged as <em>under monitoring</em> — usually a precursor to full delisting. We block these from every scalper / algorithm.</p>
+    <div id="r-monitoring" class="chips"></div>
   </section>
 
   <section>
-    <h2>📋 Binance delistings (scraped, live)</h2>
-    <p class="desc">Real delistings detected from Binance announcements (Redis <code>BINANCE:DELIST:*</code>). This is the authoritative list the scalper blocks against — verify here.</p>
-    <div id="scraped" class="chips"></div>
+    <h2>🌱 Binance SEED tag</h2>
+    <p class="desc">Newly-listed Seed Tag projects — extreme volatility, often pump-and-dump targets. We block these to keep the bots away.</p>
+    <div id="r-seed" class="chips"></div>
+  </section>
+
+  <section>
+    <h2>⏸️ Status: BREAK</h2>
+    <p class="desc">Pairs Binance has paused — not actively traded (<code>exchangeInfo.status = BREAK</code>). Sending an order to one of these would always fail.</p>
+    <div id="r-break" class="chips"></div>
+  </section>
+
+  <section>
+    <h2>🛑 Status: HALT / AUCTION_MATCH</h2>
+    <p class="desc">Pairs temporarily halted (e.g. during an incident) or in scheduled auction state (<code>exchangeInfo.status = HALT</code> / <code>AUCTION_MATCH</code>).</p>
+    <div id="r-halt" class="chips"></div>
+  </section>
+
+  <section>
+    <h2>📰 Delistings from announcements</h2>
+    <p class="desc">Real delistings detected from Binance "Notice of Removal of Spot Trading Pairs" announcements (Redis <code>BINANCE:DELIST:*</code>).</p>
+    <div id="r-announce" class="chips"></div>
+  </section>
+
+  <section>
+    <h2>🔴 Blocked from the scalper</h2>
+    <p class="desc">Coins that were configured for the scalper but are excluded because of any of the above reasons. These are not streamed or shown on the Order Flow tab.</p>
+    <div id="blocked" class="chips"></div>
   </section>
 
   <section>
@@ -88,6 +137,29 @@ function chips(arr, cls){
   if(!arr || !arr.length) return '<span class="empty">None</span>';
   return arr.map(s => `<span class="chip ${cls||''}">${s}</span>`).join("");
 }
+// iter 116 — pre-delist chips show "in X hours/days" using delist_at_ms.
+function predelistChips(arr, atMap){
+  if(!arr || !arr.length) return '<span class="empty">None</span>';
+  const now = Date.now();
+  return arr.map(s => {
+    const ts = atMap && atMap[s];
+    let when = '';
+    if (ts) {
+      const ms = ts - now;
+      if (ms <= 0) {
+        when = ` <span class="when">delisted now</span>`;
+      } else {
+        const hrs = ms / 3_600_000;
+        const days = hrs / 24;
+        if (days >= 1.5) when = ` <span class="when">in ${days.toFixed(1)}d</span>`;
+        else when = ` <span class="when">in ${hrs.toFixed(1)}h</span>`;
+      }
+      const dt = new Date(ts).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+      return `<span class="chip predelist" title="Delisting ${dt}">${s}${when}</span>`;
+    }
+    return `<span class="chip predelist">${s}</span>`;
+  }).join("");
+}
 function setBanner(msg){
   const b=document.getElementById("banner");
   if(msg){ b.textContent=msg; b.style.display="block"; } else { b.style.display="none"; }
@@ -105,11 +177,26 @@ async function load(){
     document.getElementById("conn").textContent = "live";
     const sc = d.scalper || {};
     document.getElementById("s-scraped").textContent    = d.scraped_count ?? (d.scraped_delisted||[]).length;
-    document.getElementById("s-blocked").textContent    = sc.blocked_count ?? (sc.blocked||[]).length;
     document.getElementById("s-active").textContent     = sc.active_count ?? (sc.active||[]).length;
-    document.getElementById("s-configured").textContent = (sc.configured||[]).length;
+    // iter115 + iter116 — bucketed counts + chips per reason
+    const buckets = d.by_reason || {};
+    const counts  = d.by_reason_counts || {};
+    const at = d.delist_at_ms || {};
+    document.getElementById("s-predelist").textContent  = counts.PRE_DELISTING ?? (buckets.PRE_DELISTING||[]).length;
+    document.getElementById("s-monitoring").textContent = counts.MONITORING    ?? (buckets.MONITORING||[]).length;
+    document.getElementById("s-seed").textContent       = counts.SEED          ?? (buckets.SEED||[]).length;
+    document.getElementById("s-break").textContent      = counts.BREAK         ?? (buckets.BREAK||[]).length;
+    document.getElementById("s-halt").textContent       = (counts.HALT ?? (buckets.HALT||[]).length) + (counts.AUCTION_MATCH ?? (buckets.AUCTION_MATCH||[]).length);
+    document.getElementById("s-announce").textContent   = counts.ANNOUNCEMENT  ?? (buckets.ANNOUNCEMENT||[]).length;
+    document.getElementById("r-predelist").innerHTML = predelistChips(buckets.PRE_DELISTING, at);
+    document.getElementById("r-monitoring").innerHTML = chips(buckets.MONITORING, "monitoring");
+    document.getElementById("r-seed").innerHTML       = chips(buckets.SEED,       "seedtag");
+    document.getElementById("r-break").innerHTML      = chips(buckets.BREAK,      "break");
+    // Render HALT + AUCTION_MATCH in the same section
+    const halts = [...(buckets.HALT||[]), ...(buckets.AUCTION_MATCH||[])].sort();
+    document.getElementById("r-halt").innerHTML       = chips(halts, "halt");
+    document.getElementById("r-announce").innerHTML   = chips(buckets.ANNOUNCEMENT, "block");
     document.getElementById("blocked").innerHTML = chips(sc.blocked, "block");
-    document.getElementById("scraped").innerHTML = chips(d.scraped_delisted, "block");
     document.getElementById("active").innerHTML  = chips(sc.active, "active");
     document.getElementById("seed").innerHTML    = chips(d.legacy_skip_seed, "seed");
   } catch(err){
@@ -120,5 +207,8 @@ async function load(){
 load();
 setInterval(load, 5000);
 </script>
+
+<!-- iter104 — universal nav so this page gets the same header as the rest -->
+<script src="/nav.js"></script>
 </body>
 </html>
