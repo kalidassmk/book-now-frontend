@@ -134,7 +134,7 @@
       <input type="radio" name="sigfilter" value="all" />
       <span>📊 All coins</span>
     </label>
-    <input id="symfilter" class="symfilter" type="text" placeholder="🔍 search symbol (e.g. BTC)" autocomplete="off" />
+    <input id="symfilter" class="symfilter" type="text" placeholder="🔍 search symbol — SOL, SOLUSDT, SOL/USDT, SOL_USDT" autocomplete="off" />
     <span id="visible-count" class="filter-meta"></span>
   </div>
   <div id="groups"></div>
@@ -227,17 +227,24 @@ function setBanner(msg){
   if(msg){ b.textContent=msg; b.style.display="block"; } else { b.style.display="none"; }
 }
 // iter 106 — current operator filter state (re-applied on every tick).
+// iter 120 — symbol search accepts SOL, SOLUSDT, SOL/USDT, SOL_USDT,
+// SOL-USDT, "sol usdt", etc.  We strip separators (and uppercase) on
+// both sides so every common notation collapses to the same canonical
+// form before substring matching.
+function normalizeSym(raw){
+  return String(raw||'').toUpperCase().replace(/[\s_\-\/\\.]+/g, '');
+}
 function currentFilters(){
   const sig = (document.querySelector('input[name="sigfilter"]:checked')||{}).value || 'signals';
   const symRaw = (document.getElementById('symfilter')||{}).value || '';
-  return { sig, sym: symRaw.trim().toUpperCase() };
+  return { sig, sym: normalizeSym(symRaw.trim()) };
 }
 function passesFilter(s, f){
   // iter106-fix — when the operator types a symbol search, OVERRIDE the
   // signal filter entirely.  Otherwise typing "BTC" looks broken when
   // BTC is currently HOLD (and the default filter hides HOLD coins).
   if (f.sym) {
-    return String(s.symbol||'').toUpperCase().includes(f.sym);
+    return normalizeSym(s.symbol).includes(f.sym);
   }
   if (f.sig === 'all') return true;
   if (f.sig === 'active') return s.enough_flow || s.signal === 'BUY' || s.signal === 'SELL';
