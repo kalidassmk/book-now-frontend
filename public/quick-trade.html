@@ -247,11 +247,7 @@
   .submit-btn.buy:hover  { filter:brightness(1.1); }
   .submit-btn.sell { background:var(--red);   color:#0b0e14; }
   .submit-btn.sell:hover { filter:brightness(1.1); }
-  .submit-btn.armed {
-    background:var(--amber); color:#0b0e14;
-    animation:armed-pulse 1s ease-in-out infinite;
-  }
-  @keyframes armed-pulse { 0%,100%{transform:scale(1);} 50%{transform:scale(1.02);} }
+  /* iter134 — armed/disarmed UI removed when single-click became default. */
   .submit-btn:disabled { opacity:.55; cursor:not-allowed; }
   .form-help {
     margin-top:10px; font-size:10px; color:var(--muted); line-height:1.45;
@@ -513,9 +509,10 @@
             </div>
           </div>
           <button id="submit-btn" class="submit-btn buy">🚀 BUY @ Limit</button>
-          <div class="form-toggles">
-            <label><input type="checkbox" id="one-tap" /> 1-tap mode (skip confirm)</label>
-            <span id="armed-countdown" style="margin-left:auto; color:var(--amber); font-weight:700"></span>
+          <!-- iter134 — single-click mode is now the only mode; the
+               2-tap arm pattern has been removed. -->
+          <div class="form-toggles" style="font-size:10px;color:var(--muted);justify-content:center">
+            ⚡ Single-click mode — order fires the moment you tap
           </div>
           <div class="form-help" id="form-help">
             🟢 LIMIT BUY routes through the engine's <code>/api/v1/order/limit-buy</code>; the engine sizes the order against your USDT balance and (if TP &gt; 0) places the take-profit leg.<br />
@@ -605,8 +602,7 @@ const S = {
   bestAsk: 0,
   bids: [], asks: [],
   ws: null,
-  armed: { side: null, type: null, until: 0 },
-  armedTimer: null,
+  // iter134 — armed/armedTimer removed; single-click is the only mode.
   ticker: { high: 0, low: 0, vol: 0, pctChg: 0 },
 };
 
@@ -1162,41 +1158,12 @@ $('sym-input').addEventListener('blur', () => {
   }
 });
 
-// ── Two-tap confirm pattern ─────────────────────────────────────────
-function isArmed(){
-  return S.armed.side === S.side
-      && S.armed.type === S.type
-      && Date.now() < S.armed.until;
-}
-function disarm(){
-  S.armed = { side: null, type: null, until: 0 };
-  const btn = $('submit-btn');
-  btn.classList.remove('armed');
-  if (S.armedTimer) { clearInterval(S.armedTimer); S.armedTimer = null; }
-  $('armed-countdown').textContent = '';
-  updateButtonLabel();
-}
-function arm(){
-  S.armed = { side: S.side, type: S.type, until: Date.now() + 4000 };
-  const btn = $('submit-btn');
-  btn.classList.add('armed');
-  btn.textContent = `⚠️ TAP AGAIN: ${S.side} ${S.type} (4s)`;
-  if (S.armedTimer) clearInterval(S.armedTimer);
-  S.armedTimer = setInterval(() => {
-    const left = S.armed.until - Date.now();
-    if (left <= 0) { disarm(); return; }
-    $('armed-countdown').textContent = (left/1000).toFixed(1) + 's';
-  }, 80);
-}
-
-$('submit-btn').addEventListener('click', () => {
-  if ($('one-tap').checked || isArmed()) {
-    disarm();
-    submitOrder();
-  } else {
-    arm();
-  }
-});
+// iter134 — Single-click BUY/SELL.  The earlier 2-tap arm/disarm
+// pattern was friction the operator didn't want during pumps; the
+// modal confirmation on order edits already gives a safety check
+// for the cancel-and-replace flow.  For the primary submit there's
+// no double-confirm anymore — one click fires.
+$('submit-btn').addEventListener('click', submitOrder);
 
 // ── Submit order via /api/trade/quick-* proxy ───────────────────────
 async function submitOrder(){
