@@ -1590,7 +1590,40 @@ async function loadHistoricalKlines(symbol, interval){
   })));
   updateMA();
   updateOhlcStrip(_candles[_candles.length - 1]);
+  // iter 136 — dynamic price-axis precision.  Default precision=2
+  // truncated $0.04490 → '0.04' on the right axis and on crosshair
+  // hover.  Pick the right number of decimals for this asset's
+  // magnitude so the operator sees the full price.
+  applyPriceFormat(_candles[_candles.length - 1].close);
   $('chart-meta').textContent = `${_candles.length} bars · ${interval}`;
+}
+
+// iter 136 — Choose decimal precision for the chart price axis +
+// MA legend + crosshair tooltip from the current price magnitude.
+// 1234.56  -> 2 dec   (BTC, ETH heights)
+// 12.3456  -> 4 dec   (mid caps)
+// 0.04490  -> 5 dec   (the screenshot case)
+// 0.00040  -> 7 dec   (small caps)
+// 0.00000040 -> 8 dec (memes)
+function pickDecimals(refPrice){
+  const abs = Math.abs(+refPrice || 0);
+  if (abs >= 1000)   return 2;
+  if (abs >= 100)    return 3;
+  if (abs >= 1)      return 4;
+  if (abs >= 0.01)   return 5;
+  if (abs >= 0.0001) return 7;
+  return 8;
+}
+function applyPriceFormat(refPrice){
+  if (!candleSeries) return;
+  const dec = pickDecimals(refPrice);
+  const minMove = Number((Math.pow(10, -dec)).toFixed(dec));
+  const fmt = { type: 'price', precision: dec, minMove };
+  try {
+    candleSeries.applyOptions({ priceFormat: fmt });
+    if (ma7Series)  ma7Series.applyOptions({  priceFormat: fmt });
+    if (ma25Series) ma25Series.applyOptions({ priceFormat: fmt });
+  } catch(_) {}
 }
 
 function connectKlineWs(symbol, interval){
