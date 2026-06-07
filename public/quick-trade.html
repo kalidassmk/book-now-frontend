@@ -572,7 +572,9 @@
     </div>
     <div class="modal-actions">
       <button class="cancel" type="button" onclick="closeEditModal()">Cancel</button>
-      <button class="confirm" id="em-confirm" type="button">Confirm</button>
+      <!-- iter133 — belt-and-suspenders: inline onclick + addEventListener
+           so even if one wire fails to attach the other still fires. -->
+      <button class="confirm" id="em-confirm" type="button" onclick="confirmEditOrder()">Confirm</button>
     </div>
   </div>
 </div>
@@ -1368,11 +1370,16 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Confirm — cancel old, place new.
+// Confirm — cancel old, place new.  Both the inline onclick (iter133)
+// and this listener are wired so a missing one doesn't silently break.
 $('em-confirm').addEventListener('click', confirmEditOrder);
 
 async function confirmEditOrder(){
-  if (!_editTarget) return;
+  console.log('[edit-order] confirm clicked, target =', _editTarget);
+  if (!_editTarget) {
+    toast('warn', 'No target', 'No open order is selected. Re-open the modal.');
+    return;
+  }
   const { sym, oid, side } = _editTarget;
   const newPx = parseFloat($('em-price').value);
   const newQty = parseFloat($('em-qty').value);
@@ -1381,33 +1388,43 @@ async function confirmEditOrder(){
     return;
   }
   const btn = $('em-confirm');
-  btn.disabled = true; btn.textContent = '⏳ Replacing…';
+  btn.disabled = true; btn.textContent = '⏳ Cancelling old…';
 
-  // Step 1: cancel the existing order.
+  // ─── Step 1: cancel the existing order. ─────────────────────────────
+  const cancelUrl = '/api/trade/quick-cancel/'
+                  + encodeURIComponent(sym) + '/'
+                  + encodeURIComponent(oid);
+  console.log('[edit-order] step 1 cancel:', cancelUrl);
   try {
-    const r = await fetch('/api/trade/quick-cancel/'
-                          + encodeURIComponent(sym) + '/'
-                          + encodeURIComponent(oid));
-    const b = await r.json().catch(() => ({}));
-    if (!r.ok || !b.ok) {
-      toast('error', 'Cancel failed', (b.error || ('HTTP ' + r.status)));
+    const r = await fetch(cancelUrl);
+    // Response may be JSON OR plain text (cancel route returns text on error).
+    const txt = await r.text();
+    let body = null;
+    try { body = JSON.parse(txt); } catch(_) { body = { ok: r.ok, raw: txt }; }
+    console.log('[edit-order] cancel resp:', r.status, body);
+    if (!r.ok || body.ok === false) {
+      toast('error', 'Cancel failed', (body.error || body.raw || ('HTTP ' + r.status)));
       btn.disabled = false; btn.textContent = 'Confirm';
       return;
     }
+    toast('ok', '1/2 · Old order cancelled', '#' + oid);
   } catch (e) {
+    console.error('[edit-order] cancel network error:', e);
     toast('error', 'Network error on cancel', e.message);
     btn.disabled = false; btn.textContent = 'Confirm';
     return;
   }
 
-  // Step 2: place the new order.  SELL uses absolute price endpoint;
-  // BUY uses the existing offsetPct contract (price derived from current).
+  // ─── Step 2: place the new order. ───────────────────────────────────
+  // SELL uses the absolute-price /quick-limit-sell endpoint (iter130).
+  // BUY uses /quick-limit-buy with offsetPct derived from S.lastPrice
+  // (small drift if the price ticks during the request).
+  btn.textContent = '⏳ Placing new…';
   let placeUrl;
   if (side === 'SELL') {
     placeUrl = '/api/trade/quick-limit-sell/' + encodeURIComponent(sym)
              + '?qty=' + newQty + '&price=' + newPx;
   } else {
-    // BUY — convert to offsetPct relative to the engine's current ref.
     const ref = S.lastPrice || S.bestBid || S.bestAsk || newPx;
     const offsetPct = ((ref - newPx) / ref) * 100;
     placeUrl = '/api/trade/quick-limit-buy/' + encodeURIComponent(sym)
@@ -1415,33 +1432,46 @@ async function confirmEditOrder(){
              + '&offsetPct=' + offsetPct.toFixed(4)
              + '&profitPct=0';
   }
+  console.log('[edit-order] step 2 place:', placeUrl);
   try {
     const r = await fetch(placeUrl);
-    const b = await r.json().catch(() => ({}));
-    if (!r.ok || !b.ok) {
+    const txt = await r.text();
+    let body = null;
+    try { body = JSON.parse(txt); } catch(_) { body = { ok: r.ok, raw: txt }; }
+    console.log('[edit-order] place resp:', r.status, body);
+    if (!r.ok || body.ok === false) {
       // ⚠️ Old order is GONE but the new one didn't land.  Tell the
-      // operator loudly so they don't think they still have an order.
+      // operator LOUDLY so they don't think they still have an order.
       toast('error', '⚠️ NEW ORDER FAILED',
             'Old order cancelled but new ' + side + ' ' + newQty + ' @ ' + newPx
-            + ' was NOT placed: ' + (b.error || ('HTTP ' + r.status))
+            + ' was NOT placed: ' + (body.error || body.raw || ('HTTP ' + r.status))
             + ' — re-place from the form.');
       closeEditModal();
-      loadOpenOrders();
+      // Delay slightly so the engine sees the cancel before we re-query.
+      setTimeout(loadOpenOrders, 800);
       return;
     }
-    toast('ok', 'Order replaced', side + ' ' + newQty + ' @ ' + newPx);
+    toast('ok', '2/2 · New order placed', side + ' ' + newQty + ' @ ' + newPx);
     closeEditModal();
-    loadOpenOrders();
-    // The new order changed wallet + position; refresh both.
-    fetchWallet();
-    fetchPosition(S.symbol);
+    // Delay the refresh by 1.2s so the engine + Binance have time to
+    // register the new order — otherwise the open-orders panel can
+    // momentarily look empty and the operator thinks nothing happened.
+    setTimeout(() => {
+      loadOpenOrders();
+      fetchWallet();
+      fetchPosition(S.symbol);
+    }, 1200);
   } catch (e) {
+    console.error('[edit-order] place network error:', e);
     toast('error', '⚠️ Network error on PLACE',
           'Old order cancelled but PLACE failed: ' + e.message + ' — re-place from the form.');
     closeEditModal();
-    loadOpenOrders();
+    setTimeout(loadOpenOrders, 800);
   }
 }
+// iter133 — expose on window so the inline onclick fallback resolves
+// even in odd module-scoping scenarios.
+window.confirmEditOrder = confirmEditOrder;
 
 // ── iter126 — Candlestick chart (TradingView lightweight-charts) ────
 // Two pieces:
