@@ -1039,7 +1039,10 @@ app.get('/api/trade/quick-limit-buy/:symbol', async (req, res) => {
     }
 });
 
-// Manual SELL — engine handles partial sells when qty < held balance.
+// Manual MARKET SELL — Quick Trade goes through /order/market-sell which
+// bypasses HARD_DISABLE_AUTOSELL (iter94).  Legacy /api/v1/sell/ stays
+// gated so the older bot-sell button on the dashboard still respects
+// the operator's kill switch.
 app.get('/api/trade/quick-sell/:symbol', async (req, res) => {
     const symbol = String(req.params.symbol || '').toUpperCase();
     const qtyRaw = req.query.qty;
@@ -1052,13 +1055,37 @@ app.get('/api/trade/quick-sell/:symbol', async (req, res) => {
     }
     try {
         const url = qty != null
-            ? `${SPRING_BASE}/sell/${encodeURIComponent(symbol)}?qty=${qty}`
-            : `${SPRING_BASE}/sell/${encodeURIComponent(symbol)}`;
+            ? `${SPRING_BASE}/order/market-sell/${encodeURIComponent(symbol)}?qty=${qty}`
+            : `${SPRING_BASE}/order/market-sell/${encodeURIComponent(symbol)}`;
         const out = await _engineGetJson(url);
-        console.log(`[QuickTrade] SELL ${symbol} qty=${qty ?? 'ALL'} -> OK`);
-        return res.json({ ok: true, mode: 'sell', symbol, qty, engine: out });
+        console.log(`[QuickTrade] MARKET SELL ${symbol} qty=${qty ?? 'ALL'} -> OK`);
+        return res.json({ ok: true, mode: 'market_sell', symbol, qty, engine: out });
     } catch (e) {
-        console.warn(`[QuickTrade] SELL ${symbol} qty=${qty ?? 'ALL'} -> ${e.message}`);
+        console.warn(`[QuickTrade] MARKET SELL ${symbol} qty=${qty ?? 'ALL'} -> ${e.message}`);
+        return res.status(e.status || 500).json({ ok: false, error: e.message, body: e.body });
+    }
+});
+
+// Manual LIMIT SELL — GTC at the EXACT price the operator picked
+// (no offset math; the picker either tapped an order-book row or a
+// chart candle, so they know the price they want).
+app.get('/api/trade/quick-limit-sell/:symbol', async (req, res) => {
+    const symbol = String(req.params.symbol || '').toUpperCase();
+    const qty = parseFloat(req.query.qty);
+    const price = parseFloat(req.query.price);
+    if (!symbol || !Number.isFinite(qty) || qty <= 0) {
+        return res.status(400).json({ ok: false, error: 'symbol + positive qty required' });
+    }
+    if (!Number.isFinite(price) || price <= 0) {
+        return res.status(400).json({ ok: false, error: 'positive price required' });
+    }
+    try {
+        const url = `${SPRING_BASE}/order/limit-sell/${encodeURIComponent(symbol)}?qty=${qty}&price=${price}`;
+        const out = await _engineGetJson(url);
+        console.log(`[QuickTrade] LIMIT SELL ${symbol} qty=${qty} @ ${price} -> OK`);
+        return res.json({ ok: true, mode: 'limit_sell', symbol, qty, price, engine: out });
+    } catch (e) {
+        console.warn(`[QuickTrade] LIMIT SELL ${symbol} qty=${qty} @ ${price} -> ${e.message}`);
         return res.status(e.status || 500).json({ ok: false, error: e.message, body: e.body });
     }
 });

@@ -820,9 +820,18 @@ async function submitOrder(){
       const tp = parseFloat($('f-tp').value) || 0;
       url = `/api/trade/quick-limit-buy/${encodeURIComponent(sym)}`
           + `?qty=${qty}&offsetPct=${offsetPct.toFixed(4)}&profitPct=${tp}`;
-    } else if (S.side === 'SELL') {
-      mode = 'SELL';
+    } else if (S.side === 'SELL' && S.type === 'MARKET') {
+      mode = 'MARKET SELL';
       url = `/api/trade/quick-sell/${encodeURIComponent(sym)}?qty=${qty}`;
+    } else if (S.side === 'SELL' && S.type === 'LIMIT') {
+      // iter130 — LIMIT SELL hits the new proxy with the exact price.
+      const px = parseFloat($('f-price').value);
+      if (!px || px <= 0) {
+        toast('error', 'Missing price', 'Pick a limit price or tap an order-book row.');
+        btn.disabled = false; btn.textContent = prevLabel; return;
+      }
+      mode = 'LIMIT SELL';
+      url = `/api/trade/quick-limit-sell/${encodeURIComponent(sym)}?qty=${qty}&price=${px}`;
     } else {
       toast('error', 'Unsupported', 'Unknown order combination.'); return;
     }
