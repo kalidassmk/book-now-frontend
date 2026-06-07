@@ -967,6 +967,129 @@ app.get('/api/trade/order-history', async (req, res) => {
     }
 });
 
+// ─── iter125 — Quick Trade proxy routes ───────────────────────────────────
+// /quick-trade.html drives explosive-pump entries — the browser pulls
+// market data directly from Binance's WebSocket (fastest possible) and
+// hits these endpoints only for the actual order placement / cancel.
+//
+// Wraps the existing python-engine manual buy/sell endpoints so the
+// frontend doesn't need to know the engine port.
+//
+// NOTE: The engine endpoints use HTTP GET even for state-changing
+// actions (legacy from the Spring-era contract).  We preserve that here
+// rather than fighting the engine's API.
+//
+// The two-tap confirm pattern lives client-side; the server simply does
+// what it's told.
+async function _engineGetJson(url) {
+    const r = await fetch(url);
+    const text = await r.text();
+    let body = text;
+    try { body = JSON.parse(text); } catch (_) { /* keep as text */ }
+    if (!r.ok) {
+        const err = new Error(typeof body === 'string' ? body : (body.detail || `engine ${r.status}`));
+        err.status = r.status;
+        err.body = body;
+        throw err;
+    }
+    return body;
+}
+
+// Market BUY at top of book — qty is in base-asset units.
+app.get('/api/trade/quick-buy/:symbol', async (req, res) => {
+    const symbol = String(req.params.symbol || '').toUpperCase();
+    const qty = parseFloat(req.query.qty);
+    if (!symbol || !Number.isFinite(qty) || qty <= 0) {
+        return res.status(400).json({ ok: false, error: 'symbol + positive qty required' });
+    }
+    try {
+        const out = await _engineGetJson(`${SPRING_BASE}/order/buy/${encodeURIComponent(symbol)}?qty=${qty}`);
+        console.log(`[QuickTrade] MARKET BUY ${symbol} qty=${qty} -> OK`);
+        return res.json({ ok: true, mode: 'market_buy', symbol, qty, engine: out });
+    } catch (e) {
+        console.warn(`[QuickTrade] MARKET BUY ${symbol} qty=${qty} -> ${e.message}`);
+        return res.status(e.status || 500).json({ ok: false, error: e.message, body: e.body });
+    }
+});
+
+// Limit BUY — qty in base-asset units, offsetPct = % off the engine's
+// current price (computed client-side from the picked price), profitPct
+// is sent through to the engine's auto-TP logic.  Pass profitPct=0 to
+// disable the auto take-profit if you just want a bare limit order.
+app.get('/api/trade/quick-limit-buy/:symbol', async (req, res) => {
+    const symbol = String(req.params.symbol || '').toUpperCase();
+    const qty = parseFloat(req.query.qty);
+    const offsetPct = parseFloat(req.query.offsetPct);
+    const profitPct = parseFloat(req.query.profitPct ?? '0');
+    if (!symbol || !Number.isFinite(qty) || qty <= 0) {
+        return res.status(400).json({ ok: false, error: 'symbol + positive qty required' });
+    }
+    if (!Number.isFinite(offsetPct)) {
+        return res.status(400).json({ ok: false, error: 'offsetPct required' });
+    }
+    try {
+        const url = `${SPRING_BASE}/order/limit-buy/${encodeURIComponent(symbol)}`
+            + `?qty=${qty}&offsetPct=${offsetPct}&profitPct=${Number.isFinite(profitPct) ? profitPct : 0}`;
+        const out = await _engineGetJson(url);
+        console.log(`[QuickTrade] LIMIT BUY ${symbol} qty=${qty} off=${offsetPct}% tp=${profitPct}% -> OK`);
+        return res.json({ ok: true, mode: 'limit_buy', symbol, qty, offsetPct, profitPct, engine: out });
+    } catch (e) {
+        console.warn(`[QuickTrade] LIMIT BUY ${symbol} qty=${qty} -> ${e.message}`);
+        return res.status(e.status || 500).json({ ok: false, error: e.message, body: e.body });
+    }
+});
+
+// Manual SELL — engine handles partial sells when qty < held balance.
+app.get('/api/trade/quick-sell/:symbol', async (req, res) => {
+    const symbol = String(req.params.symbol || '').toUpperCase();
+    const qtyRaw = req.query.qty;
+    const qty = qtyRaw != null && qtyRaw !== '' ? parseFloat(qtyRaw) : null;
+    if (!symbol) {
+        return res.status(400).json({ ok: false, error: 'symbol required' });
+    }
+    if (qty != null && (!Number.isFinite(qty) || qty <= 0)) {
+        return res.status(400).json({ ok: false, error: 'qty must be a positive number' });
+    }
+    try {
+        const url = qty != null
+            ? `${SPRING_BASE}/sell/${encodeURIComponent(symbol)}?qty=${qty}`
+            : `${SPRING_BASE}/sell/${encodeURIComponent(symbol)}`;
+        const out = await _engineGetJson(url);
+        console.log(`[QuickTrade] SELL ${symbol} qty=${qty ?? 'ALL'} -> OK`);
+        return res.json({ ok: true, mode: 'sell', symbol, qty, engine: out });
+    } catch (e) {
+        console.warn(`[QuickTrade] SELL ${symbol} qty=${qty ?? 'ALL'} -> ${e.message}`);
+        return res.status(e.status || 500).json({ ok: false, error: e.message, body: e.body });
+    }
+});
+
+// Open orders snapshot — engine reads from Binance.
+app.get('/api/trade/quick-open-orders', async (req, res) => {
+    try {
+        const out = await _engineGetJson(`${SPRING_BASE}/orders/open`);
+        return res.json({ ok: true, orders: Array.isArray(out) ? out : (out.orders || []) });
+    } catch (e) {
+        return res.status(e.status || 500).json({ ok: false, error: e.message });
+    }
+});
+
+// Cancel a specific open order.
+app.get('/api/trade/quick-cancel/:symbol/:orderId', async (req, res) => {
+    const symbol = String(req.params.symbol || '').toUpperCase();
+    const orderId = String(req.params.orderId || '');
+    if (!symbol || !orderId) {
+        return res.status(400).json({ ok: false, error: 'symbol + orderId required' });
+    }
+    try {
+        const r = await fetch(`${SPRING_BASE}/order/cancel/${encodeURIComponent(symbol)}/${encodeURIComponent(orderId)}`);
+        const text = await r.text();
+        if (!r.ok) return res.status(r.status).json({ ok: false, error: text });
+        return res.json({ ok: true, symbol, orderId, message: text });
+    } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message });
+    }
+});
+
 // Order List Proxy (OCO)
 app.get('/api/trade/order-list', async (req, res) => {
     const limit = req.query.limit;

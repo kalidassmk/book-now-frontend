@@ -90,7 +90,9 @@ window.bnBinanceLinkHtml = function (sym, opts) {
       label: 'Spot Order',
       icon: '💱',
       items: [
-        { href: '/premium.html',           label: 'Trades & P&L',     icon: '🧾', desc: 'Manual spot trades — history, round trips, NET P&L', highlight: true },
+        // iter125 — Quick Trade lands first so it's one click away during pumps.
+        { href: '/quick-trade.html',       label: 'Quick Trade',      icon: '🚀', desc: 'Binance WS order book + 2-tap BUY/SELL for explosive pumps', highlight: true },
+        { href: '/premium.html',           label: 'Trades & P&L',     icon: '🧾', desc: 'Manual spot trades — history, round trips, NET P&L' },
       ],
     },
     {
