@@ -66,8 +66,14 @@ window.bnQuickTradeUrl = function (sym) {
 window.bnQuickTradeLinkHtml = function (sym, opts) {
   const url = window.bnQuickTradeUrl(sym);
   const compact = (opts || {}).compact;
-  const label = compact ? '🚀' : '🚀 Quick Trade';
-  return `<a class="bn-quick-link" href="${url}" title="Open ${sym} in BookNow Quick Trade — Binance WS + order book + 2-tap BUY/SELL" onclick="event.stopPropagation()">${label}</a>`;
+  // iter128 — typographic 'B' mark (BookNow Bogo AI branding) instead
+  // of the 🚀 emoji.  Emojis have inconsistent baselines vs the 🟡
+  // Binance pill, which the operator noticed as drift.  The B-mark
+  // is a span so its width is fixed regardless of label length, and
+  // it sits on the same baseline as text.
+  const mark = '<span class="b-mark">B</span>';
+  const label = compact ? mark : `${mark} Trade`;
+  return `<a class="bn-quick-link" href="${url}" title="Open ${sym} in BookNow Quick Trade" onclick="event.stopPropagation()">${label}</a>`;
 };
 
 (function () {
@@ -198,30 +204,51 @@ window.bnQuickTradeLinkHtml = function (sym, opts) {
     .bn-binance-link.large {
       padding: 8px 16px; font-size: 13px; border-radius: 7px;
     }
-    /* iter 127 — Quick Trade quick-link button.  Always sits next to the
-       Binance icon and shares the same shape so the row stays balanced. */
+    /* iter 127 — Quick Trade quick-link button.  Sits next to the Binance
+       icon and shares the same baseline so the row stays balanced.
+       iter 128 — typographic 'B' brand mark replaces the 🚀 emoji; the
+       outer pill is tighter and vertical-align middle keeps it on the
+       same baseline as the 🟡 chip even when fonts differ. */
     .bn-quick-link {
       display: inline-flex; align-items: center; justify-content: center;
       gap: 4px;
-      padding: 2px 7px;
+      padding: 1px 5px;
       margin-left: 4px;
       border-radius: 4px;
-      background: rgba(75, 159, 255, 0.12);
-      border: 1px solid rgba(75, 159, 255, 0.40);
+      background: rgba(75, 159, 255, 0.10);
+      border: 1px solid rgba(75, 159, 255, 0.35);
       color: #4b9fff !important;
       text-decoration: none !important;
-      font-size: 11px; font-weight: 700;
-      line-height: 1.4;
+      font-size: 10px; font-weight: 700;
+      letter-spacing: 0.2px;
+      line-height: 1.3;
+      vertical-align: middle;
       transition: background .12s, transform .12s, border-color .12s;
     }
     .bn-quick-link:hover {
-      background: rgba(75, 159, 255, 0.25);
+      background: rgba(75, 159, 255, 0.22);
       border-color: #4b9fff;
       transform: translateY(-1px);
     }
+    .bn-quick-link .b-mark {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 13px; height: 13px;
+      border-radius: 3px;
+      background: #4b9fff;
+      color: #fff;
+      font-size: 9px;
+      font-weight: 900;
+      line-height: 1;
+      font-family: -apple-system, "Segoe UI", Roboto, Inter, sans-serif;
+    }
     .bn-quick-link.large {
-      padding: 8px 16px; font-size: 13px; border-radius: 7px;
-      margin-left: 8px;
+      padding: 8px 14px; font-size: 13px; border-radius: 7px;
+      margin-left: 8px; gap: 6px;
+    }
+    .bn-quick-link.large .b-mark {
+      width: 18px; height: 18px;
+      border-radius: 4px;
+      font-size: 12px;
     }
     .bn-nav {
       position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
