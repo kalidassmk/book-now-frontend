@@ -904,7 +904,11 @@ function render(payload) {
       <div style="text-align:right">
         <div class="coin-price">${fmtPrice(m.last_price)}</div>
         <div style="font-size:18px;font-weight:700;margin-top:4px" class="${chg24 >= 0 ? 'pos' : 'neg'}">${fmtPct(chg24)}</div>
-        <a class="bn-binance-link large" href="${binanceUrl}" target="_blank" rel="noopener noreferrer" style="margin-top:8px" title="Open ${currentSym} on Binance">🟡 View on Binance →</a>
+        <div style="display:inline-flex;gap:8px;flex-wrap:wrap;margin-top:8px;justify-content:flex-end">
+          <a class="bn-binance-link large" href="${binanceUrl}" target="_blank" rel="noopener noreferrer" title="Open ${currentSym} on Binance">🟡 View on Binance →</a>
+          <!-- iter127 — sibling Quick Trade button next to the big Binance one. -->
+          <a class="bn-quick-link large" href="/quick-trade.html?sym=${currentSym}" title="Open ${currentSym} in BookNow Quick Trade">🚀 Quick Trade →</a>
+        </div>
       </div>
     </div>
   `;

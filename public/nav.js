@@ -40,11 +40,34 @@ window.bnBinanceUrl = function (sym) {
 // iter 83 — Small inline Binance link button.  Returns the HTML for
 // a tiny clickable icon next to a symbol.  e.g.:
 //   <a class="bn-binance-link" href="..." target="_blank" ...>🟡</a>
+//
+// iter 127 — Every Binance icon now also emits a sibling 🚀 Quick Trade
+// icon so the operator has one-tap access to the in-house trading panel
+// from any table that lists symbols (coin detail alerts, early-pump,
+// vsp, lmc, ccp, order-flow…).  No per-page changes required — the
+// helper is the single source of truth.
 window.bnBinanceLinkHtml = function (sym, opts) {
   const url = window.bnBinanceUrl(sym);
   const compact = (opts || {}).compact;
   const label = compact ? '🟡' : '🟡 Binance';
-  return `<a class="bn-binance-link" href="${url}" target="_blank" rel="noopener noreferrer" title="Open ${sym} on Binance" onclick="event.stopPropagation()">${label}</a>`;
+  const binanceLink = `<a class="bn-binance-link" href="${url}" target="_blank" rel="noopener noreferrer" title="Open ${sym} on Binance" onclick="event.stopPropagation()">${label}</a>`;
+  const quickLink = window.bnQuickTradeLinkHtml ? window.bnQuickTradeLinkHtml(sym, opts) : '';
+  return binanceLink + quickLink;
+};
+
+// iter 127 — Internal Quick Trade page link, sibling to the Binance icon.
+// Independent helper so pages that want ONLY a Quick Trade icon (no
+// Binance) can call it directly.
+window.bnQuickTradeUrl = function (sym) {
+  sym = String(sym || '').toUpperCase().trim();
+  if (!sym) return '/quick-trade.html';
+  return `/quick-trade.html?sym=${encodeURIComponent(sym)}`;
+};
+window.bnQuickTradeLinkHtml = function (sym, opts) {
+  const url = window.bnQuickTradeUrl(sym);
+  const compact = (opts || {}).compact;
+  const label = compact ? '🚀' : '🚀 Quick Trade';
+  return `<a class="bn-quick-link" href="${url}" title="Open ${sym} in BookNow Quick Trade — Binance WS + order book + 2-tap BUY/SELL" onclick="event.stopPropagation()">${label}</a>`;
 };
 
 (function () {
@@ -174,6 +197,31 @@ window.bnBinanceLinkHtml = function (sym, opts) {
     }
     .bn-binance-link.large {
       padding: 8px 16px; font-size: 13px; border-radius: 7px;
+    }
+    /* iter 127 — Quick Trade quick-link button.  Always sits next to the
+       Binance icon and shares the same shape so the row stays balanced. */
+    .bn-quick-link {
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: 4px;
+      padding: 2px 7px;
+      margin-left: 4px;
+      border-radius: 4px;
+      background: rgba(75, 159, 255, 0.12);
+      border: 1px solid rgba(75, 159, 255, 0.40);
+      color: #4b9fff !important;
+      text-decoration: none !important;
+      font-size: 11px; font-weight: 700;
+      line-height: 1.4;
+      transition: background .12s, transform .12s, border-color .12s;
+    }
+    .bn-quick-link:hover {
+      background: rgba(75, 159, 255, 0.25);
+      border-color: #4b9fff;
+      transform: translateY(-1px);
+    }
+    .bn-quick-link.large {
+      padding: 8px 16px; font-size: 13px; border-radius: 7px;
+      margin-left: 8px;
     }
     .bn-nav {
       position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
