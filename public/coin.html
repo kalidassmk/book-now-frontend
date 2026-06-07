@@ -376,6 +376,17 @@
     font-variant-numeric: tabular-nums;
   }
   .alert-row .bn-binance-link { padding: 2px 6px; font-size: 10px; }
+  /* iter129 — single grid cell that holds BOTH the Binance + Quick Trade
+     chips.  Without this wrapper the helper's two <a> elements landed in
+     two separate grid columns (an implicit auto column was created and
+     stretched, producing the bar-bug in the screenshot). */
+  .alert-row .a-links {
+    display: inline-flex; align-items: center; gap: 4px;
+    justify-content: flex-end;
+    flex-shrink: 0;
+  }
+  .alert-row .a-links .bn-binance-link,
+  .alert-row .a-links .bn-quick-link { margin-left: 0; }
   .alerts-section .sec-more {
     text-align: center; font-size: 10px; color: var(--muted);
     padding: 6px 0 2px; font-style: italic;
@@ -1659,13 +1670,18 @@ async function renderAlertsHome() {
       const d = describe(ev);
       const bz = (window.bnBinanceLinkHtml || (()=>''))(ev.symbol, { compact: true });
       const cb = consensusBadgeHtml(ev.symbol);
+      // iter129 — wrap the two chips in ONE grid cell so the 6-col grid
+      // doesn't auto-create an implicit column for the second chip.
+      // Also extend the click guard to ignore the Quick Trade chip so
+      // clicking it actually opens /quick-trade.html instead of being
+      // hijacked into /coin.html?sym=...
       return `
-        <div class="alert-row" role="link" tabindex="0" onclick="if(event.target.closest('.bn-binance-link'))return;location.href='/coin.html?sym=${ev.symbol}'">
+        <div class="alert-row" role="link" tabindex="0" onclick="if(event.target.closest('.bn-binance-link,.bn-quick-link'))return;location.href='/coin.html?sym=${ev.symbol}'">
           <span class="a-ic">${d.ic}</span>
           <span class="a-sym">${ev.symbol}</span>
           <span class="a-source">${d.source}</span>
           <span class="a-metrics">${(d.chips || []).join('')}${cb}</span>
-          ${bz}
+          <span class="a-links">${bz}</span>
           <span class="a-when" title="${new Date(ev.ts).toISOString()}">
             <span class="a-time">${istStamp(ev.ts).time}</span>
             <span class="a-date">${istStamp(ev.ts).date} IST</span>
