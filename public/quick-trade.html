@@ -320,6 +320,10 @@
   }
   .oos-side.buy  .oos-tag { color:var(--green); }
   .oos-side.sell .oos-tag { color:var(--red); }
+  /* iter138 — HELD row uses amber to distinguish from open-BUY (green) */
+  .oos-side.held .oos-tag { color:var(--amber); }
+  .oos-side.held.muted    { color:var(--muted); }
+  .oos-side.held.muted .oos-tag { color:var(--muted); }
   .oos-tag { font-weight:800; min-width:38px; font-size:10px; letter-spacing:.4px; }
   .oos-stat { display:inline-flex; gap:4px; align-items:baseline; }
   .oos-stat .k {
@@ -1003,8 +1007,11 @@ function renderWalletHint(){
   }
 }
 
-// LIFO position computation — same algorithm as iter124 Buys Summary.
-// Returns { qty, cost, avgPrice } for the CURRENT open position.
+// LIFO position computation — same algorithm as iter124 Buys Summary
+// (premium.html).  iter138 extended to also track fees so the SELL-side
+// summary card can show "how much you actually paid" for the held qty.
+//
+// Returns { qty, cost, fees, avgPrice } for the CURRENT open position.
 function computeOpenLIFO(rawTrades){
   const byId = new Map();
   for (const t of (rawTrades || [])) {
@@ -1012,18 +1019,34 @@ function computeOpenLIFO(rawTrades){
     if (!oid) continue;
     let g = byId.get(oid);
     if (!g) {
-      g = { orderId: oid, isBuyer: !!t.isBuyer, qty: 0, quoteQty: 0, time: t.time || 0 };
+      g = {
+        orderId: oid, isBuyer: !!t.isBuyer,
+        qty: 0, quoteQty: 0, commissionUsdt: 0,
+        symbol: (t.symbol || ''), time: t.time || 0,
+      };
       byId.set(oid, g);
     }
     g.qty      += parseFloat(t.qty)      || 0;
     g.quoteQty += parseFloat(t.quoteQty) || 0;
+    // iter138 — convert commission to USDT (USDT/base/BNB), matching
+    // the iter97 logic on premium.html.  Unknown asset → left as 0.
+    const c = parseFloat(t.commission) || 0;
+    const p = parseFloat(t.price) || 0;
+    const sym = String(t.symbol || '').toUpperCase();
+    const asset = String(t.commissionAsset || '').toUpperCase();
+    const base = sym.endsWith('USDT') ? sym.slice(0, -4) : '';
+    if (asset === 'USDT')                              g.commissionUsdt += c;
+    else if (asset === base && p > 0)                  g.commissionUsdt += c * p;
+    else if (asset === 'BNB' && (window.__bnbUsdtPrice || 0) > 0) {
+      g.commissionUsdt += c * window.__bnbUsdtPrice;
+    }
     if ((t.time || 0) > g.time) g.time = t.time || 0;
   }
   const groups = [...byId.values()].sort((a, b) => a.time - b.time);
   const stack = [];
   for (const g of groups) {
     if (g.isBuyer) {
-      stack.push({ qty: g.qty, cost: g.quoteQty });
+      stack.push({ qty: g.qty, cost: g.quoteQty, fees: g.commissionUsdt });
       continue;
     }
     let remaining = g.qty;
@@ -1034,15 +1057,20 @@ function computeOpenLIFO(rawTrades){
       const portion = take / buy.qty;
       buy.qty  -= take;
       buy.cost -= buy.cost * portion;
+      buy.fees -= buy.fees * portion;
       if (buy.qty <= 1e-12) stack.pop();
       remaining -= take;
     }
   }
-  if (!stack.length) return { qty: 0, cost: 0, avgPrice: 0 };
-  const sum = stack.reduce((a, x) => ({ qty: a.qty + x.qty, cost: a.cost + x.cost }), { qty: 0, cost: 0 });
+  if (!stack.length) return { qty: 0, cost: 0, fees: 0, avgPrice: 0 };
+  const sum = stack.reduce(
+    (a, x) => ({ qty: a.qty + x.qty, cost: a.cost + x.cost, fees: a.fees + x.fees }),
+    { qty: 0, cost: 0, fees: 0 }
+  );
   return {
     qty: sum.qty,
     cost: sum.cost,
+    fees: sum.fees,
     avgPrice: sum.qty > 0 ? sum.cost / sum.qty : 0,
   };
 }
@@ -1335,6 +1363,45 @@ async function loadOpenOrders(){
 }
 
 // ──────────────────────────────────────────────────────────────────
+// iter138 — Per-symbol HELD position cache.
+//
+// For every symbol with an open SELL order we need to know the
+// operator's actual cost basis (avg buy + total USDT spent + fees
+// paid), pulled from the LIFO match of their trade history.  The
+// renderer is called every 5s so a naive fetch-per-symbol-per-poll
+// would hammer the order-history endpoint.  Cache for 30s per symbol;
+// also reuse S.position when it matches the currently-viewed symbol.
+// ──────────────────────────────────────────────────────────────────
+const _posCache = new Map();           // symbol -> { pos, ts }
+const POS_CACHE_TTL_MS = 30_000;
+let _lastOrdersForSummary = null;      // for re-render after async fetch lands
+
+function getCachedPosition(symbol){
+  if (!symbol) return null;
+  // The currently-viewed symbol's position is kept fresh by iter131's
+  // fetchPosition / 20s poll — prefer it.
+  if (S.symbol === symbol && S.position) return S.position;
+  const c = _posCache.get(symbol);
+  return c ? c.pos : null;
+}
+
+async function refreshPositionForSummary(symbol){
+  if (!symbol) return;
+  const c = _posCache.get(symbol);
+  if (c && (Date.now() - c.ts) < POS_CACHE_TTL_MS) return;
+  try {
+    const r = await fetch('/api/trade/order-history?symbol=' + encodeURIComponent(symbol));
+    if (!r.ok) return;
+    const trades = await r.json();
+    const pos = computeOpenLIFO(trades || []);
+    _posCache.set(symbol, { pos, ts: Date.now() });
+    // Position arrived after the synchronous render — refresh the
+    // summary so the HELD row appears.
+    if (_lastOrdersForSummary) renderOpenOrdersSummary(_lastOrdersForSummary);
+  } catch (_) { /* ignore — next poll will retry */ }
+}
+
+// ──────────────────────────────────────────────────────────────────
 // iter137 — Open-Orders summary
 //
 // Group open orders by symbol, separate BUY vs SELL, and project
@@ -1447,7 +1514,15 @@ function renderOpenOrdersSummary(orders){
     return;
   }
   panel.style.display = '';
+  // iter138 — remember the order list so refreshPositionForSummary()
+  // can re-render after an async order-history fetch lands.
+  _lastOrdersForSummary = orders;
+
   panel.innerHTML = summary.perSymbol.map(s => {
+    // iter138 — pull the held (LIFO) position so SELL projections can
+    // use the operator's actual cost basis.
+    const held = (s.sell.qty > 0) ? getCachedPosition(s.symbol) : null;
+
     const buyHtml = s.buy.qty > 0 ? `
       <div class="oos-side buy">
         <span class="oos-tag">BUY</span>
@@ -1456,6 +1531,31 @@ function renderOpenOrdersSummary(orders){
         <span class="oos-stat"><span class="k">cost</span><span class="v">$${s.buy.cost.toFixed(2)}</span></span>
         <span class="oos-stat"><span class="k">orders</span><span class="v">${s.buyOrders}</span></span>
       </div>` : '';
+
+    // iter138 — HELD row: LIFO-matched open position from trade history.
+    //   • avg buy   — qty-weighted avg buy price for currently-held units
+    //   • cost      — total USDT spent on those buys
+    //   • fees      — converted-to-USDT commissions on those buys
+    //   • qty       — units currently held
+    // Only shown when there's at least one open SELL on this symbol.
+    let heldHtml = '';
+    if (s.sell.qty > 0) {
+      if (held && held.qty > 1e-9) {
+        heldHtml = `
+          <div class="oos-side held">
+            <span class="oos-tag">HELD</span>
+            <span class="oos-stat"><span class="k">avg buy</span><span class="v">${fmtPrice(held.avgPrice)}</span></span>
+            <span class="oos-stat"><span class="k">qty</span><span class="v">${fmtQty(held.qty)}</span></span>
+            <span class="oos-stat"><span class="k">cost</span><span class="v">$${held.cost.toFixed(2)}</span></span>
+            <span class="oos-stat"><span class="k">fees paid</span><span class="v">$${held.fees.toFixed(4)}</span></span>
+          </div>`;
+      } else if (held === null) {
+        heldHtml = `<div class="oos-side held muted"><span class="oos-tag">HELD</span><span class="oos-stat"><span class="k">loading…</span></span></div>`;
+      } else {
+        heldHtml = `<div class="oos-side held muted"><span class="oos-tag">HELD</span><span class="oos-stat"><span class="k">no position from trade history</span></span></div>`;
+      }
+    }
+
     const sellHtml = s.sell.qty > 0 ? `
       <div class="oos-side sell">
         <span class="oos-tag">SELL</span>
@@ -1464,8 +1564,36 @@ function renderOpenOrdersSummary(orders){
         <span class="oos-stat"><span class="k">rev</span><span class="v">$${s.sell.rev.toFixed(2)}</span></span>
         <span class="oos-stat"><span class="k">orders</span><span class="v">${s.sellOrders}</span></span>
       </div>` : '';
+
+    // iter138 — when HELD data exists, RECOMPUTE the round-trip
+    // projection against the held cost basis instead of the (often
+    // empty) open BUY side.  More accurate and matches what the
+    // operator actually paid.
     let rtHtml = '';
-    if (s.round) {
+    if (s.sell.qty > 0 && held && held.qty > 1e-9) {
+      const matched = Math.min(s.sell.qty, held.qty);
+      const buyPortion = matched / held.qty;
+      const costBasis = held.cost * buyPortion;
+      const buyFees   = held.fees * buyPortion;
+      const rev       = matched * s.sell.avg;
+      const sellFees  = OO_FEE_PER_SIDE * rev;
+      const totalFees = buyFees + sellFees;
+      const gross     = rev - costBasis;
+      const net       = gross - sellFees;   // buyFees already paid
+      const netVsCost = gross - totalFees;  // shows the TRUE round-trip net
+      const cls       = netVsCost >= 0 ? 'up' : 'down';
+      const sign      = (v) => (v >= 0 ? '+' : '');
+      const pct       = costBasis > 0 ? (netVsCost / costBasis) * 100 : 0;
+      rtHtml = `<div class="oos-round">
+        🔁
+        <span class="oos-stat"><span class="k">matched</span><span class="v">${fmtQty(matched)}</span></span>
+        <span class="oos-stat"><span class="k">cost basis</span><span class="v">$${costBasis.toFixed(2)}</span></span>
+        <span class="oos-stat"><span class="k">revenue</span><span class="v">${sign(rev)}$${rev.toFixed(2)}</span></span>
+        <span class="oos-stat"><span class="k">fees (RT)</span><span class="v">−$${totalFees.toFixed(4)}</span></span>
+        <span class="oos-stat"><span class="k">NET</span><span class="v ${cls}">${sign(netVsCost)}$${netVsCost.toFixed(2)} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)</span></span>
+      </div>`;
+    } else if (s.round) {
+      // Fallback: original open-BUY-vs-open-SELL projection (iter137).
       const r = s.round;
       const cls = r.net >= 0 ? 'up' : 'down';
       const sign = r.net >= 0 ? '+' : '';
@@ -1478,16 +1606,26 @@ function renderOpenOrdersSummary(orders){
       </div>`;
     } else if (s.buy.qty > 0 && s.sell.qty === 0) {
       rtHtml = `<div class="oos-round muted">No matching SELL — set a target above $${(s.buy.avg * 1.002).toFixed(6)} to lock in profit (after fees).</div>`;
-    } else if (s.sell.qty > 0 && s.buy.qty === 0) {
-      rtHtml = `<div class="oos-round muted">SELL only — reduces an existing held position (compare against your average buy on the SELL Position panel above).</div>`;
+    } else if (s.sell.qty > 0 && !held) {
+      rtHtml = `<div class="oos-round muted">Pulling held position from trade history…</div>`;
     }
     return `<div class="oos-card">
       <div class="oos-head">${s.symbol}</div>
       ${buyHtml}
+      ${heldHtml}
       ${sellHtml}
       ${rtHtml}
     </div>`;
   }).join('');
+
+  // iter138 — fire async fetches for any symbol with an open SELL
+  // whose position cache is stale or missing.  When they land, the
+  // summary re-renders with the HELD row populated.
+  for (const s of summary.perSymbol) {
+    if (s.sell.qty > 0 && getCachedPosition(s.symbol) === null) {
+      refreshPositionForSummary(s.symbol);
+    }
+  }
 }
 
 async function cancelOrder(sym, oid){
