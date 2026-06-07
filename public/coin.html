@@ -247,6 +247,21 @@
     box-shadow: 0 0 0 1px rgba(255,213,79,.15), 0 6px 18px rgba(0,0,0,.25);
   }
   .alerts-section.s-top5 .sec-title { color: #ffd54f; }
+  /* iter121 — browser-pop-up toggle on the Top-5 panel */
+  .notif-toggle {
+    font-size: 11px; font-weight: 600; letter-spacing: .2px;
+    padding: 4px 10px; border-radius: 14px;
+    border: 1px solid var(--border); background: var(--panel2, #1b2130);
+    color: var(--muted); cursor: pointer;
+    transition: background .15s, color .15s, border-color .15s;
+    margin-right: 8px;
+  }
+  .notif-toggle:hover { color: var(--text); border-color: var(--muted); }
+  .notif-toggle.on {
+    background: rgba(22,199,132,.15);
+    border-color: rgba(22,199,132,.5);
+    color: var(--good);
+  }
   .alerts-section .sec-head {
     display: flex; align-items: center; justify-content: space-between;
     margin-bottom: 8px;
@@ -1343,6 +1358,113 @@ function describe(ev) {
   return { ic: '•', source: ev.kind || 'event', chips: [] };
 }
 
+// iter121 — browser pop-up notifications for new Top-5 BUY signals.
+// Permission must be requested from a user gesture, so an in-panel
+// toggle button drives the flow.  We persist the on/off choice in
+// localStorage and use a sessionStorage watermark (ts of the newest
+// signal we've already notified about) so a fresh tab doesn't fire
+// pop-ups for already-existing entries.
+const NOTIF_KEY = 'bn_top5_notif_on';
+const NOTIF_TS_KEY = 'bn_top5_notif_ts';
+
+function notifSupported(){ return typeof Notification !== 'undefined'; }
+function notifWanted(){ return localStorage.getItem(NOTIF_KEY) === '1'; }
+function notifLive(){ return notifSupported() && notifWanted() && Notification.permission === 'granted'; }
+
+async function toggleNotif(){
+  if (!notifSupported()){
+    alert('Your browser does not support pop-up notifications.');
+    return;
+  }
+  if (notifLive()){
+    localStorage.removeItem(NOTIF_KEY);
+    updateNotifButton();
+    return;
+  }
+  if (Notification.permission === 'denied'){
+    alert('Notifications are blocked for this site in your browser settings. Re-enable them there, then try again.');
+    return;
+  }
+  let perm = Notification.permission;
+  if (perm !== 'granted') perm = await Notification.requestPermission();
+  if (perm === 'granted'){
+    localStorage.setItem(NOTIF_KEY, '1');
+    // Anchor watermark to NOW so existing entries don't fire pop-ups.
+    if (!sessionStorage.getItem(NOTIF_TS_KEY)){
+      sessionStorage.setItem(NOTIF_TS_KEY, String(Date.now()));
+    }
+    updateNotifButton();
+    try {
+      const n = new Notification('🔔 BookNow alerts enabled', {
+        body: 'You will be pinged when new Top-5 BUY signals appear.',
+        tag: 'bn-notif-enable',
+      });
+      setTimeout(() => { try { n.close(); } catch(_){} }, 5000);
+    } catch(_){}
+  } else {
+    updateNotifButton();
+  }
+}
+
+function updateNotifButton(){
+  const btn = document.getElementById('notifBtn');
+  if (!btn) return;
+  if (!notifSupported()){
+    btn.textContent = '🔕 Pop-ups unsupported';
+    btn.disabled = true;
+    return;
+  }
+  if (notifLive()){
+    btn.textContent = '🔔 Pop-ups ON';
+    btn.title = 'Click to disable browser pop-ups for new BUY signals';
+    btn.classList.add('on');
+  } else {
+    const blocked = Notification.permission === 'denied';
+    btn.textContent = blocked ? '🚫 Pop-ups blocked' : '🔕 Enable pop-ups';
+    btn.title = blocked
+      ? 'Notifications are blocked in browser settings'
+      : 'Click to get a browser pop-up when a new BUY signal appears';
+    btn.classList.remove('on');
+  }
+}
+
+function notifyNewBuys(topBuys){
+  if (!notifLive() || !topBuys || !topBuys.length) return;
+  const newestTs = topBuys.reduce((m, e) => Math.max(m, e.ts || 0), 0);
+  // If the tab is in focus, the operator is already watching — bump
+  // the watermark silently so we don't spam them while they scroll.
+  if (document.visibilityState === 'visible' && document.hasFocus()){
+    if (newestTs) sessionStorage.setItem(NOTIF_TS_KEY, String(newestTs));
+    return;
+  }
+  const watermark = parseInt(sessionStorage.getItem(NOTIF_TS_KEY) || '0', 10);
+  // Fire in chronological order, cap to most-recent 3 so we never
+  // throw 5 pop-ups at once.
+  const fresh = topBuys
+    .filter(e => (e.ts || 0) > watermark)
+    .sort((a, b) => (a.ts || 0) - (b.ts || 0))
+    .slice(-3);
+  if (!fresh.length) return;
+  for (const ev of fresh){
+    try {
+      const sym = ev.symbol || '?';
+      const detector = (ev.kind || 'signal').toUpperCase().replace(/_/g, ' ');
+      const priceStr = (ev.signal_price != null ? ev.signal_price
+                      : ev.price != null ? ev.price : null);
+      const priceTail = priceStr != null ? ` @ $${(+priceStr).toPrecision(6)}` : '';
+      const n = new Notification(`🔥 ${sym} — ${detector}`, {
+        body: `Strong BUY signal${priceTail}. Click to open dashboard.`,
+        tag: `bn-buy-${sym}-${ev.kind}-${ev.ts}`,  // de-dup if two ticks race
+        renotify: false,
+      });
+      n.onclick = () => { try { window.focus(); } catch(_){} n.close(); };
+      // Auto-close after 12s — many OSs already auto-hide, but enforce it.
+      setTimeout(() => { try { n.close(); } catch(_){} }, 12000);
+    } catch(_){}
+  }
+  sessionStorage.setItem(NOTIF_TS_KEY, String(fresh[fresh.length - 1].ts));
+}
+
 async function renderAlertsHome() {
   if (currentSym) return;  // user has loaded a coin — don't overwrite
   try {
@@ -1505,6 +1627,13 @@ async function renderAlertsHome() {
         .slice()
         .sort((a, b) => (b.ts || 0) - (a.ts || 0))
         .slice(0, 5);
+      // iter121 — fire browser pop-up for any new entries past the
+      // watermark.  Skips silently when notifications are disabled.
+      notifyNewBuys(topBuys);
+      // iter121 — toggle button HTML (same markup in both branches so
+      // the operator can enable/disable pop-ups even when the list is
+      // currently empty).
+      const notifBtnHtml = `<button id="notifBtn" class="notif-toggle" onclick="toggleNotif()" type="button">🔕 Enable pop-ups</button>`;
       if (topBuys.length) {
         html += `
           <section class="alerts-section s-top5">
@@ -1513,7 +1642,10 @@ async function renderAlertsHome() {
                 <span class="sec-title">🎯 Top 5 Latest Buy Signals</span>
                 <span class="sec-desc">Most recent high-confidence BUY candidates — review &amp; manually execute</span>
               </div>
-              <span class="sec-count">${topBuys.length} latest</span>
+              <div style="display:flex;align-items:center;gap:6px">
+                ${notifBtnHtml}
+                <span class="sec-count">${topBuys.length} latest</span>
+              </div>
             </div>
             <div class="sec-rows">
               ${topBuys.map(renderRow).join('')}
@@ -1528,6 +1660,7 @@ async function renderAlertsHome() {
                 <span class="sec-title">🎯 Top 5 Latest Buy Signals</span>
                 <span class="sec-desc">No strong BUY signals in the current window — check Watch List below</span>
               </div>
+              <div>${notifBtnHtml}</div>
             </div>
           </section>
         `;
@@ -1565,6 +1698,9 @@ async function renderAlertsHome() {
     `;
 
     document.getElementById('content').innerHTML = html;
+    // iter121 — re-sync the toggle's label/colour after every render
+    // (the button HTML is freshly injected each tick).
+    updateNotifButton();
   } catch (e) {
     document.getElementById('content').innerHTML = `<div class="card empty">Error loading alerts: ${e.message}</div>`;
   }
