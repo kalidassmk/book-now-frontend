@@ -293,6 +293,67 @@
   .oo-row .cancel:hover { color:var(--red); border-color:var(--red); }
   .empty { padding:24px 14px; text-align:center; color:var(--muted); font-size:12px; }
 
+  /* ── iter132 — Edit-open-order modal + pencil button ── */
+  .oo-row .edit {
+    background:transparent; border:1px solid var(--border);
+    color:var(--muted); padding:3px 7px; cursor:pointer; font-size:11px;
+    border-radius:6px; margin-right:4px;
+    transition:color .12s, border-color .12s;
+  }
+  .oo-row .edit:hover { color:var(--amber); border-color:var(--amber); }
+  .modal {
+    position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+    z-index:2000;
+  }
+  .modal.show { display:flex; }
+  .modal-back {
+    position:absolute; inset:0; background:rgba(0,0,0,.65);
+    backdrop-filter:blur(2px); -webkit-backdrop-filter:blur(2px);
+  }
+  .modal-box {
+    position:relative; background:var(--panel); border:1px solid var(--border);
+    border-radius:12px; padding:18px 20px; min-width:360px; max-width:90vw;
+    box-shadow:0 16px 40px rgba(0,0,0,.5);
+    animation:bnModalIn .15s ease-out;
+  }
+  @keyframes bnModalIn { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }
+  .modal-title { font-size:14px; font-weight:700; margin-bottom:4px; }
+  .modal-meta {
+    font-size:11px; color:var(--muted); margin-bottom:14px;
+    font-variant-numeric:tabular-nums;
+    display:flex; gap:8px; flex-wrap:wrap;
+  }
+  .modal-meta .side-BUY  { color:var(--green); font-weight:700; }
+  .modal-meta .side-SELL { color:var(--red);   font-weight:700; }
+  .modal-field { margin-bottom:10px; }
+  .modal-field label {
+    font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px;
+    display:block; margin-bottom:4px;
+  }
+  .modal-field input {
+    width:100%; padding:9px 12px; background:var(--panel2); border:1px solid var(--border);
+    border-radius:8px; color:var(--text); font-size:14px; font-weight:600;
+    font-variant-numeric:tabular-nums; outline:none;
+  }
+  .modal-field input:focus { border-color:var(--blue); }
+  .modal-field input:read-only { color:var(--muted); cursor:default; }
+  .modal-warn {
+    font-size:11px; color:var(--amber); background:rgba(240,185,11,.08);
+    border:1px solid rgba(240,185,11,.3); border-radius:6px;
+    padding:8px 10px; margin:10px 0; line-height:1.4;
+  }
+  .modal-actions { display:flex; gap:8px; margin-top:14px; }
+  .modal-actions button {
+    flex:1; padding:10px; border:0; border-radius:8px; cursor:pointer;
+    font-size:13px; font-weight:700; transition:filter .12s;
+  }
+  .modal-actions button.cancel {
+    background:var(--panel2); color:var(--text); border:1px solid var(--border);
+  }
+  .modal-actions button.confirm { background:var(--amber); color:#0b0e14; }
+  .modal-actions button.confirm:hover { filter:brightness(1.1); }
+  .modal-actions button:disabled { opacity:.55; cursor:not-allowed; }
+
   /* ── Toasts ── */
   .toasts { position:fixed; right:18px; top:80px; z-index:1000; display:flex; flex-direction:column; gap:8px; }
   .toast {
@@ -480,6 +541,41 @@
     </div>
   </div>
 </main>
+
+<!-- iter132 — Edit-open-order cancel-and-replace modal. -->
+<div id="edit-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="em-title">
+  <div class="modal-back" onclick="closeEditModal()"></div>
+  <div class="modal-box">
+    <div class="modal-title" id="em-title">✏️ Edit Order</div>
+    <div class="modal-meta">
+      <span id="em-sym">—</span>
+      <span>·</span>
+      <span id="em-side">—</span>
+      <span>·</span>
+      <span id="em-id">#—</span>
+    </div>
+    <div class="modal-field">
+      <label>Price (USDT)</label>
+      <input id="em-price" type="number" step="any" inputmode="decimal" />
+    </div>
+    <div class="modal-field">
+      <label>Amount</label>
+      <input id="em-qty" type="number" step="any" inputmode="decimal" />
+    </div>
+    <div class="modal-field">
+      <label>Total (USDT)</label>
+      <input id="em-total" type="number" step="any" readonly />
+    </div>
+    <div class="modal-warn">
+      ⚠️ Confirm will <strong>cancel the current order</strong> then place a NEW one with the values above.
+      If your balance is insufficient or the price hits a Binance filter limit, the new order may not be re-placed.
+    </div>
+    <div class="modal-actions">
+      <button class="cancel" type="button" onclick="closeEditModal()">Cancel</button>
+      <button class="confirm" id="em-confirm" type="button">Confirm</button>
+    </div>
+  </div>
+</div>
 
 <div id="toasts" class="toasts"></div>
 
@@ -1192,12 +1288,18 @@ async function loadOpenOrders(){
       const side = (o.side || '').toUpperCase();
       const sym = (o.symbol || '');
       const oid = (o.orderId ?? o.id ?? '');
+      // iter132 — ✏️ Edit button alongside cancel.  Single quotes on
+      // numbers because oid can be a 64-bit integer that JS treats as
+      // string-safe; price/qty are converted client-side.
       return `<div class="oo-row">
         <span class="sym">${sym}</span>
         <span class="side ${side}">${side}</span>
         <span class="px">${fmtPrice(px)}</span>
         <span class="qty">${fmtQty(qty)}</span>
-        <button class="cancel" onclick="cancelOrder('${sym}','${oid}')">cancel</button>
+        <span style="display:inline-flex;gap:4px">
+          <button class="edit" onclick="openEditModal('${sym}','${oid}','${side}',${px},${qty})" title="Edit price / amount">✏️</button>
+          <button class="cancel" onclick="cancelOrder('${sym}','${oid}')">cancel</button>
+        </span>
       </div>`;
     }).join('');
   } catch (_) { /* ignore */ }
@@ -1219,6 +1321,127 @@ async function cancelOrder(sym, oid){
 }
 window.cancelOrder = cancelOrder;
 setInterval(loadOpenOrders, 5000);
+
+// ──────────────────────────────────────────────────────────────────
+// iter 132 — Edit open order: cancel-and-replace flow.
+// Mirrors Binance's UX (✏️ pencil → modal → confirm).
+// ──────────────────────────────────────────────────────────────────
+let _editTarget = null;
+
+function openEditModal(sym, oid, side, px, qty){
+  _editTarget = { sym, oid, side };
+  $('em-sym').textContent = sym;
+  const sideSpan = $('em-side');
+  sideSpan.textContent = side;
+  sideSpan.className = 'side-' + side;
+  $('em-id').textContent = '#' + oid;
+  $('em-price').value = px;
+  $('em-qty').value = qty;
+  $('em-total').value = (px * qty).toFixed(4);
+  $('edit-modal').classList.add('show');
+  // Focus the price field so the operator can start typing immediately.
+  setTimeout(() => { try { $('em-price').focus(); $('em-price').select(); } catch(_){} }, 0);
+}
+
+function closeEditModal(){
+  _editTarget = null;
+  $('edit-modal').classList.remove('show');
+  const btn = $('em-confirm');
+  btn.disabled = false; btn.textContent = 'Confirm';
+}
+window.openEditModal = openEditModal;
+window.closeEditModal = closeEditModal;
+
+// Sync Total when Price or Amount change in the modal.
+['em-price','em-qty'].forEach(id => {
+  $(id).addEventListener('input', () => {
+    const p = parseFloat($('em-price').value) || 0;
+    const q = parseFloat($('em-qty').value) || 0;
+    $('em-total').value = (p > 0 && q > 0) ? (p * q).toFixed(4) : '';
+  });
+});
+
+// Esc to close.
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('edit-modal').classList.contains('show')) {
+    closeEditModal();
+  }
+});
+
+// Confirm — cancel old, place new.
+$('em-confirm').addEventListener('click', confirmEditOrder);
+
+async function confirmEditOrder(){
+  if (!_editTarget) return;
+  const { sym, oid, side } = _editTarget;
+  const newPx = parseFloat($('em-price').value);
+  const newQty = parseFloat($('em-qty').value);
+  if (!newPx || newPx <= 0 || !newQty || newQty <= 0) {
+    toast('error', 'Invalid input', 'Price and amount must both be positive numbers.');
+    return;
+  }
+  const btn = $('em-confirm');
+  btn.disabled = true; btn.textContent = '⏳ Replacing…';
+
+  // Step 1: cancel the existing order.
+  try {
+    const r = await fetch('/api/trade/quick-cancel/'
+                          + encodeURIComponent(sym) + '/'
+                          + encodeURIComponent(oid));
+    const b = await r.json().catch(() => ({}));
+    if (!r.ok || !b.ok) {
+      toast('error', 'Cancel failed', (b.error || ('HTTP ' + r.status)));
+      btn.disabled = false; btn.textContent = 'Confirm';
+      return;
+    }
+  } catch (e) {
+    toast('error', 'Network error on cancel', e.message);
+    btn.disabled = false; btn.textContent = 'Confirm';
+    return;
+  }
+
+  // Step 2: place the new order.  SELL uses absolute price endpoint;
+  // BUY uses the existing offsetPct contract (price derived from current).
+  let placeUrl;
+  if (side === 'SELL') {
+    placeUrl = '/api/trade/quick-limit-sell/' + encodeURIComponent(sym)
+             + '?qty=' + newQty + '&price=' + newPx;
+  } else {
+    // BUY — convert to offsetPct relative to the engine's current ref.
+    const ref = S.lastPrice || S.bestBid || S.bestAsk || newPx;
+    const offsetPct = ((ref - newPx) / ref) * 100;
+    placeUrl = '/api/trade/quick-limit-buy/' + encodeURIComponent(sym)
+             + '?qty=' + newQty
+             + '&offsetPct=' + offsetPct.toFixed(4)
+             + '&profitPct=0';
+  }
+  try {
+    const r = await fetch(placeUrl);
+    const b = await r.json().catch(() => ({}));
+    if (!r.ok || !b.ok) {
+      // ⚠️ Old order is GONE but the new one didn't land.  Tell the
+      // operator loudly so they don't think they still have an order.
+      toast('error', '⚠️ NEW ORDER FAILED',
+            'Old order cancelled but new ' + side + ' ' + newQty + ' @ ' + newPx
+            + ' was NOT placed: ' + (b.error || ('HTTP ' + r.status))
+            + ' — re-place from the form.');
+      closeEditModal();
+      loadOpenOrders();
+      return;
+    }
+    toast('ok', 'Order replaced', side + ' ' + newQty + ' @ ' + newPx);
+    closeEditModal();
+    loadOpenOrders();
+    // The new order changed wallet + position; refresh both.
+    fetchWallet();
+    fetchPosition(S.symbol);
+  } catch (e) {
+    toast('error', '⚠️ Network error on PLACE',
+          'Old order cancelled but PLACE failed: ' + e.message + ' — re-place from the form.');
+    closeEditModal();
+    loadOpenOrders();
+  }
+}
 
 // ── iter126 — Candlestick chart (TradingView lightweight-charts) ────
 // Two pieces:
