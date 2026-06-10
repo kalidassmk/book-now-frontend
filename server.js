@@ -145,6 +145,7 @@ app.use(express.static(path.join(__dirname, 'public'), {
 // forward frames in both directions. The browser doesn't see the engine
 // hostname / port — same-origin via the dashboard.
 const WebSocket = require('ws');
+const wsProxyServer = new WebSocket.Server({ noServer: true });
 server.on('upgrade', (req, clientSocket, head) => {
     // Only intercept the Zerodha WS path. Other upgrades (e.g. socket.io's)
     // fall through to the existing handlers.
@@ -154,27 +155,60 @@ server.on('upgrade', (req, clientSocket, head) => {
     const target = ZERODHA_ENGINE_BASE.replace(/^http/, 'ws') + req.url;
     const upstream = new WebSocket(target, { perMessageDeflate: false });
 
-    // Hold the raw browser socket until both ends are open. The `ws`
-    // server handles the actual handshake response on the browser side
-    // for us if we hand it the parsed request.
-    const wsServer = new WebSocket.Server({ noServer: true });
-    wsServer.handleUpgrade(req, clientSocket, head, (browserWs) => {
-        // Pump messages both ways. ws emits 'message' as Buffer; pass-through
-        // is fine because the JSON our protocol uses survives a round-trip.
-        const closeBoth = (code, reason) => {
-            try { browserWs.close(code || 1000, reason || ''); } catch (_) {}
-            try { upstream.close(code || 1000, reason || ''); } catch (_) {}
-        };
-        browserWs.on('message', (data) => {
-            if (upstream.readyState === WebSocket.OPEN) upstream.send(data);
+    // Register upstream error/close handlers IMMEDIATELY so a fast-failing
+    // upstream (DNS / connect refused / 5xx upgrade) doesn't crash the
+    // process before handleUpgrade resolves.
+    let browserWs = null;
+    const queue = [];  // browser-side messages held until upstream opens
+    const closeBoth = (code, reason) => {
+        try { if (browserWs) browserWs.close(code || 1000, String(reason || '')); } catch (_) {}
+        try { upstream.close(code || 1000, String(reason || '')); } catch (_) {}
+    };
+    upstream.on('error', (e) => {
+        console.error('[zerodha-ws] upstream error:', e && e.message);
+        // If browser hasn't completed handshake yet, abort the raw socket
+        if (!browserWs) { try { clientSocket.destroy(); } catch (_) {} }
+        else closeBoth(1011, 'upstream err');
+    });
+    upstream.on('open', () => {
+        // Drain queued browser messages now that upstream is ready.
+        for (const data of queue) {
+            try { upstream.send(data); } catch (_) {}
+        }
+        queue.length = 0;
+    });
+
+    wsProxyServer.handleUpgrade(req, clientSocket, head, (clientWs) => {
+        browserWs = clientWs;
+        // IMPORTANT: forward each direction with the correct frame type.
+        // The `ws` library emits Buffers regardless of original frame, so
+        // we'd ship browser->upstream as BINARY by default — but our
+        // Python backend reads via `ws.receive_text()` which expects
+        // TEXT frames and crashes with `KeyError: 'text'` on binary.
+        // The `isBinary` arg on the message event distinguishes them;
+        // pass it through to `.send()` so frame type is preserved.
+        browserWs.on('message', (data, isBinary) => {
+            const payload = isBinary ? data : data.toString();
+            if (upstream.readyState === WebSocket.OPEN) {
+                upstream.send(payload);
+            } else if (upstream.readyState === WebSocket.CONNECTING) {
+                // Hold until upstream is open (typically <100ms inside the
+                // compose net). Cap the queue so a misbehaving client can't
+                // exhaust memory while upstream stays stuck.
+                if (queue.length < 100) queue.push(payload);
+            }
+            // CLOSED/CLOSING → drop silently
         });
-        upstream.on('message', (data) => {
-            if (browserWs.readyState === WebSocket.OPEN) browserWs.send(data);
+        upstream.on('message', (data, isBinary) => {
+            const payload = isBinary ? data : data.toString();
+            if (browserWs.readyState === WebSocket.OPEN) browserWs.send(payload);
         });
-        browserWs.on('close', (code, reason) => closeBoth(code, reason && reason.toString()));
-        upstream.on('close',  (code, reason) => closeBoth(code, reason && reason.toString()));
-        browserWs.on('error', () => closeBoth(1011, 'browser err'));
-        upstream.on('error',  () => closeBoth(1011, 'upstream err'));
+        browserWs.on('close', (code, reason) => closeBoth(code, reason));
+        upstream.on('close',  (code, reason) => closeBoth(code, reason));
+        browserWs.on('error', (e) => {
+            console.error('[zerodha-ws] browser error:', e && e.message);
+            closeBoth(1011, 'browser err');
+        });
     });
 });
 
