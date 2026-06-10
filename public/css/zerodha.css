@@ -248,3 +248,147 @@ body.zd {
   padding: 1px 7px; border-radius: 10px;
   font-size: 10px; font-weight: 700;
 }
+
+/* ─────────────────────────────────────────────────────────────────
+ * Order-flow visualisations — shared between the spot + MCX flow
+ * pages. The "pressure bar" is a horizontal split between buy/sell
+ * pending volumes (think trader's order book pressure gauge). The
+ * "delta meter" is a single coloured fill 0..1 from center, sign
+ * shows direction. Tuned for compact table-cell embedding.
+ * ──────────────────────────────────────────────────────────────── */
+
+.pbar {
+  /* Outer track */
+  display: flex;
+  height: 14px;
+  width: 100%;
+  background: rgba(139, 148, 158, 0.10);
+  border: 1px solid var(--bn-line);
+  border-radius: 3px;
+  overflow: hidden;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .3px;
+  color: #fff;
+  line-height: 1;
+}
+.pbar .b {
+  background: var(--bn-good);
+  display: flex; align-items: center; justify-content: center;
+  transition: width .25s;
+}
+.pbar .s {
+  background: var(--bn-bad);
+  display: flex; align-items: center; justify-content: center;
+  transition: width .25s;
+}
+
+/* Net-delta meter: small filled pill, signed. Width is |delta|%
+ * of the cell, colour from sign. */
+.delta-meter {
+  position: relative;
+  height: 12px;
+  width: 100%;
+  background: var(--bn-panel-2);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--bn-line);
+}
+.delta-meter .fill {
+  position: absolute;
+  top: 0; bottom: 0;
+  left: 50%;
+  transition: width .25s, left .25s;
+}
+.delta-meter .fill.pos { background: var(--bn-good); }
+.delta-meter .fill.neg { background: var(--bn-bad); }
+.delta-meter .center {
+  position: absolute;
+  top: 0; bottom: 0; left: 50%;
+  width: 1px; background: rgba(255,255,255,.25);
+}
+
+/* Range marker — shows where LTP sits in the day's low→high band */
+.range-bar {
+  position: relative;
+  height: 8px;
+  background: linear-gradient(
+    to right,
+    rgba(231, 76, 60, .25),
+    rgba(241, 196, 15, .20),
+    rgba(46, 204, 113, .25)
+  );
+  border: 1px solid var(--bn-line);
+  border-radius: 3px;
+  margin-top: 3px;
+}
+.range-bar .ltp {
+  position: absolute;
+  top: -2px;
+  width: 2px;
+  height: 12px;
+  background: var(--bn-accent);
+  box-shadow: 0 0 4px var(--bn-accent);
+  border-radius: 1px;
+}
+.range-bar .vwap {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 8px;
+  background: rgba(241, 196, 15, .9);
+}
+
+/* Sector summary card (for spot page) */
+.sec-card {
+  background: var(--bn-panel);
+  border: 1px solid var(--bn-line);
+  border-radius: 7px;
+  padding: 12px;
+  display: grid; grid-template-rows: auto auto auto auto; gap: 8px;
+}
+.sec-card .h { display: flex; align-items: baseline; justify-content: space-between; }
+.sec-card .h .name { font-weight: 800; font-size: 13px; }
+.sec-card .h .count { color: var(--bn-muted); font-size: 11px; }
+.sec-card .pp { font-size: 11px; color: var(--bn-muted); display: flex; justify-content: space-between; }
+.sec-card .pp .val { color: var(--bn-text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.sec-card .leaders {
+  font-size: 11px; color: var(--bn-muted);
+  display: grid; grid-template-columns: 1fr auto; gap: 2px 8px;
+}
+.sec-card .leaders .s { color: var(--bn-text); font-weight: 700; }
+
+/* Buy/sell flow column tag — narrow chips for "BUY HEAVY", "SELL HEAVY", "BALANCED" */
+.flow-tag {
+  display: inline-block;
+  padding: 1px 7px; border-radius: 3px;
+  font-size: 9px; font-weight: 800;
+  letter-spacing: .4px;
+  text-transform: uppercase;
+  background: var(--bn-panel-2);
+  border: 1px solid var(--bn-line);
+  color: var(--bn-muted);
+}
+.flow-tag.buy   { background: rgba(46, 204, 113, .15); color: var(--bn-good); border-color: rgba(46, 204, 113, .35); }
+.flow-tag.sell  { background: rgba(231, 76, 60, .15);  color: var(--bn-bad);  border-color: rgba(231, 76, 60, .35); }
+.flow-tag.bal   { background: rgba(139, 148, 158, .12); color: var(--bn-muted); }
+
+/* Commodity card for MCX flow page */
+.cmd-card {
+  background: var(--bn-panel);
+  border: 1px solid var(--bn-line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: transform .12s, border-color .12s;
+}
+.cmd-card:hover { transform: translateY(-1px); border-color: var(--bn-accent); }
+.cmd-card .row1 { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.cmd-card .row1 .u   { font-size: 16px; font-weight: 800; }
+.cmd-card .row1 .sym { color: var(--bn-muted); font-size: 10px; }
+.cmd-card .row1 .pct { margin-left: auto; font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.cmd-card .row2 { display: flex; align-items: baseline; gap: 14px; font-size: 12px; }
+.cmd-card .row2 .ltp { font-weight: 800; font-variant-numeric: tabular-nums; font-size: 14px; }
+.cmd-card .meta { font-size: 11px; color: var(--bn-muted); margin-top: 6px; display: grid; grid-template-columns: 1fr 1fr; gap: 3px 8px; }
+.cmd-card .meta .k { color: var(--bn-muted); }
+.cmd-card .meta .v { color: var(--bn-text); font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }

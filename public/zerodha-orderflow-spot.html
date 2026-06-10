@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+  public/zerodha-orderflow-spot.html
+  ──────────────────────────────────────────────────────────────────────────
+  Zerodha Spot Order Flow — NSE/BSE equity, NIFTY 100 universe.
+
+  What we surface vs the Binance order_flow scalper:
+    On Binance we have a backend scalper that consumes trade-by-trade
+    aggTrades + book updates and emits taker BUY vs SELL volume per
+    rolling window. NSE doesn't expose that level of granularity over
+    the retail API, so this page derives flow signals purely from the
+    /quote endpoint's snapshot fields:
+
+      total_buy_quantity   — pending bids in book      → buy pressure
+      total_sell_quantity  — pending asks in book      → sell pressure
+      average_traded_price — session VWAP              → fair-value anchor
+      last_price           — LTP                       → premium/discount
+      ohlc.{open,high,low,close} — today's day shape   → range positioning
+
+    Derived per-symbol metrics:
+
+      buy_pct       = buy_qty / (buy_qty + sell_qty) × 100
+                      (50 = balanced, >65 = bid-heavy, <35 = ask-heavy)
+
+      net_delta     = (buy_qty - sell_qty) / (buy_qty + sell_qty) × 100
+                      (-100…+100, signed; same info as buy_pct but
+                      easier to plot in a centred meter)
+
+      vwap_gap %    = (LTP - VWAP) / VWAP × 100
+                      (positive = buyers paying premium, bullish flow)
+
+      range_pos %   = (LTP - day_low) / (day_high - day_low) × 100
+                      (0 = at session low, 100 = at high, momentum proxy)
+
+    These signals don't tell you everything a tick-level scalper would,
+    but on equity intraday they catch most of the actionable patterns:
+    sector rotation (every name in a sector turning buy-heavy at once),
+    range breakouts (range_pos > 90 with high buy_pct), and stuck
+    sellers (range_pos < 10 with low buy_pct).
+
+  Layout:
+    Status row → Breadth stats → Sector summary grid → Bullish leaderboard
+                                                     → Bearish leaderboard
+                                                     → Full sortable table
+
+  Click any symbol → /zerodha-spot.html?sym=X (pre-loaded ticket).
+
+  Backend deps:
+    GET /api/zerodha/v1/quote?syms=NSE:RELIANCE,...   (single batch ≤500)
+
+  Polling: every 6 s. NSE volume + book state updates roughly every
+  second on a liquid name, so 6 s feels live without hammering Kite.
+-->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Spot Order Flow — Zerodha — BookNow</title>
+<link rel="stylesheet" href="/css/zerodha.css" />
+<style>
+  /* Page-local layout */
+  .breadth-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-bottom: 14px; }
+  .sec-grid    { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+  .lead-grid   { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 1100px) { .lead-grid { grid-template-columns: 1fr; } }
+
+  .of-table th, .of-table td {
+    padding: 7px 9px; font-size: 12px;
+    border-bottom: 1px solid rgba(31,41,51,.4);
+  }
+  .of-table th {
+    background: var(--bn-panel-2);
+    color: var(--bn-muted); font-weight: 700;
+    font-size: 10px; text-transform: uppercase; letter-spacing: .4px;
+    position: sticky; top: 0;
+    cursor: pointer;
+    user-select: none;
+  }
+  .of-table th.sorted::after { content: ' ↓'; color: var(--bn-accent); }
+  .of-table th.sorted.asc::after { content: ' ↑'; }
+  .of-table td.num, .of-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .of-table tr.row { cursor: pointer; transition: background .12s; }
+  .of-table tr.row:hover { background: rgba(41,182,246,.05); }
+  .of-table .sym { font-weight: 700; }
+  .of-table .sec-cell { color: var(--bn-muted); font-size: 11px; }
+  .of-table .good { color: var(--bn-good); }
+  .of-table .bad  { color: var(--bn-bad); }
+  .of-table .mute { color: var(--bn-muted); }
+  .of-table .pbar-cell { width: 180px; }
+  .of-table .range-cell { width: 110px; padding-top: 11px; }
+
+  /* Page filter row */
+  .filter-row {
+    display: flex; gap: 8px; align-items: center;
+    margin-bottom: 12px; flex-wrap: wrap;
+  }
+  .filter-row .lbl {
+    color: var(--bn-muted); font-size: 11px;
+    text-transform: uppercase; letter-spacing: .4px;
+    margin-right: 4px;
+  }
+  .filter-row input {
+    background: var(--bn-panel-2);
+    color: var(--bn-text);
+    border: 1px solid var(--bn-line);
+    border-radius: 5px;
+    padding: 5px 10px;
+    font: inherit; font-size: 12px;
+    outline: none;
+    width: 180px;
+    text-transform: uppercase;
+  }
+  .filter-row input:focus { border-color: var(--bn-accent); }
+</style>
+</head>
+<body class="zd">
+<div class="zd-wrap">
+
+  <h1 class="zd-title">🌊 Spot Order Flow — NSE / BSE</h1>
+  <div class="zd-sub">
+    Buy/sell pressure, VWAP gap, and day-range positioning across the
+    NIFTY 100 universe. Click a row to jump to
+    <a href="/zerodha-spot.html" style="color:var(--bn-accent)">Spot Equity</a>.
+    Commodity flow lives at
+    <a href="/zerodha-orderflow-mcx.html" style="color:var(--bn-accent)">MCX Order Flow</a>.
+  </div>
+
+  <!-- Status chips -->
+  <div class="zd-row" style="margin-bottom: 12px;">
+    <div class="zd-chip"   id="chip-engine"><span class="dot"></span><span>engine <strong id="engine-val">…</strong></span></div>
+    <div class="zd-chip"   id="chip-universe"><span class="dot"></span><span>tracked <strong id="universe-val">…</strong></span></div>
+    <div class="zd-chip"   id="chip-flow"><span class="dot"></span><span>avg pressure <strong id="flow-val">…</strong></span></div>
+    <div class="zd-chip" id="chip-as-of">refresh <strong id="as-of-val">—</strong></div>
+  </div>
+
+  <!-- Breadth stats -->
+  <div class="breadth-row">
+    <div class="zd-stat">
+      <div class="lbl">Breadth</div>
+      <div class="val" id="breadth-val2">—</div>
+      <div class="sub" id="breadth-sub">↑ up vs ↓ down</div>
+    </div>
+    <div class="zd-stat">
+      <div class="lbl">Bid-heavy (buy >65%)</div>
+      <div class="val good" id="bid-heavy">—</div>
+      <div class="sub">buyers in control</div>
+    </div>
+    <div class="zd-stat">
+      <div class="lbl">Ask-heavy (buy &lt;35%)</div>
+      <div class="val bad" id="ask-heavy">—</div>
+      <div class="sub">sellers in control</div>
+    </div>
+    <div class="zd-stat">
+      <div class="lbl">Dominant sector</div>
+      <div class="val" id="dom-sector">—</div>
+      <div class="sub" id="dom-sub">most-bullish sector by avg flow</div>
+    </div>
+  </div>
+
+  <!-- Sector summary grid -->
+  <h2 class="zd-section-h">By sector — avg flow + leaders</h2>
+  <div class="sec-grid" id="sec-grid">
+    <div class="zd-empty" style="grid-column: 1 / -1;">Loading…</div>
+  </div>
+
+  <!-- Bullish + Bearish leaderboards -->
+  <h2 class="zd-section-h" style="margin-top: 22px;">Flow leaderboards (top 10 each side)</h2>
+  <div class="lead-grid">
+    <div class="zd-card" style="padding: 0;">
+      <div style="background: var(--bn-panel-2); padding: 9px 13px; border-bottom: 1px solid var(--bn-line); font-size: 11px; font-weight: 700; color: var(--bn-good); text-transform: uppercase; letter-spacing: .4px;">
+        🟢 Bullish flow — highest buy pressure
+      </div>
+      <table class="of-table" style="width:100%; border-collapse: collapse;">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th class="num">LTP</th>
+            <th class="num">Day %</th>
+            <th>Pressure</th>
+            <th class="num">VWAP gap</th>
+          </tr>
+        </thead>
+        <tbody id="bull-tbody">
+          <tr><td colspan="5" class="zd-empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="zd-card" style="padding: 0;">
+      <div style="background: var(--bn-panel-2); padding: 9px 13px; border-bottom: 1px solid var(--bn-line); font-size: 11px; font-weight: 700; color: var(--bn-bad); text-transform: uppercase; letter-spacing: .4px;">
+        🔴 Bearish flow — highest sell pressure
+      </div>
+      <table class="of-table" style="width:100%; border-collapse: collapse;">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th class="num">LTP</th>
+            <th class="num">Day %</th>
+            <th>Pressure</th>
+            <th class="num">VWAP gap</th>
+          </tr>
+        </thead>
+        <tbody id="bear-tbody">
+          <tr><td colspan="5" class="zd-empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Full sortable table -->
+  <h2 class="zd-section-h" style="margin-top: 22px;">
+    Full universe <span class="count" id="full-count">—</span>
+  </h2>
+  <div class="filter-row">
+    <span class="lbl">Filter</span>
+    <input id="filter-input" type="text" placeholder="symbol or sector…" autocomplete="off" />
+    <span class="lbl" style="margin-left: 12px;">Show</span>
+    <div class="zd-toggle" id="filter-flow">
+      <button data-v="ALL"  class="on">ALL</button>
+      <button data-v="BUY">BUY-HEAVY</button>
+      <button data-v="SELL">SELL-HEAVY</button>
+      <button data-v="BAL">BALANCED</button>
+    </div>
+    <span class="lbl" style="margin-left: 12px;">Sector</span>
+    <select id="filter-sector" style="background:var(--bn-panel-2); color:var(--bn-text); border:1px solid var(--bn-line); border-radius:5px; padding:5px 8px; font:inherit; font-size:12px;">
+      <option value="ALL">All sectors</option>
+    </select>
+  </div>
+  <div class="zd-card" style="padding: 0;">
+    <table class="of-table" style="width:100%; border-collapse: collapse;">
+      <thead>
+        <tr>
+          <th data-sort="sym">Symbol</th>
+          <th data-sort="sector">Sector</th>
+          <th class="num" data-sort="ltp">LTP</th>
+          <th class="num" data-sort="dayPct">Day %</th>
+          <th data-sort="buyPct">Pressure</th>
+          <th class="num" data-sort="netDelta">Δ</th>
+          <th class="num" data-sort="vwapGap">VWAP gap</th>
+          <th data-sort="rangePos">Day range</th>
+          <th class="num" data-sort="volume">Volume</th>
+          <th data-sort="flowTag">Flow</th>
+        </tr>
+      </thead>
+      <tbody id="full-tbody">
+        <tr><td colspan="10" class="zd-empty">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+<script src="/nav.js"></script>
+<script src="/js/nifty100.js"></script>
+<script>
+/* ──────────────────────────────────────────────────────────────────────
+ * Config
+ * ──────────────────────────────────────────────────────────────────── */
+const POLL_MS = 6000;
+const $ = id => document.getElementById(id);
+
+// Thresholds for classifying flow per symbol — tunable inline since
+// they're not value-bearing constants (operator opinion, not market data).
+const BUY_HEAVY_THRESHOLD  = 65;   // buy_pct above → BUY-HEAVY
+const SELL_HEAVY_THRESHOLD = 35;   // buy_pct below → SELL-HEAVY
+
+/* ── State ─────────────────────────────────────────────────────────── */
+let allRows = [];                       // enriched rows
+let sortKey = 'buyPct', sortAsc = false; // default sort
+let filterText = '', filterFlow = 'ALL', filterSector = 'ALL';
+
+/* ── Formatting helpers (shared in tone with scanner page) ─────────── */
+function inr(v, d=2) { if(v==null||isNaN(v)) return '₹—'; return '₹'+Number(v).toLocaleString('en-IN',{minimumFractionDigits:d, maximumFractionDigits:d}); }
+function num(v, d=2) { if(v==null||isNaN(v)) return '—'; return Number(v).toLocaleString('en-IN',{minimumFractionDigits:d, maximumFractionDigits:d}); }
+function pct(v, d=2) { if(v==null||isNaN(v)) return '—'; return Number(v).toFixed(d)+'%'; }
+function sign(v) { return v>0 ? '+' : ''; }
+function klass(v) { return v>0 ? 'good' : v<0 ? 'bad' : 'mute'; }
+function compactVol(v) {
+  if(v==null||isNaN(v)) return '—';
+  const n = Number(v);
+  if (n >= 1e7) return (n/1e7).toFixed(1) + ' Cr';
+  if (n >= 1e5) return (n/1e5).toFixed(1) + ' L';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'k';
+  return String(Math.round(n));
+}
+function setChip(id, kls, val) {
+  const el = $(id); if (!el) return;
+  el.classList.remove('good','bad','warn','accent');
+  if (kls) el.classList.add(kls);
+  const v = el.querySelector('strong'); if (v) v.textContent = val;
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Render helpers — pressure bar + delta meter + range bar
+ * ──────────────────────────────────────────────────────────────── */
+
+function pressureBar(buyQty, sellQty) {
+  const total = (buyQty || 0) + (sellQty || 0);
+  if (!total) return '<div class="pbar"><div class="b" style="width:50%"></div><div class="s" style="width:50%"></div></div>';
+  const buyPct  = (buyQty / total) * 100;
+  const sellPct = 100 - buyPct;
+  // Only render the % text inside the bar if there's room — empirically
+  // ≥20% fills are wide enough not to clip at our typical column width.
+  const bLabel = buyPct  >= 20 ? `${buyPct.toFixed(0)}%` : '';
+  const sLabel = sellPct >= 20 ? `${sellPct.toFixed(0)}%` : '';
+  return `<div class="pbar">
+    <div class="b" style="width:${buyPct}%">${bLabel}</div>
+    <div class="s" style="width:${sellPct}%">${sLabel}</div>
+  </div>`;
+}
+
+function deltaMeter(delta) {
+  // delta is -100..+100. Half-width fill from center, sign chooses colour.
+  const mag = Math.min(50, Math.abs(delta) / 2);
+  if (delta >= 0) {
+    return `<div class="delta-meter"><div class="fill pos" style="left:50%; width:${mag}%"></div><div class="center"></div></div>`;
+  } else {
+    return `<div class="delta-meter"><div class="fill neg" style="left:${50 - mag}%; width:${mag}%"></div><div class="center"></div></div>`;
+  }
+}
+
+function rangeBar(low, high, ltp, vwap) {
+  if (!low || !high || low === high) return '—';
+  const ltpPos = ((ltp - low) / (high - low)) * 100;
+  const vwapPos = vwap ? ((vwap - low) / (high - low)) * 100 : null;
+  return `<div class="range-bar">
+    ${vwapPos != null ? `<div class="vwap" style="left:${vwapPos}%"></div>` : ''}
+    <div class="ltp" style="left:${ltpPos}%"></div>
+  </div>`;
+}
+
+function flowTag(buyPct) {
+  if (buyPct >= BUY_HEAVY_THRESHOLD)  return '<span class="flow-tag buy">BUY HEAVY</span>';
+  if (buyPct <= SELL_HEAVY_THRESHOLD) return '<span class="flow-tag sell">SELL HEAVY</span>';
+  return '<span class="flow-tag bal">BALANCED</span>';
+}
+
+function flowTagFromRow(r) {
+  if (r.buyPct >= BUY_HEAVY_THRESHOLD)  return 'BUY';
+  if (r.buyPct <= SELL_HEAVY_THRESHOLD) return 'SELL';
+  return 'BAL';
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Fetch + enrich
+ * ──────────────────────────────────────────────────────────────── */
+async function fetchUniverse() {
+  const syms = window.NIFTY100.map(o => 'NSE:' + o.sym);
+  const url = '/api/zerodha/v1/quote?syms=' + encodeURIComponent(syms.join(','));
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('status ' + r.status);
+    const raw = await r.json();
+    setChip('chip-engine', 'good', 'up');
+    return raw;
+  } catch (e) {
+    setChip('chip-engine', 'bad', 'down');
+    return null;
+  }
+}
+
+function enrich(raw) {
+  const rows = [];
+  for (const [k, v] of Object.entries(raw)) {
+    const sym = k.replace(/^NSE:/, '');
+    const meta = window.NIFTY100.find(o => o.sym === sym) || {};
+    const ohlc = v.ohlc || {};
+    const ltp        = v.last_price;
+    const prevClose  = ohlc.close || ltp;
+    const dayHigh    = ohlc.high  || ltp;
+    const dayLow     = ohlc.low   || ltp;
+    const vwap       = v.average_traded_price || null;
+    const buyQty     = v.buy_quantity  || v.total_buy_quantity  || 0;
+    const sellQty    = v.sell_quantity || v.total_sell_quantity || 0;
+    const totalQty   = buyQty + sellQty;
+    const buyPct     = totalQty ? (buyQty / totalQty) * 100 : 50;
+    const netDelta   = totalQty ? ((buyQty - sellQty) / totalQty) * 100 : 0;
+    const dayPct     = prevClose ? ((ltp - prevClose) / prevClose) * 100 : 0;
+    const vwapGap    = vwap ? ((ltp - vwap) / vwap) * 100 : 0;
+    const rangePos   = (dayHigh > dayLow) ? ((ltp - dayLow) / (dayHigh - dayLow)) * 100 : 50;
+    rows.push({
+      sym, sector: meta.sector || '',
+      ltp, prevClose, dayHigh, dayLow, vwap,
+      buyQty, sellQty, totalQty,
+      buyPct, netDelta, vwapGap, rangePos, dayPct,
+      volume: v.volume || v.volume_traded || 0,
+      get flowTag() { return flowTagFromRow(this); },
+    });
+  }
+  return rows;
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Render: status, breadth, sector grid, leaderboards, full table
+ * ──────────────────────────────────────────────────────────────── */
+
+function renderBreadth() {
+  const up   = allRows.filter(r => r.dayPct > 0).length;
+  const down = allRows.filter(r => r.dayPct < 0).length;
+  const bid  = allRows.filter(r => r.buyPct >= BUY_HEAVY_THRESHOLD).length;
+  const ask  = allRows.filter(r => r.buyPct <= SELL_HEAVY_THRESHOLD).length;
+  const avgBuyPct = allRows.length
+    ? allRows.reduce((s, r) => s + r.buyPct, 0) / allRows.length
+    : null;
+
+  setChip('chip-universe', '', `${allRows.length} stocks`);
+  setChip('chip-flow', avgBuyPct >= 55 ? 'good' : avgBuyPct <= 45 ? 'bad' : '',
+          avgBuyPct == null ? '—' : `buy ${avgBuyPct.toFixed(1)}%`);
+
+  $('breadth-val2').textContent = `↑${up} ↓${down}`;
+  $('breadth-val2').className = 'val ' + (up > down ? 'good' : down > up ? 'bad' : '');
+  $('breadth-sub').textContent = up > down ? 'risk-on tone' : down > up ? 'risk-off tone' : 'mixed';
+
+  $('bid-heavy').textContent = bid;
+  $('ask-heavy').textContent = ask;
+
+  // Dominant sector — highest avg buyPct with ≥3 names
+  const sectors = {};
+  allRows.forEach(r => {
+    if (!r.sector) return;
+    if (!sectors[r.sector]) sectors[r.sector] = { count: 0, sumBuy: 0, sumDayPct: 0 };
+    sectors[r.sector].count++;
+    sectors[r.sector].sumBuy += r.buyPct;
+    sectors[r.sector].sumDayPct += r.dayPct;
+  });
+  let bestSec = null, bestAvg = -Infinity;
+  for (const [name, s] of Object.entries(sectors)) {
+    if (s.count < 3) continue;
+    const avg = s.sumBuy / s.count;
+    if (avg > bestAvg) { bestAvg = avg; bestSec = { name, ...s, avgBuy: avg, avgDayPct: s.sumDayPct / s.count }; }
+  }
+  if (bestSec) {
+    $('dom-sector').textContent = bestSec.name;
+    $('dom-sector').className = 'val ' + klass(bestSec.avgDayPct);
+    $('dom-sub').textContent = `${bestSec.count} names · avg buy ${bestSec.avgBuy.toFixed(1)}% · day ${sign(bestSec.avgDayPct)}${pct(bestSec.avgDayPct)}`;
+  } else {
+    $('dom-sector').textContent = '—';
+    $('dom-sub').textContent = 'need ≥3 names per sector';
+  }
+}
+
+function renderSectorGrid() {
+  const sectors = {};
+  allRows.forEach(r => {
+    if (!r.sector) return;
+    (sectors[r.sector] = sectors[r.sector] || []).push(r);
+  });
+  const sorted = Object.entries(sectors)
+    .map(([name, items]) => {
+      const avgBuy   = items.reduce((s, r) => s + r.buyPct, 0) / items.length;
+      const avgDay   = items.reduce((s, r) => s + r.dayPct, 0) / items.length;
+      const leaders  = items.slice().sort((a, b) => b.buyPct - a.buyPct).slice(0, 3);
+      return { name, items, avgBuy, avgDay, leaders };
+    })
+    .sort((a, b) => b.avgBuy - a.avgBuy);
+
+  const html = sorted.map(s => `<div class="sec-card" onclick="filterToSector('${s.name}')">
+    <div class="h">
+      <span class="name">${s.name}</span>
+      <span class="count">${s.items.length} ${s.items.length === 1 ? 'name' : 'names'}</span>
+    </div>
+    ${pressureBar(s.avgBuy, 100 - s.avgBuy)}
+    <div class="pp">
+      <span>avg buy <span class="val ${klass(s.avgBuy - 50)}">${s.avgBuy.toFixed(1)}%</span></span>
+      <span>day <span class="val ${klass(s.avgDay)}">${sign(s.avgDay)}${pct(s.avgDay, 2)}</span></span>
+    </div>
+    <div class="leaders">
+      ${s.leaders.map(l => `<span class="s">${l.sym}</span><span>${l.buyPct.toFixed(0)}% · ${sign(l.dayPct)}${pct(l.dayPct, 1)}</span>`).join('')}
+    </div>
+  </div>`).join('');
+  $('sec-grid').innerHTML = html || '<div class="zd-empty" style="grid-column:1/-1;">No data</div>';
+}
+window.filterToSector = function (sec) {
+  $('filter-sector').value = sec;
+  filterSector = sec;
+  renderFullTable();
+  // Scroll the table into view
+  document.querySelector('h2.zd-section-h:last-of-type').scrollIntoView({behavior:'smooth', block:'start'});
+};
+
+function renderLeaderboards() {
+  // Bullish: highest buyPct, but require some day move ≥0 (don't recommend names that
+  // just have bid-heavy book without bullish price action).
+  const bull = allRows
+    .filter(r => r.buyPct >= 55)
+    .sort((a, b) => b.buyPct - a.buyPct)
+    .slice(0, 10);
+  $('bull-tbody').innerHTML = bull.length
+    ? bull.map(r => `<tr class="row" onclick="location.href='/zerodha-spot.html?sym=${r.sym}'">
+        <td class="sym">${r.sym}</td>
+        <td class="num">${inr(r.ltp)}</td>
+        <td class="num ${klass(r.dayPct)}">${sign(r.dayPct)}${pct(r.dayPct)}</td>
+        <td class="pbar-cell">${pressureBar(r.buyQty, r.sellQty)}</td>
+        <td class="num ${klass(r.vwapGap)}">${sign(r.vwapGap)}${pct(r.vwapGap)}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="5" class="zd-empty">No bullish flow</td></tr>';
+
+  const bear = allRows
+    .filter(r => r.buyPct <= 45)
+    .sort((a, b) => a.buyPct - b.buyPct)
+    .slice(0, 10);
+  $('bear-tbody').innerHTML = bear.length
+    ? bear.map(r => `<tr class="row" onclick="location.href='/zerodha-spot.html?sym=${r.sym}'">
+        <td class="sym">${r.sym}</td>
+        <td class="num">${inr(r.ltp)}</td>
+        <td class="num ${klass(r.dayPct)}">${sign(r.dayPct)}${pct(r.dayPct)}</td>
+        <td class="pbar-cell">${pressureBar(r.buyQty, r.sellQty)}</td>
+        <td class="num ${klass(r.vwapGap)}">${sign(r.vwapGap)}${pct(r.vwapGap)}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="5" class="zd-empty">No bearish flow</td></tr>';
+}
+
+function renderFullTable() {
+  let view = allRows.slice();
+
+  // Apply filters
+  if (filterSector !== 'ALL') view = view.filter(r => r.sector === filterSector);
+  if (filterFlow !== 'ALL')   view = view.filter(r => {
+    if (filterFlow === 'BUY')  return r.buyPct >= BUY_HEAVY_THRESHOLD;
+    if (filterFlow === 'SELL') return r.buyPct <= SELL_HEAVY_THRESHOLD;
+    if (filterFlow === 'BAL')  return r.buyPct > SELL_HEAVY_THRESHOLD && r.buyPct < BUY_HEAVY_THRESHOLD;
+    return true;
+  });
+  if (filterText) {
+    const t = filterText.toLowerCase();
+    view = view.filter(r =>
+      r.sym.toLowerCase().includes(t) || (r.sector || '').toLowerCase().includes(t)
+    );
+  }
+
+  // Sort
+  view.sort((a, b) => {
+    let av = a[sortKey], bv = b[sortKey];
+    if (typeof av === 'string') {
+      return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+    }
+    return sortAsc ? (av || 0) - (bv || 0) : (bv || 0) - (av || 0);
+  });
+
+  $('full-count').textContent = view.length;
+  if (!view.length) {
+    $('full-tbody').innerHTML = '<tr><td colspan="10" class="zd-empty">No matches</td></tr>';
+    return;
+  }
+  $('full-tbody').innerHTML = view.map(r => `<tr class="row" onclick="location.href='/zerodha-spot.html?sym=${r.sym}'">
+    <td class="sym">${r.sym}</td>
+    <td class="sec-cell">${r.sector || '—'}</td>
+    <td class="num">${inr(r.ltp)}</td>
+    <td class="num ${klass(r.dayPct)}">${sign(r.dayPct)}${pct(r.dayPct)}</td>
+    <td class="pbar-cell">${pressureBar(r.buyQty, r.sellQty)}</td>
+    <td class="num">${deltaMeter(r.netDelta)}</td>
+    <td class="num ${klass(r.vwapGap)}">${sign(r.vwapGap)}${pct(r.vwapGap)}</td>
+    <td class="range-cell">${rangeBar(r.dayLow, r.dayHigh, r.ltp, r.vwap)}</td>
+    <td class="num mute">${compactVol(r.volume)}</td>
+    <td>${flowTag(r.buyPct)}</td>
+  </tr>`).join('');
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Filter wire-up
+ * ──────────────────────────────────────────────────────────────── */
+function setupFilters() {
+  $('filter-input').addEventListener('input', e => {
+    filterText = e.target.value.trim();
+    renderFullTable();
+  });
+  document.querySelectorAll('#filter-flow button').forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('#filter-flow button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      filterFlow = b.dataset.v;
+      renderFullTable();
+    });
+  });
+  $('filter-sector').addEventListener('change', e => {
+    filterSector = e.target.value;
+    renderFullTable();
+  });
+
+  document.querySelectorAll('th[data-sort]').forEach(th => {
+    th.addEventListener('click', () => {
+      const k = th.dataset.sort;
+      if (sortKey === k) sortAsc = !sortAsc;
+      else { sortKey = k; sortAsc = false; }
+      document.querySelectorAll('th[data-sort]').forEach(x => x.classList.remove('sorted','asc'));
+      th.classList.add('sorted');
+      if (sortAsc) th.classList.add('asc');
+      renderFullTable();
+    });
+  });
+}
+
+function populateSectorSelect() {
+  const sel = $('filter-sector');
+  const seen = new Set();
+  const opts = [];
+  window.NIFTY100.forEach(o => {
+    if (o.sector && !seen.has(o.sector)) {
+      seen.add(o.sector);
+      opts.push(o.sector);
+    }
+  });
+  opts.sort().forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s; opt.textContent = s;
+    sel.appendChild(opt);
+  });
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Boot
+ * ──────────────────────────────────────────────────────────────── */
+async function tick() {
+  const raw = await fetchUniverse();
+  if (!raw) return;
+  allRows = enrich(raw);
+  renderBreadth();
+  renderSectorGrid();
+  renderLeaderboards();
+  renderFullTable();
+  $('as-of-val').textContent = new Date().toLocaleTimeString('en-IN', { hour12:false });
+}
+
+populateSectorSelect();
+setupFilters();
+tick();
+setInterval(tick, POLL_MS);
+</script>
+</body>
+</html>

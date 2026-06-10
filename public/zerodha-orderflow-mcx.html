@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+  public/zerodha-orderflow-mcx.html
+  ──────────────────────────────────────────────────────────────────────────
+  Zerodha MCX Commodity Order Flow — front-month futures.
+
+  Why a separate page from spot:
+    Commodities trade on a different session (09:00–23:30 IST for non-
+    agri vs NSE 09:15–15:30). The flow profile is dominated by global
+    cues (US crude inventory, FOMC, EIA reports) so we want a focused
+    page where the operator can watch the 8 contracts that matter
+    without NIFTY 100 noise.
+
+    Plus the universe is small — 8 contracts — so a card-per-commodity
+    layout is more readable than the spot table.
+
+  Per-contract metrics (same math as the spot page):
+    buy_pct      = buy_qty / (buy_qty + sell_qty) × 100
+    net_delta    = (buy_qty - sell_qty) / (buy_qty + sell_qty) × 100
+    vwap_gap     = (LTP - vwap) / vwap × 100
+    range_pos    = (LTP - day_low) / (day_high - day_low) × 100
+    day_pct      = (LTP - prev_close) / prev_close × 100
+
+  Data flow:
+    1. Fetch front-month tradingsymbol per underlying via the existing
+       /api/zerodha/v1/commodity/front-month/{u} endpoint.
+    2. Bulk /quote on the resolved set.
+    3. Render one card per contract.
+
+  Polling cadence: 6 s (matches the spot page). Front-month chain
+  re-resolved every 60 s in case we cross expiry.
+
+  Click any card → /zerodha-mcx.html?u=UNDERLYING (ticket pre-loaded).
+-->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MCX Order Flow — Zerodha — BookNow</title>
+<link rel="stylesheet" href="/css/zerodha.css" />
+<style>
+  .mcx-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; margin-top: 14px; }
+  @media (max-width: 700px) { .mcx-grid { grid-template-columns: 1fr; } }
+
+  /* Override cmd-card a bit for the wider, richer cards on this page */
+  .cmd-card .row1 .u   { font-size: 17px; }
+  .cmd-card .row1 .pct { font-size: 18px; }
+  .cmd-card .ltp-block { display: flex; align-items: baseline; gap: 14px; margin-bottom: 10px; }
+  .cmd-card .ltp-block .ltp { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .cmd-card .ltp-block .ltp-meta { color: var(--bn-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .cmd-card .pressure-block { margin: 8px 0 6px; }
+  .cmd-card .pressure-block .label {
+    display: flex; justify-content: space-between;
+    font-size: 10px; color: var(--bn-muted);
+    text-transform: uppercase; letter-spacing: .4px;
+    margin-bottom: 3px;
+  }
+  .cmd-card .delta-block { margin: 8px 0 6px; }
+  .cmd-card .range-block { margin: 8px 0 6px; }
+  .cmd-card .range-block .label {
+    display: flex; justify-content: space-between;
+    font-size: 10px; color: var(--bn-muted);
+    text-transform: uppercase; letter-spacing: .4px;
+    margin-bottom: 3px;
+  }
+  .cmd-card .chips-row {
+    display: flex; gap: 4px; flex-wrap: wrap; margin-top: 10px;
+  }
+
+  /* Big stat tiles up top */
+  .summary-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 8px;
+    margin-bottom: 18px;
+  }
+
+  /* Comparison table beneath the cards */
+  .cmp-table { width: 100%; border-collapse: collapse; }
+  .cmp-table th, .cmp-table td {
+    padding: 8px 10px;
+    font-size: 12px;
+    border-bottom: 1px solid rgba(31,41,51,.4);
+  }
+  .cmp-table th {
+    background: var(--bn-panel-2);
+    color: var(--bn-muted);
+    font-weight: 700; text-transform: uppercase; font-size: 10px; letter-spacing: .4px;
+  }
+  .cmp-table td.num, .cmp-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .cmp-table tr.row { cursor: pointer; }
+  .cmp-table tr.row:hover { background: rgba(41,182,246,.05); }
+  .cmp-table .sym { font-weight: 700; }
+  .cmp-table .mute { color: var(--bn-muted); }
+  .cmp-table .good { color: var(--bn-good); }
+  .cmp-table .bad  { color: var(--bn-bad); }
+  .cmp-table .pbar-cell { width: 160px; }
+  .cmp-table .range-cell { width: 110px; padding-top: 12px; }
+</style>
+</head>
+<body class="zd">
+<div class="zd-wrap">
+
+  <h1 class="zd-title">🛢️ MCX Order Flow — Commodity</h1>
+  <div class="zd-sub">
+    Buy/sell pressure, VWAP gap, and day-range positioning across the
+    8 most-liquid MCX front-month futures. Click any card to jump to
+    <a href="/zerodha-mcx.html" style="color:var(--bn-accent)">MCX Commodity</a>.
+    Equity flow lives at
+    <a href="/zerodha-orderflow-spot.html" style="color:var(--bn-accent)">Spot Order Flow</a>.
+  </div>
+
+  <!-- Status chips -->
+  <div class="zd-row" style="margin-bottom: 14px;">
+    <div class="zd-chip"   id="chip-engine"><span class="dot"></span><span>engine <strong id="engine-val">…</strong></span></div>
+    <div class="zd-chip"   id="chip-contracts"><span class="dot"></span><span>contracts <strong id="contracts-val">…</strong></span></div>
+    <div class="zd-chip"   id="chip-flow"><span class="dot"></span><span>avg pressure <strong id="flow-val">…</strong></span></div>
+    <div class="zd-chip" id="chip-as-of">refresh <strong id="as-of-val">—</strong></div>
+  </div>
+
+  <!-- Summary stats -->
+  <div class="summary-row">
+    <div class="zd-stat">
+      <div class="lbl">Bullish contracts</div>
+      <div class="val good" id="bull-count">—</div>
+      <div class="sub">day % &gt; 0</div>
+    </div>
+    <div class="zd-stat">
+      <div class="lbl">Bearish contracts</div>
+      <div class="val bad" id="bear-count">—</div>
+      <div class="sub">day % &lt; 0</div>
+    </div>
+    <div class="zd-stat">
+      <div class="lbl">Strongest flow</div>
+      <div class="val" id="strong-name">—</div>
+      <div class="sub" id="strong-sub">highest buy pressure</div>
+    </div>
+    <div class="zd-stat">
+      <div class="lbl">Weakest flow</div>
+      <div class="val" id="weak-name">—</div>
+      <div class="sub" id="weak-sub">highest sell pressure</div>
+    </div>
+  </div>
+
+  <!-- Contract cards grid -->
+  <h2 class="zd-section-h">Front-month contracts</h2>
+  <div class="mcx-grid" id="mcx-grid">
+    <div class="zd-empty" style="grid-column:1/-1;">Loading MCX chain…</div>
+  </div>
+
+  <!-- Comparison table -->
+  <h2 class="zd-section-h" style="margin-top: 22px;">Side-by-side comparison</h2>
+  <div class="zd-card" style="padding: 0;">
+    <table class="cmp-table">
+      <thead>
+        <tr>
+          <th>Underlying</th>
+          <th>Contract</th>
+          <th class="num">LTP</th>
+          <th class="num">Day %</th>
+          <th>Pressure</th>
+          <th class="num">Δ</th>
+          <th class="num">VWAP gap</th>
+          <th>Day range</th>
+          <th class="num">Volume</th>
+          <th>Flow</th>
+        </tr>
+      </thead>
+      <tbody id="cmp-tbody">
+        <tr><td colspan="10" class="zd-empty">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Operator footnote — explains the limits of API-derived flow -->
+  <div style="background: rgba(41,182,246,.05); border: 1px solid rgba(41,182,246,.2); padding: 10px 14px; border-radius: 6px; margin-top: 18px; font-size: 11px; color: var(--bn-muted); line-height: 1.6;">
+    <strong style="color: var(--bn-text);">About this view:</strong>
+    All metrics derive from Kite's <code style="background:var(--bn-panel-2); padding:1px 5px; border-radius:3px;">/quote</code>
+    snapshot. <b>Pressure</b> is the book imbalance between pending bids
+    and asks at any given moment — a leading indicator but not the same
+    as executed taker volume. <b>VWAP gap</b> compares LTP to the session
+    volume-weighted average; positive = buyers paying premium. <b>Day
+    range</b> shows where LTP sits between the day's low (left) and high
+    (right), with the yellow VWAP tick as a reference.
+    A tick-level taker-flow scalper would give cleaner signal but
+    requires the historical-data subscription on the Kite app.
+  </div>
+
+</div>
+
+<script src="/nav.js"></script>
+<script>
+/* ──────────────────────────────────────────────────────────────────────
+ * Config
+ * ──────────────────────────────────────────────────────────────────── */
+const POLL_MS         = 6000;
+const POLL_CHAIN_MS   = 60000;
+const BUY_HEAVY_THRESHOLD  = 65;
+const SELL_HEAVY_THRESHOLD = 35;
+
+const MCX_UNDERLYINGS = (window.MCX_UNDERLYINGS || [
+  "CRUDEOIL", "NATURALGAS", "GOLD", "SILVER",
+  "COPPER", "ZINC", "ALUMINIUM", "LEAD",
+]);
+
+const $ = id => document.getElementById(id);
+
+/* ── Format helpers ──────────────────────────────────────────────── */
+function inr(v, d=2) { if(v==null||isNaN(v)) return '₹—'; return '₹'+Number(v).toLocaleString('en-IN',{minimumFractionDigits:d, maximumFractionDigits:d}); }
+function num(v, d=2) { if(v==null||isNaN(v)) return '—'; return Number(v).toLocaleString('en-IN',{minimumFractionDigits:d, maximumFractionDigits:d}); }
+function pct(v, d=2) { if(v==null||isNaN(v)) return '—'; return Number(v).toFixed(d)+'%'; }
+function sign(v) { return v>0 ? '+' : ''; }
+function klass(v) { return v>0 ? 'good' : v<0 ? 'bad' : 'mute'; }
+function compactVol(v) {
+  if(v==null||isNaN(v)) return '—';
+  const n = Number(v);
+  if (n >= 1e7) return (n/1e7).toFixed(1) + ' Cr';
+  if (n >= 1e5) return (n/1e5).toFixed(1) + ' L';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'k';
+  return String(Math.round(n));
+}
+function setChip(id, kls, val) {
+  const el = $(id); if (!el) return;
+  el.classList.remove('good','bad','warn','accent');
+  if (kls) el.classList.add(kls);
+  const v = el.querySelector('strong'); if (v) v.textContent = val;
+}
+
+/* ── Same visual primitives as the spot page ─────────────────────── */
+function pressureBar(buyQty, sellQty) {
+  const total = (buyQty || 0) + (sellQty || 0);
+  if (!total) return '<div class="pbar"><div class="b" style="width:50%"></div><div class="s" style="width:50%"></div></div>';
+  const buyPct  = (buyQty / total) * 100;
+  const sellPct = 100 - buyPct;
+  const bLabel = buyPct  >= 20 ? `${buyPct.toFixed(0)}%` : '';
+  const sLabel = sellPct >= 20 ? `${sellPct.toFixed(0)}%` : '';
+  return `<div class="pbar">
+    <div class="b" style="width:${buyPct}%">${bLabel}</div>
+    <div class="s" style="width:${sellPct}%">${sLabel}</div>
+  </div>`;
+}
+function deltaMeter(delta) {
+  const mag = Math.min(50, Math.abs(delta) / 2);
+  if (delta >= 0) {
+    return `<div class="delta-meter"><div class="fill pos" style="left:50%; width:${mag}%"></div><div class="center"></div></div>`;
+  } else {
+    return `<div class="delta-meter"><div class="fill neg" style="left:${50 - mag}%; width:${mag}%"></div><div class="center"></div></div>`;
+  }
+}
+function rangeBar(low, high, ltp, vwap) {
+  if (!low || !high || low === high) return '—';
+  const ltpPos = ((ltp - low) / (high - low)) * 100;
+  const vwapPos = vwap ? ((vwap - low) / (high - low)) * 100 : null;
+  return `<div class="range-bar">
+    ${vwapPos != null ? `<div class="vwap" style="left:${vwapPos}%"></div>` : ''}
+    <div class="ltp" style="left:${ltpPos}%"></div>
+  </div>`;
+}
+function flowTag(buyPct) {
+  if (buyPct >= BUY_HEAVY_THRESHOLD)  return '<span class="flow-tag buy">BUY HEAVY</span>';
+  if (buyPct <= SELL_HEAVY_THRESHOLD) return '<span class="flow-tag sell">SELL HEAVY</span>';
+  return '<span class="flow-tag bal">BALANCED</span>';
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Fetch: front-month chain + bulk /quote
+ * ──────────────────────────────────────────────────────────────── */
+
+let contracts = [];   // resolved front-month per underlying
+let allRows = [];     // enriched view
+
+async function refreshChain() {
+  // Resolve all underlyings in parallel.
+  const out = await Promise.all(MCX_UNDERLYINGS.map(async u => {
+    try {
+      const r = await fetch('/api/zerodha/v1/commodity/front-month/' + encodeURIComponent(u));
+      if (!r.ok) return null;
+      return await r.json();
+    } catch {
+      return null;
+    }
+  }));
+  contracts = out.filter(Boolean);
+  setChip('chip-contracts', contracts.length ? 'good' : 'bad',
+          `${contracts.length} / ${MCX_UNDERLYINGS.length}`);
+}
+
+async function fetchQuotes() {
+  if (!contracts.length) return null;
+  const syms = contracts.map(c => 'MCX:' + c.tradingsymbol);
+  const url = '/api/zerodha/v1/quote?syms=' + encodeURIComponent(syms.join(','));
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('status ' + r.status);
+    setChip('chip-engine', 'good', 'up');
+    return await r.json();
+  } catch {
+    setChip('chip-engine', 'bad', 'down');
+    return null;
+  }
+}
+
+function enrich(raw) {
+  const rows = [];
+  for (const c of contracts) {
+    const v = raw['MCX:' + c.tradingsymbol] || {};
+    const ohlc = v.ohlc || {};
+    const ltp        = v.last_price;
+    const prevClose  = ohlc.close || ltp;
+    const dayHigh    = ohlc.high  || ltp;
+    const dayLow     = ohlc.low   || ltp;
+    const vwap       = v.average_traded_price || null;
+    const buyQty     = v.buy_quantity  || v.total_buy_quantity  || 0;
+    const sellQty    = v.sell_quantity || v.total_sell_quantity || 0;
+    const totalQty   = buyQty + sellQty;
+    const buyPct     = totalQty ? (buyQty / totalQty) * 100 : 50;
+    const netDelta   = totalQty ? ((buyQty - sellQty) / totalQty) * 100 : 0;
+    const dayPct     = prevClose ? ((ltp - prevClose) / prevClose) * 100 : 0;
+    const vwapGap    = vwap ? ((ltp - vwap) / vwap) * 100 : 0;
+    const rangePos   = (dayHigh > dayLow) ? ((ltp - dayLow) / (dayHigh - dayLow)) * 100 : 50;
+    rows.push({
+      underlying: c.underlying,
+      sym: c.tradingsymbol,
+      expiry: c.expiry,
+      lotSize: c.lot_size,
+      ltp, prevClose, dayHigh, dayLow, vwap,
+      buyQty, sellQty, totalQty,
+      buyPct, netDelta, vwapGap, rangePos, dayPct,
+      volume: v.volume || v.volume_traded || 0,
+    });
+  }
+  return rows;
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Render
+ * ──────────────────────────────────────────────────────────────── */
+
+function renderSummary() {
+  const bull = allRows.filter(r => r.dayPct > 0).length;
+  const bear = allRows.filter(r => r.dayPct < 0).length;
+  $('bull-count').textContent = bull;
+  $('bear-count').textContent = bear;
+
+  const avgBuy = allRows.length
+    ? allRows.reduce((s, r) => s + r.buyPct, 0) / allRows.length
+    : null;
+  setChip('chip-flow',
+          avgBuy >= 55 ? 'good' : avgBuy <= 45 ? 'bad' : '',
+          avgBuy == null ? '—' : `buy ${avgBuy.toFixed(1)}%`);
+
+  // Strongest + weakest
+  if (allRows.length) {
+    const strongest = allRows.slice().sort((a, b) => b.buyPct - a.buyPct)[0];
+    const weakest   = allRows.slice().sort((a, b) => a.buyPct - b.buyPct)[0];
+    $('strong-name').textContent = strongest.underlying;
+    $('strong-name').className = 'val ' + klass(strongest.dayPct);
+    $('strong-sub').textContent = `buy ${strongest.buyPct.toFixed(1)}% · day ${sign(strongest.dayPct)}${pct(strongest.dayPct)}`;
+    $('weak-name').textContent = weakest.underlying;
+    $('weak-name').className = 'val ' + klass(weakest.dayPct);
+    $('weak-sub').textContent = `buy ${weakest.buyPct.toFixed(1)}% · day ${sign(weakest.dayPct)}${pct(weakest.dayPct)}`;
+  }
+}
+
+function renderCards() {
+  const html = allRows.map(r => {
+    const chips = [];
+    if (r.buyPct >= BUY_HEAVY_THRESHOLD)  chips.push('<span class="flow-tag buy">BUY HEAVY</span>');
+    if (r.buyPct <= SELL_HEAVY_THRESHOLD) chips.push('<span class="flow-tag sell">SELL HEAVY</span>');
+    if (r.vwapGap > 0.3)  chips.push('<span class="chip good">ABOVE VWAP</span>');
+    if (r.vwapGap < -0.3) chips.push('<span class="chip bad">BELOW VWAP</span>');
+    if (r.rangePos > 80)  chips.push('<span class="chip accent">NEAR HIGH</span>');
+    if (r.rangePos < 20)  chips.push('<span class="chip bad">NEAR LOW</span>');
+
+    return `<div class="cmd-card" onclick="location.href='/zerodha-mcx.html?u=${r.underlying}'">
+      <div class="row1">
+        <span class="u">${r.underlying}</span>
+        <span class="sym">${r.sym} · ${r.expiry}</span>
+        <span class="pct ${klass(r.dayPct)}">${sign(r.dayPct)}${pct(r.dayPct)}</span>
+      </div>
+      <div class="ltp-block">
+        <span class="ltp">${inr(r.ltp)}</span>
+        <span class="ltp-meta">VWAP ${r.vwap ? inr(r.vwap) : '—'} (${sign(r.vwapGap)}${pct(r.vwapGap)})</span>
+      </div>
+
+      <div class="pressure-block">
+        <div class="label"><span>Pressure (bid / ask)</span><span>${r.buyPct.toFixed(1)}%</span></div>
+        ${pressureBar(r.buyQty, r.sellQty)}
+      </div>
+
+      <div class="delta-block">
+        <div class="label" style="display:flex;justify-content:space-between;font-size:10px;color:var(--bn-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;"><span>Net delta</span><span>${sign(r.netDelta)}${r.netDelta.toFixed(1)}%</span></div>
+        ${deltaMeter(r.netDelta)}
+      </div>
+
+      <div class="range-block">
+        <div class="label"><span>Day range</span><span>${inr(r.dayLow)} → ${inr(r.dayHigh)}</span></div>
+        ${rangeBar(r.dayLow, r.dayHigh, r.ltp, r.vwap)}
+      </div>
+
+      <div class="meta">
+        <span class="k">Volume</span><span class="v">${compactVol(r.volume)}</span>
+        <span class="k">Lot size</span><span class="v">${r.lotSize}</span>
+        <span class="k">Bid qty</span><span class="v">${compactVol(r.buyQty)}</span>
+        <span class="k">Ask qty</span><span class="v">${compactVol(r.sellQty)}</span>
+      </div>
+
+      <div class="chips-row">${chips.join('')}</div>
+    </div>`;
+  }).join('');
+  $('mcx-grid').innerHTML = html || '<div class="zd-empty" style="grid-column:1/-1;">No data — markets may be closed or backend warming up</div>';
+}
+
+function renderCompareTable() {
+  const view = allRows.slice().sort((a, b) => b.buyPct - a.buyPct);
+  if (!view.length) {
+    $('cmp-tbody').innerHTML = '<tr><td colspan="10" class="zd-empty">No data</td></tr>';
+    return;
+  }
+  $('cmp-tbody').innerHTML = view.map(r => `<tr class="row" onclick="location.href='/zerodha-mcx.html?u=${r.underlying}'">
+    <td class="sym">${r.underlying}</td>
+    <td class="mute">${r.sym}</td>
+    <td class="num">${inr(r.ltp)}</td>
+    <td class="num ${klass(r.dayPct)}">${sign(r.dayPct)}${pct(r.dayPct)}</td>
+    <td class="pbar-cell">${pressureBar(r.buyQty, r.sellQty)}</td>
+    <td class="num">${deltaMeter(r.netDelta)}</td>
+    <td class="num ${klass(r.vwapGap)}">${sign(r.vwapGap)}${pct(r.vwapGap)}</td>
+    <td class="range-cell">${rangeBar(r.dayLow, r.dayHigh, r.ltp, r.vwap)}</td>
+    <td class="num mute">${compactVol(r.volume)}</td>
+    <td>${flowTag(r.buyPct)}</td>
+  </tr>`).join('');
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Boot
+ * ──────────────────────────────────────────────────────────────── */
+async function tick() {
+  const raw = await fetchQuotes();
+  if (!raw) return;
+  allRows = enrich(raw);
+  renderSummary();
+  renderCards();
+  renderCompareTable();
+  $('as-of-val').textContent = new Date().toLocaleTimeString('en-IN', { hour12:false });
+}
+
+async function boot() {
+  await refreshChain();
+  await tick();
+  setInterval(tick, POLL_MS);
+  setInterval(refreshChain, POLL_CHAIN_MS);
+}
+
+boot();
+</script>
+</body>
+</html>
