@@ -161,7 +161,8 @@ window.bnQuickTradeLinkHtml = function (sym, opts) {
       label: 'Zerodha',
       icon: '🇮🇳',
       items: [
-        { href: '/zerodha.html',           label: 'Overview',         icon: '📊', desc: 'Session + funds + holdings + positions at a glance', highlight: true },
+        { href: '/zerodha-scanner.html',   label: 'Scanner',          icon: '🔍', desc: 'NIFTY 100 + MCX — top picks, gainers, volume surge, near day high', highlight: true },
+        { href: '/zerodha.html',           label: 'Overview',         icon: '📊', desc: 'Session + funds + holdings + positions at a glance' },
         { href: '/zerodha-spot.html',      label: 'Spot Equity',      icon: '🧾', desc: 'NSE/BSE — CNC delivery buy/sell + OCO GTT for SL/TP' },
         { href: '/zerodha-mcx.html',       label: 'MCX Commodity',    icon: '🛢️', desc: 'CRUDE/GOLD/NATGAS — front-month resolver + lot-aware orders' },
         { href: '/zerodha-portfolio.html', label: 'Portfolio',        icon: '💼', desc: 'Holdings + positions + orders + trades + GTT triggers' },
