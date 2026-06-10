@@ -30,15 +30,27 @@ const SPRING_BASE = ENGINE_BASE;
 // container (zerodha-backend) and exposes the /api/zerodha/v1/* surface
 // defined in book-now-zerodha-backend/booknow/api/routes_kite.py.
 //
-// In docker-compose the in-network DNS name is `zerodha-backend:8084`;
-// for laptop dev that's `localhost:8084`. Override either with env.
+// Default points at the compose service name (`zerodha-backend:8084`),
+// NOT localhost — when this Node process runs inside the frontend
+// container, `localhost` resolves to its OWN netns, not the host, so
+// localhost:8084 returns ECONNREFUSED and the proxy 502s.
+//
+// For laptop dev (running Node directly on the host without compose),
+// override with `ZERODHA_ENGINE_BASE=http://localhost:8084`.
+//
+// Both this default + the compose service-name target REQUIRE that
+// zerodha-backend is reachable on the SAME docker network as the
+// frontend container. See deploy/docker-compose.zerodha.yml in the
+// book-now-zerodha-backend repo — it now declares `networks: [booknow]`
+// on all three Zerodha services so they share the network with the
+// frontend instead of landing on a separate `booknow_default`.
 //
 // The proxy is wildcard-based — any /api/zerodha/* the dashboard hits
 // gets forwarded as-is so we don't have to maintain per-endpoint route
 // declarations. See `app.use('/api/zerodha', …)` farther down.
 const ZERODHA_ENGINE_PORT = parseInt(process.env.ZERODHA_ENGINE_PORT || '8084', 10);
 const ZERODHA_ENGINE_BASE = process.env.ZERODHA_ENGINE_BASE
-    || `http://localhost:${ZERODHA_ENGINE_PORT}`;
+    || `http://zerodha-backend:${ZERODHA_ENGINE_PORT}`;
 
 // ─── Engine process handle ──────────────────────────────────────────────────
 let engineProc = null;   // ChildProcess when we own the python-engine process
