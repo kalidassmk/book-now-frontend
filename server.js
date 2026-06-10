@@ -122,6 +122,49 @@ app.use(express.static(path.join(__dirname, 'public'), {
   },
 }));
 
+// ── Zerodha WebSocket proxy (Z-iter16) ───────────────────────────────────────
+// The browser opens wss://<dashboard>/api/zerodha/v1/ws/ticks for live ticks.
+// We forward the upgrade to ws://zerodha-backend:8084/api/zerodha/v1/ws/ticks.
+// The backend's TickHub fans Kite WebSocket ticks out to all subscribers.
+//
+// Implementation: native http 'upgrade' event + the `ws` package (already a
+// transitive dep of socket.io). We open a 1:1 backend WS per browser WS and
+// forward frames in both directions. The browser doesn't see the engine
+// hostname / port — same-origin via the dashboard.
+const WebSocket = require('ws');
+server.on('upgrade', (req, clientSocket, head) => {
+    // Only intercept the Zerodha WS path. Other upgrades (e.g. socket.io's)
+    // fall through to the existing handlers.
+    if (!req.url || !req.url.startsWith('/api/zerodha/v1/ws/')) return;
+
+    // Build the upstream URL: http→ws scheme swap, preserve the path.
+    const target = ZERODHA_ENGINE_BASE.replace(/^http/, 'ws') + req.url;
+    const upstream = new WebSocket(target, { perMessageDeflate: false });
+
+    // Hold the raw browser socket until both ends are open. The `ws`
+    // server handles the actual handshake response on the browser side
+    // for us if we hand it the parsed request.
+    const wsServer = new WebSocket.Server({ noServer: true });
+    wsServer.handleUpgrade(req, clientSocket, head, (browserWs) => {
+        // Pump messages both ways. ws emits 'message' as Buffer; pass-through
+        // is fine because the JSON our protocol uses survives a round-trip.
+        const closeBoth = (code, reason) => {
+            try { browserWs.close(code || 1000, reason || ''); } catch (_) {}
+            try { upstream.close(code || 1000, reason || ''); } catch (_) {}
+        };
+        browserWs.on('message', (data) => {
+            if (upstream.readyState === WebSocket.OPEN) upstream.send(data);
+        });
+        upstream.on('message', (data) => {
+            if (browserWs.readyState === WebSocket.OPEN) browserWs.send(data);
+        });
+        browserWs.on('close', (code, reason) => closeBoth(code, reason && reason.toString()));
+        upstream.on('close',  (code, reason) => closeBoth(code, reason && reason.toString()));
+        browserWs.on('error', () => closeBoth(1011, 'browser err'));
+        upstream.on('error',  () => closeBoth(1011, 'upstream err'));
+    });
+});
+
 // ── Zerodha backend proxy (Z-iter4) ──────────────────────────────────────────
 // One catch-all forwarder for /api/zerodha/* → zerodha-backend on port 8084.
 // Path, method, query string, JSON body, and response status all pass

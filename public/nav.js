@@ -164,6 +164,8 @@ window.bnQuickTradeLinkHtml = function (sym, opts) {
         { href: '/zerodha-scanner.html',           label: 'Scanner',           icon: '🔍', desc: 'NIFTY 100 + MCX — top picks, gainers, volume surge, near day high', highlight: true },
         { href: '/zerodha-stock-detail.html',      label: 'Stock Detail',      icon: '📈', desc: 'Per-NSE/BSE-symbol deep dive — depth, VWAP, sell-price planner, GTTs' },
         { href: '/zerodha-commodity-detail.html',  label: 'Commodity Detail',  icon: '🛢️', desc: 'Per-MCX-contract deep dive — depth, lot/margin, expiry chain, planner' },
+        { href: '/zerodha-stock-chart.html',       label: 'Stock Chart',       icon: '📊', desc: 'NSE/BSE candlesticks — 1s tick → 1mo timeframes, live WebSocket' },
+        { href: '/zerodha-commodity-chart.html',   label: 'Commodity Chart',   icon: '📊', desc: 'MCX candlesticks — 1s tick → 1mo timeframes, live WebSocket' },
         { href: '/zerodha-orderflow-spot.html',    label: 'Spot Order Flow',   icon: '🌊', desc: 'NSE/BSE — buy/sell pressure, VWAP gap, day-range positioning' },
         { href: '/zerodha-orderflow-mcx.html',     label: 'MCX Order Flow',    icon: '🛢️', desc: 'CRUDE/GOLD/NATGAS — pressure + VWAP gap per front-month' },
         { href: '/zerodha.html',                   label: 'Overview',          icon: '📊', desc: 'Session + funds + holdings + positions at a glance' },

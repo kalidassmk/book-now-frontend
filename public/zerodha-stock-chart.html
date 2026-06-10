@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+  public/zerodha-stock-chart.html
+  ──────────────────────────────────────────────────────────────────────────
+  Stock candlestick chart (NSE / BSE) with timeframe toggle + live
+  WebSocket updates from the Kite ticker.
+
+  Data flow:
+    1. On load, GET /api/zerodha/v1/historical/NSE/{sym}?interval=X
+       → seeds the chart with the past N bars (defaults vary per interval).
+    2. Open a WebSocket to /api/zerodha/v1/ws/ticks and subscribe to
+       the symbol. Every tick updates the LAST candle (or starts a new
+       one when the bar boundary rolls over).
+    3. Switching timeframe re-runs step 1 (historical) but keeps the
+       same WS subscription — only the aggregation grain changes
+       client-side.
+
+  Special timeframes:
+    * 1s — built purely from live ticks (Kite's historical API only
+           goes down to 1-minute). The chart starts empty and grows
+           as ticks arrive. The selector is disabled until the WS
+           connects.
+    * 1m - 1mo — historical seeded + WS update of the latest bar.
+
+  Library: TradingView's lightweight-charts via CDN. We use
+  v4 which has a stable createChart() API.
+-->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Stock Chart · Zerodha · BookNow</title>
+<link rel="stylesheet" href="/css/zerodha.css" />
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  .chart-header {
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-bottom: 12px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 12px;
+    align-items: center;
+  }
+  .chart-header .left {
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .chart-header .sym {
+    font-size: 22px; font-weight: 800; letter-spacing: -.2px;
+  }
+  .chart-header .sub {
+    color: var(--bn-muted); font-size: 12px;
+    display: flex; gap: 12px; align-items: center;
+  }
+  .chart-header .right {
+    display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+  }
+  .chart-header .ltp {
+    font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums;
+  }
+  .chart-header .change { font-size: 12px; font-weight: 700; }
+  .chart-header .change.good { color: var(--bn-good); }
+  .chart-header .change.bad { color: var(--bn-bad); }
+
+  .tf-bar {
+    display: flex; gap: 2px; flex-wrap: wrap;
+    margin-bottom: 12px;
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 7px;
+    padding: 4px;
+  }
+  .tf-btn {
+    background: transparent;
+    color: var(--bn-muted);
+    border: 0;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    letter-spacing: .2px;
+    font-variant-numeric: tabular-nums;
+    transition: background .12s, color .12s;
+  }
+  .tf-btn:hover { color: var(--bn-text); background: var(--bn-panel-2); }
+  .tf-btn.on {
+    background: var(--bn-accent);
+    color: #fff;
+  }
+  .tf-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .tf-bar .sep {
+    width: 1px; background: var(--bn-line); margin: 4px 4px;
+  }
+
+  .search-bar {
+    display: flex; gap: 8px; align-items: center;
+    margin-bottom: 12px;
+    background: var(--bn-panel); border: 1px solid var(--bn-line);
+    border-radius: 7px; padding: 8px 11px;
+  }
+  .search-bar input {
+    flex: 1; background: transparent; border: 0; outline: 0;
+    color: var(--bn-text); font-size: 14px;
+    text-transform: uppercase; letter-spacing: .3px; font-weight: 600;
+  }
+  .search-bar input::placeholder { color: var(--bn-muted); text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .search-bar select {
+    background: var(--bn-panel-2); color: var(--bn-text);
+    border: 1px solid var(--bn-line); border-radius: 5px;
+    padding: 6px 10px; font: inherit; font-size: 12px;
+  }
+
+  /* Chart container */
+  #chart {
+    width: 100%;
+    height: 560px;
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 8px;
+    overflow: hidden;
+    position: relative;
+  }
+  #chart-loading {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--bn-muted); font-size: 13px;
+    pointer-events: none;
+    background: rgba(20, 27, 36, 0.7);
+    backdrop-filter: blur(2px);
+    transition: opacity .25s;
+  }
+  #chart-loading.hidden { opacity: 0; pointer-events: none; }
+
+  /* Footer stats */
+  .chart-stats {
+    margin-top: 12px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 8px;
+  }
+  .chart-stats .stat {
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 6px;
+    padding: 8px 12px;
+  }
+  .chart-stats .stat .k {
+    color: var(--bn-muted); font-size: 10px;
+    text-transform: uppercase; letter-spacing: .4px; font-weight: 700;
+  }
+  .chart-stats .stat .v {
+    font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums;
+    margin-top: 2px;
+  }
+  .chart-stats .stat .v.good { color: var(--bn-good); }
+  .chart-stats .stat .v.bad  { color: var(--bn-bad); }
+
+  /* WS connection indicator */
+  .ws-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px; border-radius: 12px;
+    background: var(--bn-panel-2); border: 1px solid var(--bn-line);
+    font-size: 11px; font-weight: 700;
+    color: var(--bn-muted);
+  }
+  .ws-pill .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--bn-muted);
+  }
+  .ws-pill.on  { color: var(--bn-good); border-color: rgba(46,204,113,.35); }
+  .ws-pill.on  .dot { background: var(--bn-good); animation: bnPulse 1.6s ease-in-out infinite; }
+  .ws-pill.off { color: var(--bn-bad); }
+  .ws-pill.off .dot { background: var(--bn-bad); }
+  @keyframes bnPulse { 0%,100%{opacity:1;} 50%{opacity:.4;} }
+</style>
+</head>
+<body class="zd">
+<div class="zd-wrap">
+
+  <h1 class="zd-title">📊 Stock Chart · NSE / BSE</h1>
+  <div class="zd-sub">
+    Candlestick chart with 1s tick → 1mo timeframes. Live updates via
+    the Kite WebSocket once the engine ticker connects.
+    Commodity equivalent at
+    <a href="/zerodha-commodity-chart.html" style="color:var(--bn-accent);">Commodity Chart</a>.
+  </div>
+
+  <div class="search-bar">
+    <span style="color:var(--bn-muted)">🔎</span>
+    <input id="search-input" type="text" placeholder="Symbol — e.g. RELIANCE, HDFCBANK" autocomplete="off" autocapitalize="characters" />
+    <select id="exch-select">
+      <option value="NSE">NSE</option>
+      <option value="BSE">BSE</option>
+    </select>
+  </div>
+
+  <div class="chart-header" id="chart-header" style="display:none;">
+    <div class="left">
+      <div class="sym" id="hd-sym">—</div>
+      <div class="sub">
+        <span id="hd-exch">NSE</span>
+        <span>·</span>
+        <span id="hd-tf">5m</span>
+        <span class="ws-pill" id="ws-pill"><span class="dot"></span><span id="ws-text">WS …</span></span>
+      </div>
+    </div>
+    <div class="right">
+      <div class="ltp" id="hd-ltp">—</div>
+      <div class="change" id="hd-change">—</div>
+    </div>
+  </div>
+
+  <!-- Timeframe toggle -->
+  <div class="tf-bar" id="tf-bar">
+    <button class="tf-btn" data-tf="1s">1s</button>
+    <button class="tf-btn" data-tf="1m">1m</button>
+    <button class="tf-btn" data-tf="3m">3m</button>
+    <button class="tf-btn" data-tf="5m">5m</button>
+    <button class="tf-btn" data-tf="15m">15m</button>
+    <button class="tf-btn" data-tf="30m">30m</button>
+    <span class="sep"></span>
+    <button class="tf-btn" data-tf="1h">1h</button>
+    <button class="tf-btn" data-tf="2h">2h</button>
+    <button class="tf-btn" data-tf="4h">4h</button>
+    <span class="sep"></span>
+    <button class="tf-btn" data-tf="1d">1d</button>
+    <button class="tf-btn" data-tf="1w">1w</button>
+    <button class="tf-btn" data-tf="1mo">1mo</button>
+  </div>
+
+  <!-- Chart canvas -->
+  <div id="chart">
+    <div id="chart-loading">Pick a symbol to see candles</div>
+  </div>
+
+  <!-- Stats row -->
+  <div class="chart-stats" id="chart-stats" style="display:none;">
+    <div class="stat"><div class="k">Open</div>     <div class="v" id="s-open">—</div></div>
+    <div class="stat"><div class="k">High</div>     <div class="v good" id="s-high">—</div></div>
+    <div class="stat"><div class="k">Low</div>      <div class="v bad" id="s-low">—</div></div>
+    <div class="stat"><div class="k">Close</div>    <div class="v" id="s-close">—</div></div>
+    <div class="stat"><div class="k">Volume</div>   <div class="v" id="s-vol">—</div></div>
+    <div class="stat"><div class="k">Range</div>    <div class="v" id="s-range">—</div></div>
+    <div class="stat"><div class="k">Bars</div>     <div class="v" id="s-bars">—</div></div>
+  </div>
+
+</div>
+
+<script src="/nav.js"></script>
+<script>
+/* ──────────────────────────────────────────────────────────────────────
+ * Config
+ * ──────────────────────────────────────────────────────────────────── */
+const $ = id => document.getElementById(id);
+
+let currentSym  = '';
+let currentExch = 'NSE';
+let currentTf   = '5m';
+let ws          = null;       // browser → frontend ws proxy → backend
+let wsConnected = false;
+let chart, candleSeries, volumeSeries;
+let bars = [];                 // current array of {t, o, h, l, c, v}
+let lastBarTime = null;        // unix seconds, START of current bar
+let prevClose = null;
+let ltpSubscribed = false;
+
+/* ── Format helpers ──────────────────────────────────────────────── */
+function inr(v, d=2) { if(v==null||isNaN(v)) return '₹—'; return '₹'+Number(v).toLocaleString('en-IN',{minimumFractionDigits:d, maximumFractionDigits:d}); }
+function num(v, d=0) { if(v==null||isNaN(v)) return '—'; return Number(v).toLocaleString('en-IN',{minimumFractionDigits:d, maximumFractionDigits:d}); }
+function pct(v, d=2) { if(v==null||isNaN(v)) return '—'; return Number(v).toFixed(d)+'%'; }
+function sign(v) { return v>0 ? '+' : ''; }
+function klass(v) { return v>0 ? 'good' : v<0 ? 'bad' : 'mute'; }
+function compactVol(v) {
+  if(v==null||isNaN(v)) return '—';
+  const n = Number(v);
+  if (n >= 1e7) return (n/1e7).toFixed(1) + ' Cr';
+  if (n >= 1e5) return (n/1e5).toFixed(1) + ' L';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'k';
+  return String(Math.round(n));
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Chart initialisation
+ * ──────────────────────────────────────────────────────────────── */
+function makeChart() {
+  const el = $('chart');
+  if (chart) { chart.remove(); chart = null; }
+  chart = LightweightCharts.createChart(el, {
+    width: el.clientWidth,
+    height: el.clientHeight,
+    layout: {
+      background: { color: 'transparent' },
+      textColor: '#8b949e',
+      fontFamily: '-apple-system, "Segoe UI", Roboto, sans-serif',
+    },
+    grid: {
+      vertLines: { color: 'rgba(31, 41, 51, .5)' },
+      horzLines: { color: 'rgba(31, 41, 51, .5)' },
+    },
+    rightPriceScale: { borderColor: '#1f2933' },
+    timeScale: {
+      borderColor: '#1f2933',
+      timeVisible: ['1s','1m','3m','5m','15m','30m','1h','2h','4h'].includes(currentTf),
+      secondsVisible: currentTf === '1s',
+    },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  });
+
+  candleSeries = chart.addCandlestickSeries({
+    upColor:   '#2ecc71', downColor:   '#e74c3c',
+    borderUpColor: '#2ecc71', borderDownColor: '#e74c3c',
+    wickUpColor: '#2ecc71', wickDownColor: '#e74c3c',
+  });
+
+  volumeSeries = chart.addHistogramSeries({
+    color: '#4b9fff',
+    priceFormat: { type: 'volume' },
+    priceScaleId: '',  // overlay on its own pane
+    scaleMargins: { top: 0.82, bottom: 0 },
+  });
+
+  // Update stats on crosshair move
+  chart.subscribeCrosshairMove((param) => {
+    if (!param || !param.seriesData) return;
+    const cd = param.seriesData.get(candleSeries);
+    if (!cd) return;
+    $('s-open').textContent  = inr(cd.open);
+    $('s-high').textContent  = inr(cd.high);
+    $('s-low').textContent   = inr(cd.low);
+    $('s-close').textContent = inr(cd.close);
+    $('s-range').textContent = inr(cd.high - cd.low);
+  });
+
+  // Resize handler
+  if (!makeChart._resized) {
+    window.addEventListener('resize', () => {
+      if (chart) chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+    });
+    makeChart._resized = true;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Historical load
+ * ──────────────────────────────────────────────────────────────── */
+async function loadHistorical() {
+  if (!currentSym) return;
+  $('chart-loading').classList.remove('hidden');
+  $('chart-loading').textContent = `Loading ${currentExch}:${currentSym} · ${currentTf}…`;
+
+  if (currentTf === '1s') {
+    // No historical API at 1-second grain. Start empty; bars come from WS.
+    bars = [];
+    candleSeries.setData([]);
+    volumeSeries.setData([]);
+    $('chart-loading').textContent = `1s chart — waiting for ticks…`;
+    $('s-bars').textContent = '0';
+    return;
+  }
+
+  try {
+    const r = await fetch(`/api/zerodha/v1/historical/${currentExch}/${encodeURIComponent(currentSym)}?interval=${currentTf}`);
+    if (r.status === 503) {
+      const body = await r.json().catch(() => ({}));
+      const detail = body.detail || {};
+      if (detail.error === 'kite_auth_unavailable') {
+        $('chart-loading').textContent = '⚠ Kite auth not configured — see Scanner page for fix steps';
+        return;
+      }
+      $('chart-loading').textContent = `Service unavailable — ${detail.message || r.status}`;
+      return;
+    }
+    if (!r.ok) {
+      $('chart-loading').textContent = `Error: HTTP ${r.status}`;
+      return;
+    }
+    const data = await r.json();
+    if (!Array.isArray(data) || !data.length) {
+      $('chart-loading').textContent = 'No data for this interval/symbol';
+      return;
+    }
+    bars = data.map(b => ({
+      time: Math.floor(new Date(b.t).getTime() / 1000),
+      open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v,
+    }));
+    candleSeries.setData(bars.map(b => ({
+      time: b.time, open: b.open, high: b.high, low: b.low, close: b.close,
+    })));
+    volumeSeries.setData(bars.map(b => ({
+      time: b.time, value: b.volume,
+      color: b.close >= b.open ? 'rgba(46,204,113,.45)' : 'rgba(231,76,60,.45)',
+    })));
+    lastBarTime = bars.length ? bars[bars.length-1].time : null;
+    prevClose = bars.length >= 2 ? bars[bars.length-2].close : (bars[0] || {}).close;
+    chart.timeScale().fitContent();
+    $('s-bars').textContent = bars.length;
+    $('chart-loading').classList.add('hidden');
+    updateHeaderFromLastBar();
+  } catch (e) {
+    $('chart-loading').textContent = 'Fetch failed: ' + e.message;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Live tick handling
+ * ──────────────────────────────────────────────────────────────── */
+
+/**
+ * Round a unix-second timestamp to the START of the bucket for the
+ * current timeframe. Used to decide whether a tick belongs to the
+ * existing last bar or starts a new one.
+ */
+function bucketStart(ts) {
+  const SEC = {
+    '1s':  1,        '1m':  60,    '3m':  180,   '5m':  300,
+    '15m': 900,      '30m': 1800,  '1h':  3600,  '2h':  7200,
+    '4h':  14400,    '1d':  86400, '1w':  86400*7,
+  };
+  if (currentTf === '1mo') {
+    // Bucket by calendar month start, IST.
+    const d = new Date(ts * 1000);
+    const ist = new Date(d.getTime() + (5.5 - d.getTimezoneOffset()/60) * 3600000);
+    return Math.floor(new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), 1)).getTime() / 1000);
+  }
+  const s = SEC[currentTf] || 300;
+  return Math.floor(ts / s) * s;
+}
+
+function onTick(msg) {
+  if (msg.type !== 'tick' || !msg.ltp) return;
+  const ts = msg.ts ? Math.floor(msg.ts) : Math.floor(Date.now()/1000);
+  const px = +msg.ltp;
+  const bucket = bucketStart(ts);
+
+  if (bars.length && bucket === lastBarTime) {
+    // Update last bar
+    const b = bars[bars.length - 1];
+    b.high = Math.max(b.high, px);
+    b.low  = Math.min(b.low, px);
+    b.close = px;
+    candleSeries.update({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close });
+  } else {
+    // Start a new bar
+    const last = bars[bars.length - 1];
+    const b = {
+      time: bucket,
+      open:  last ? last.close : px,
+      high:  px, low: px, close: px,
+      volume: 0,
+    };
+    bars.push(b);
+    if (bars.length > 5000) bars.shift();  // memory guard
+    lastBarTime = bucket;
+    candleSeries.update({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close });
+    $('s-bars').textContent = bars.length;
+  }
+
+  $('hd-ltp').textContent = inr(px);
+  updateHeaderChange(px);
+}
+
+function updateHeaderFromLastBar() {
+  if (!bars.length) return;
+  const last = bars[bars.length - 1];
+  $('hd-ltp').textContent = inr(last.close);
+  updateHeaderChange(last.close);
+}
+function updateHeaderChange(ltp) {
+  if (prevClose) {
+    const d = ltp - prevClose;
+    const p = (d / prevClose) * 100;
+    const cls = klass(p);
+    $('hd-change').className = 'change ' + cls;
+    $('hd-change').innerHTML = `${sign(d)}${num(d, 2)} (${sign(p)}${pct(p)})`;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * WebSocket — open once, re-subscribe on symbol/TF switch
+ * ──────────────────────────────────────────────────────────────── */
+function setWsPill(state, text) {
+  const pill = $('ws-pill');
+  pill.classList.remove('on', 'off');
+  if (state === 'on')  pill.classList.add('on');
+  if (state === 'off') pill.classList.add('off');
+  $('ws-text').textContent = text;
+}
+
+function openWs() {
+  if (ws && ws.readyState <= 1) return; // already open or connecting
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/api/zerodha/v1/ws/ticks`);
+  ws.onopen = () => {
+    wsConnected = true;
+    setWsPill('on', 'WS live');
+    subscribeCurrent();
+  };
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'tick') onTick(msg);
+    } catch (_) {}
+  };
+  ws.onclose = () => {
+    wsConnected = false;
+    setWsPill('off', 'WS down');
+    // Reconnect after 3s
+    setTimeout(openWs, 3000);
+  };
+  ws.onerror = () => setWsPill('off', 'WS error');
+}
+
+function subscribeCurrent() {
+  if (!ws || ws.readyState !== 1 || !currentSym) return;
+  const key = `${currentExch}:${currentSym}`;
+  ws.send(JSON.stringify({ action: 'subscribe', symbols: [key] }));
+  ltpSubscribed = true;
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Wiring
+ * ──────────────────────────────────────────────────────────────── */
+function setSymbol(sym, exch) {
+  const newSym = (sym || '').toUpperCase().trim();
+  const newExch = (exch || 'NSE').toUpperCase();
+  if (!newSym) return;
+
+  // If switching symbol, unsub from the previous one
+  if (ws && ws.readyState === 1 && currentSym && (newSym !== currentSym || newExch !== currentExch)) {
+    ws.send(JSON.stringify({ action: 'unsubscribe', symbols: [`${currentExch}:${currentSym}`] }));
+  }
+
+  currentSym = newSym;
+  currentExch = newExch;
+  $('search-input').value = currentSym;
+  $('exch-select').value = currentExch;
+  $('hd-sym').textContent = currentSym;
+  $('hd-exch').textContent = currentExch;
+  $('chart-header').style.display = '';
+  $('chart-stats').style.display = '';
+
+  history.replaceState({}, '', `?sym=${encodeURIComponent(currentSym)}&exch=${currentExch}&tf=${currentTf}`);
+  if (!chart) makeChart();
+  loadHistorical();
+  subscribeCurrent();
+}
+
+function setTimeframe(tf) {
+  currentTf = tf;
+  document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('on', b.dataset.tf === tf));
+  $('hd-tf').textContent = tf;
+  history.replaceState({}, '', `?sym=${encodeURIComponent(currentSym)}&exch=${currentExch}&tf=${currentTf}`);
+  if (!chart) makeChart();
+  // Re-apply chart options for time-scale behaviour
+  chart.applyOptions({
+    timeScale: {
+      timeVisible: ['1s','1m','3m','5m','15m','30m','1h','2h','4h'].includes(tf),
+      secondsVisible: tf === '1s',
+    }
+  });
+  if (currentSym) loadHistorical();
+}
+
+$('search-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    const s = e.target.value.trim().toUpperCase();
+    if (s) setSymbol(s, $('exch-select').value);
+  }
+});
+$('exch-select').addEventListener('change', () => {
+  if (currentSym) setSymbol(currentSym, $('exch-select').value);
+});
+
+document.querySelectorAll('.tf-btn').forEach(b => {
+  b.addEventListener('click', () => setTimeframe(b.dataset.tf));
+});
+
+/* ──────────────────────────────────────────────────────────────────
+ * Boot
+ * ──────────────────────────────────────────────────────────────── */
+(function init() {
+  const q = new URLSearchParams(location.search);
+  const sym = q.get('sym');
+  const exch = (q.get('exch') || 'NSE').toUpperCase();
+  const tf = q.get('tf') || '5m';
+  setTimeframe(tf);
+  setWsPill('off', 'WS connecting…');
+  openWs();
+  if (sym) setSymbol(sym, exch);
+})();
+</script>
+</body>
+</html>

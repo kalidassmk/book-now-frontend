@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+  public/zerodha-commodity-chart.html
+  ──────────────────────────────────────────────────────────────────────────
+  MCX commodity candlestick chart with timeframe toggle + live WebSocket
+  updates.
+
+  Differences from the stock chart:
+    * Underlying dropdown (11 contracts) — backend resolves front-month
+      tradingsymbol per underlying.
+    * Historical and WS subscription both key off the resolved
+      MCX:TRADINGSYMBOL — re-resolved when underlying changes.
+    * Re-fetches the chain on `?u=` change so the chart points at the
+      right contract (handles expiry rollover automatically).
+
+  Data flow: same as stock-chart — historical seeds, WS appends/updates
+  the last bar. See stock-chart docs for the full bucketing logic.
+-->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Commodity Chart · Zerodha · BookNow</title>
+<link rel="stylesheet" href="/css/zerodha.css" />
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  /* Shared with stock-chart — page-local minimum */
+  .chart-header {
+    background: var(--bn-panel); border: 1px solid var(--bn-line);
+    border-radius: 8px; padding: 14px 18px; margin-bottom: 12px;
+    display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center;
+  }
+  .chart-header .left { display: flex; flex-direction: column; gap: 2px; }
+  .chart-header .sym { font-size: 22px; font-weight: 800; letter-spacing: -.2px; }
+  .chart-header .sub { color: var(--bn-muted); font-size: 12px; display: flex; gap: 12px; align-items: center; }
+  .chart-header .right { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .chart-header .ltp { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .chart-header .change { font-size: 12px; font-weight: 700; }
+  .chart-header .change.good { color: var(--bn-good); }
+  .chart-header .change.bad { color: var(--bn-bad); }
+
+  .tf-bar { display: flex; gap: 2px; flex-wrap: wrap; margin-bottom: 12px;
+            background: var(--bn-panel); border: 1px solid var(--bn-line);
+            border-radius: 7px; padding: 4px; }
+  .tf-btn { background: transparent; color: var(--bn-muted); border: 0;
+            padding: 6px 12px; border-radius: 4px; font-size: 12px;
+            font-weight: 700; cursor: pointer; letter-spacing: .2px;
+            font-variant-numeric: tabular-nums; transition: background .12s, color .12s; }
+  .tf-btn:hover { color: var(--bn-text); background: var(--bn-panel-2); }
+  .tf-btn.on { background: var(--bn-accent); color: #fff; }
+  .tf-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .tf-bar .sep { width: 1px; background: var(--bn-line); margin: 4px 4px; }
+
+  .selector-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px;
+                  background: var(--bn-panel); border: 1px solid var(--bn-line);
+                  border-radius: 7px; padding: 8px 11px; }
+  .selector-bar select { flex: 1; background: var(--bn-panel-2); color: var(--bn-text);
+                          border: 1px solid var(--bn-line); border-radius: 5px;
+                          padding: 7px 10px; font: inherit; font-size: 14px; font-weight: 600;
+                          text-transform: uppercase; }
+
+  #chart { width: 100%; height: 560px; background: var(--bn-panel);
+           border: 1px solid var(--bn-line); border-radius: 8px;
+           overflow: hidden; position: relative; }
+  #chart-loading { position: absolute; inset: 0; display: flex; align-items: center;
+                   justify-content: center; color: var(--bn-muted); font-size: 13px;
+                   pointer-events: none; background: rgba(20, 27, 36, 0.7);
+                   backdrop-filter: blur(2px); transition: opacity .25s; }
+  #chart-loading.hidden { opacity: 0; pointer-events: none; }
+
+  .chart-stats { margin-top: 12px; display: grid;
+                 grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+  .chart-stats .stat { background: var(--bn-panel); border: 1px solid var(--bn-line);
+                       border-radius: 6px; padding: 8px 12px; }
+  .chart-stats .stat .k { color: var(--bn-muted); font-size: 10px;
+                          text-transform: uppercase; letter-spacing: .4px; font-weight: 700; }
+  .chart-stats .stat .v { font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums;
+                          margin-top: 2px; }
+  .chart-stats .stat .v.good { color: var(--bn-good); }
+  .chart-stats .stat .v.bad  { color: var(--bn-bad); }
+
+  .ws-pill { display: inline-flex; align-items: center; gap: 6px;
+             padding: 3px 10px; border-radius: 12px;
+             background: var(--bn-panel-2); border: 1px solid var(--bn-line);
+             font-size: 11px; font-weight: 700; color: var(--bn-muted); }
+  .ws-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bn-muted); }
+  .ws-pill.on  { color: var(--bn-good); border-color: rgba(46,204,113,.35); }
+  .ws-pill.on  .dot { background: var(--bn-good); animation: bnPulse 1.6s ease-in-out infinite; }
+  .ws-pill.off { color: var(--bn-bad); }
+  .ws-pill.off .dot { background: var(--bn-bad); }
+  @keyframes bnPulse { 0%,100%{opacity:1;} 50%{opacity:.4;} }
+</style>
+</head>
+<body class="zd">
+<div class="zd-wrap">
+
+  <h1 class="zd-title">📊 Commodity Chart · MCX</h1>
+  <div class="zd-sub">
+    Candlestick chart with 1s tick → 1mo timeframes for MCX front-month
+    futures. Live updates via the Kite WebSocket.
+    Stock equivalent at
+    <a href="/zerodha-stock-chart.html" style="color:var(--bn-accent);">Stock Chart</a>.
+  </div>
+
+  <div class="selector-bar">
+    <span style="color:var(--bn-muted)">🛢️</span>
+    <select id="underlying-select">
+      <option value="CRUDEOIL">CRUDEOIL</option>
+      <option value="NATURALGAS">NATURALGAS</option>
+      <option value="GOLD">GOLD</option>
+      <option value="GOLDM">GOLDM (mini)</option>
+      <option value="SILVER">SILVER</option>
+      <option value="SILVERM">SILVERM (mini)</option>
+      <option value="COPPER">COPPER</option>
+      <option value="ZINC">ZINC</option>
+      <option value="ALUMINIUM">ALUMINIUM</option>
+      <option value="LEAD">LEAD</option>
+      <option value="NICKEL">NICKEL</option>
+    </select>
+  </div>
+
+  <div class="chart-header" id="chart-header" style="display:none;">
+    <div class="left">
+      <div class="sym" id="hd-sym">—</div>
+      <div class="sub">
+        <span id="hd-contract">—</span>
+        <span>·</span>
+        <span id="hd-tf">5m</span>
+        <span class="ws-pill" id="ws-pill"><span class="dot"></span><span id="ws-text">WS …</span></span>
+      </div>
+    </div>
+    <div class="right">
+      <div class="ltp" id="hd-ltp">—</div>
+      <div class="change" id="hd-change">—</div>
+    </div>
+  </div>
+
+  <div class="tf-bar" id="tf-bar">
+    <button class="tf-btn" data-tf="1s">1s</button>
+    <button class="tf-btn" data-tf="1m">1m</button>
+    <button class="tf-btn" data-tf="3m">3m</button>
+    <button class="tf-btn" data-tf="5m">5m</button>
+    <button class="tf-btn" data-tf="15m">15m</button>
+    <button class="tf-btn" data-tf="30m">30m</button>
+    <span class="sep"></span>
+    <button class="tf-btn" data-tf="1h">1h</button>
+    <button class="tf-btn" data-tf="2h">2h</button>
+    <button class="tf-btn" data-tf="4h">4h</button>
+    <span class="sep"></span>
+    <button class="tf-btn" data-tf="1d">1d</button>
+    <button class="tf-btn" data-tf="1w">1w</button>
+    <button class="tf-btn" data-tf="1mo">1mo</button>
+  </div>
+
+  <div id="chart">
+    <div id="chart-loading">Pick an underlying to see candles</div>
+  </div>
+
+  <div class="chart-stats" id="chart-stats" style="display:none;">
+    <div class="stat"><div class="k">Open</div>     <div class="v" id="s-open">—</div></div>
+    <div class="stat"><div class="k">High</div>     <div class="v good" id="s-high">—</div></div>
+    <div class="stat"><div class="k">Low</div>      <div class="v bad" id="s-low">—</div></div>
+    <div class="stat"><div class="k">Close</div>    <div class="v" id="s-close">—</div></div>
+    <div class="stat"><div class="k">Volume</div>   <div class="v" id="s-vol">—</div></div>
+    <div class="stat"><div class="k">Range</div>    <div class="v" id="s-range">—</div></div>
+    <div class="stat"><div class="k">Bars</div>     <div class="v" id="s-bars">—</div></div>
+  </div>
+
+</div>
+
+<script src="/nav.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+
+let currentUnderlying = 'CRUDEOIL';
+let currentContract = null;
+let currentTf = '5m';
+let ws = null;
+let wsConnected = false;
+let chart, candleSeries, volumeSeries;
+let bars = [];
+let lastBarTime = null;
+let prevClose = null;
+
+function inr(v, d=2) { if(v==null||isNaN(v)) return '₹—'; return '₹'+Number(v).toLocaleString('en-IN',{minimumFractionDigits:d, maximumFractionDigits:d}); }
+function num(v, d=0) { if(v==null||isNaN(v)) return '—'; return Number(v).toLocaleString('en-IN',{minimumFractionDigits:d, maximumFractionDigits:d}); }
+function pct(v, d=2) { if(v==null||isNaN(v)) return '—'; return Number(v).toFixed(d)+'%'; }
+function sign(v) { return v>0 ? '+' : ''; }
+function klass(v) { return v>0 ? 'good' : v<0 ? 'bad' : 'mute'; }
+
+function makeChart() {
+  const el = $('chart');
+  if (chart) { chart.remove(); chart = null; }
+  chart = LightweightCharts.createChart(el, {
+    width: el.clientWidth, height: el.clientHeight,
+    layout: { background: { color: 'transparent' }, textColor: '#8b949e',
+              fontFamily: '-apple-system, "Segoe UI", Roboto, sans-serif' },
+    grid: { vertLines: { color: 'rgba(31, 41, 51, .5)' },
+            horzLines: { color: 'rgba(31, 41, 51, .5)' } },
+    rightPriceScale: { borderColor: '#1f2933' },
+    timeScale: {
+      borderColor: '#1f2933',
+      timeVisible: ['1s','1m','3m','5m','15m','30m','1h','2h','4h'].includes(currentTf),
+      secondsVisible: currentTf === '1s',
+    },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  });
+  candleSeries = chart.addCandlestickSeries({
+    upColor: '#2ecc71', downColor: '#e74c3c',
+    borderUpColor: '#2ecc71', borderDownColor: '#e74c3c',
+    wickUpColor: '#2ecc71', wickDownColor: '#e74c3c',
+  });
+  volumeSeries = chart.addHistogramSeries({
+    color: '#4b9fff', priceFormat: { type: 'volume' },
+    priceScaleId: '', scaleMargins: { top: 0.82, bottom: 0 },
+  });
+  chart.subscribeCrosshairMove((p) => {
+    if (!p || !p.seriesData) return;
+    const cd = p.seriesData.get(candleSeries);
+    if (!cd) return;
+    $('s-open').textContent  = inr(cd.open);
+    $('s-high').textContent  = inr(cd.high);
+    $('s-low').textContent   = inr(cd.low);
+    $('s-close').textContent = inr(cd.close);
+    $('s-range').textContent = inr(cd.high - cd.low);
+  });
+  if (!makeChart._resized) {
+    window.addEventListener('resize', () => {
+      if (chart) chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+    });
+    makeChart._resized = true;
+  }
+}
+
+async function resolveContract() {
+  try {
+    const r = await fetch(`/api/zerodha/v1/commodity/front-month/${encodeURIComponent(currentUnderlying)}`);
+    if (r.status === 503) {
+      const body = await r.json().catch(() => ({}));
+      if ((body.detail || {}).error === 'kite_auth_unavailable') {
+        $('chart-loading').textContent = '⚠ Kite auth not configured — see Scanner page for fix steps';
+        return null;
+      }
+    }
+    if (!r.ok) { $('chart-loading').textContent = `Error resolving contract: HTTP ${r.status}`; return null; }
+    currentContract = await r.json();
+    $('hd-sym').textContent = currentUnderlying;
+    $('hd-contract').textContent = `${currentContract.tradingsymbol} · expires ${currentContract.expiry}`;
+    return currentContract;
+  } catch (e) {
+    $('chart-loading').textContent = 'Resolve failed: ' + e.message;
+    return null;
+  }
+}
+
+async function loadHistorical() {
+  if (!currentContract) return;
+  $('chart-loading').classList.remove('hidden');
+  $('chart-loading').textContent = `Loading ${currentUnderlying} (${currentContract.tradingsymbol}) · ${currentTf}…`;
+
+  if (currentTf === '1s') {
+    bars = [];
+    candleSeries.setData([]);
+    volumeSeries.setData([]);
+    $('chart-loading').textContent = '1s chart — waiting for ticks…';
+    $('s-bars').textContent = '0';
+    return;
+  }
+
+  try {
+    const r = await fetch(`/api/zerodha/v1/historical/MCX/${encodeURIComponent(currentContract.tradingsymbol)}?interval=${currentTf}`);
+    if (!r.ok) { $('chart-loading').textContent = `Error: HTTP ${r.status}`; return; }
+    const data = await r.json();
+    if (!Array.isArray(data) || !data.length) {
+      $('chart-loading').textContent = 'No data for this interval/contract';
+      return;
+    }
+    bars = data.map(b => ({
+      time: Math.floor(new Date(b.t).getTime() / 1000),
+      open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v,
+    }));
+    candleSeries.setData(bars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close })));
+    volumeSeries.setData(bars.map(b => ({
+      time: b.time, value: b.volume,
+      color: b.close >= b.open ? 'rgba(46,204,113,.45)' : 'rgba(231,76,60,.45)',
+    })));
+    lastBarTime = bars.length ? bars[bars.length-1].time : null;
+    prevClose = bars.length >= 2 ? bars[bars.length-2].close : (bars[0] || {}).close;
+    chart.timeScale().fitContent();
+    $('s-bars').textContent = bars.length;
+    $('chart-loading').classList.add('hidden');
+    if (bars.length) {
+      const last = bars[bars.length-1];
+      $('hd-ltp').textContent = inr(last.close);
+      if (prevClose) {
+        const d = last.close - prevClose;
+        const p = (d/prevClose)*100;
+        $('hd-change').className = 'change ' + klass(p);
+        $('hd-change').innerHTML = `${sign(d)}${num(d,2)} (${sign(p)}${pct(p)})`;
+      }
+    }
+  } catch (e) { $('chart-loading').textContent = 'Fetch failed: ' + e.message; }
+}
+
+function bucketStart(ts) {
+  const SEC = { '1s':1, '1m':60, '3m':180, '5m':300, '15m':900, '30m':1800,
+                '1h':3600, '2h':7200, '4h':14400, '1d':86400, '1w':86400*7 };
+  if (currentTf === '1mo') {
+    const d = new Date(ts * 1000);
+    const ist = new Date(d.getTime() + (5.5 - d.getTimezoneOffset()/60) * 3600000);
+    return Math.floor(new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), 1)).getTime() / 1000);
+  }
+  return Math.floor(ts / (SEC[currentTf] || 300)) * (SEC[currentTf] || 300);
+}
+
+function onTick(msg) {
+  if (msg.type !== 'tick' || !msg.ltp) return;
+  const ts = msg.ts ? Math.floor(msg.ts) : Math.floor(Date.now()/1000);
+  const px = +msg.ltp;
+  const bucket = bucketStart(ts);
+  if (bars.length && bucket === lastBarTime) {
+    const b = bars[bars.length - 1];
+    b.high = Math.max(b.high, px); b.low = Math.min(b.low, px); b.close = px;
+    candleSeries.update({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close });
+  } else {
+    const last = bars[bars.length - 1];
+    const b = { time: bucket, open: last ? last.close : px, high: px, low: px, close: px, volume: 0 };
+    bars.push(b);
+    if (bars.length > 5000) bars.shift();
+    lastBarTime = bucket;
+    candleSeries.update({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close });
+    $('s-bars').textContent = bars.length;
+  }
+  $('hd-ltp').textContent = inr(px);
+  if (prevClose) {
+    const d = px - prevClose, p = (d/prevClose)*100;
+    $('hd-change').className = 'change ' + klass(p);
+    $('hd-change').innerHTML = `${sign(d)}${num(d,2)} (${sign(p)}${pct(p)})`;
+  }
+}
+
+function setWsPill(state, text) {
+  const pill = $('ws-pill');
+  pill.classList.remove('on', 'off');
+  if (state === 'on') pill.classList.add('on');
+  if (state === 'off') pill.classList.add('off');
+  $('ws-text').textContent = text;
+}
+function openWs() {
+  if (ws && ws.readyState <= 1) return;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/api/zerodha/v1/ws/ticks`);
+  ws.onopen = () => { wsConnected = true; setWsPill('on', 'WS live'); subscribeCurrent(); };
+  ws.onmessage = (e) => {
+    try { const msg = JSON.parse(e.data); if (msg.type === 'tick') onTick(msg); } catch (_) {}
+  };
+  ws.onclose = () => { wsConnected = false; setWsPill('off', 'WS down'); setTimeout(openWs, 3000); };
+  ws.onerror = () => setWsPill('off', 'WS error');
+}
+function subscribeCurrent() {
+  if (!ws || ws.readyState !== 1 || !currentContract) return;
+  ws.send(JSON.stringify({ action: 'subscribe', symbols: [`MCX:${currentContract.tradingsymbol}`] }));
+}
+
+async function setUnderlying(u) {
+  if (ws && ws.readyState === 1 && currentContract) {
+    ws.send(JSON.stringify({ action: 'unsubscribe', symbols: [`MCX:${currentContract.tradingsymbol}`] }));
+  }
+  currentUnderlying = (u || 'CRUDEOIL').toUpperCase();
+  $('underlying-select').value = currentUnderlying;
+  $('chart-header').style.display = '';
+  $('chart-stats').style.display = '';
+  history.replaceState({}, '', `?u=${encodeURIComponent(currentUnderlying)}&tf=${currentTf}`);
+  if (!chart) makeChart();
+  if (await resolveContract()) {
+    loadHistorical();
+    subscribeCurrent();
+  }
+}
+function setTimeframe(tf) {
+  currentTf = tf;
+  document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('on', b.dataset.tf === tf));
+  $('hd-tf').textContent = tf;
+  history.replaceState({}, '', `?u=${encodeURIComponent(currentUnderlying)}&tf=${currentTf}`);
+  if (!chart) makeChart();
+  chart.applyOptions({
+    timeScale: {
+      timeVisible: ['1s','1m','3m','5m','15m','30m','1h','2h','4h'].includes(tf),
+      secondsVisible: tf === '1s',
+    }
+  });
+  if (currentContract) loadHistorical();
+}
+
+$('underlying-select').addEventListener('change', (e) => setUnderlying(e.target.value));
+document.querySelectorAll('.tf-btn').forEach(b => b.addEventListener('click', () => setTimeframe(b.dataset.tf)));
+
+(function init() {
+  const q = new URLSearchParams(location.search);
+  const u = q.get('u');
+  const tf = q.get('tf') || '5m';
+  setTimeframe(tf);
+  setWsPill('off', 'WS connecting…');
+  openWs();
+  setUnderlying(u || 'CRUDEOIL');
+})();
+</script>
+</body>
+</html>
