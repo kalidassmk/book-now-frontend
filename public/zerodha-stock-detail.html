@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+  public/zerodha-stock-detail.html
+  ──────────────────────────────────────────────────────────────────────────
+  Per-stock deep dive — Zerodha NSE/BSE equity equivalent of Binance's
+  coin.html. Drill into ONE symbol's intraday state.
+
+  What we show, from one /quote call + a couple of light context calls:
+
+    Header        symbol + sector + LTP + day change %
+    Price card    OHLC + range + VWAP info + gap-from-VWAP
+    Depth card    5-level bid/ask book (from quote's depth array)
+    Volume card   today vs day-typical (we approximate w/ buy/sell qty)
+    Position      if you hold this in CNC holdings or have a net position
+    Open orders   any active equity orders on this symbol
+    Sell planner  enter buy qty + target profit % → suggested sell price,
+                  with brokerage estimate baked in
+    Quick actions BUY / SELL buttons → /zerodha-spot.html?sym=X
+
+  Backend deps (all already wired):
+    GET  /api/zerodha/v1/quote?syms=NSE:RELIANCE   (depth needs the MODE_FULL
+                                                    upgrade but /quote always
+                                                    returns top-5 depth)
+    GET  /api/zerodha/v1/holdings
+    GET  /api/zerodha/v1/positions
+    GET  /api/zerodha/v1/orders
+    GET  /api/zerodha/v1/gtt
+
+  URL: /zerodha-stock-detail.html?sym=RELIANCE&exch=NSE
+  Polling: 4 s (faster than scanner; operator is focused on this one name).
+-->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Stock Detail · Zerodha · BookNow</title>
+<link rel="stylesheet" href="/css/zerodha.css" />
+<style>
+  /* Page-local layout */
+  .header-card {
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 8px;
+    padding: 16px 20px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 16px;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+  .header-card .left {
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .header-card .sym {
+    font-size: 28px; font-weight: 800; letter-spacing: -.3px;
+  }
+  .header-card .sub {
+    color: var(--bn-muted); font-size: 12px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .header-card .right {
+    display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+  }
+  .header-card .ltp {
+    font-size: 32px; font-weight: 800; font-variant-numeric: tabular-nums;
+  }
+  .header-card .change { font-size: 14px; font-weight: 700; }
+  .header-card .change.good { color: var(--bn-good); }
+  .header-card .change.bad  { color: var(--bn-bad); }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  @media (max-width: 980px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+  /* Depth book */
+  .depth { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .depth .side {
+    display: grid;
+    grid-template-columns: 1fr 80px 60px;
+    gap: 4px 8px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .depth .side .h {
+    color: var(--bn-muted); font-size: 10px;
+    text-transform: uppercase; letter-spacing: .4px; font-weight: 700;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--bn-line);
+  }
+  .depth .side .px { font-weight: 700; }
+  .depth .bid .px { color: var(--bn-good); }
+  .depth .ask .px { color: var(--bn-bad); }
+  .depth .qty, .depth .orders { text-align: right; }
+  .depth .orders { color: var(--bn-muted); font-size: 11px; }
+
+  /* Sell planner */
+  .planner {
+    background: var(--bn-panel-2);
+    border-radius: 6px; padding: 12px; margin-top: 8px;
+  }
+  .planner input {
+    width: 100%; padding: 8px 10px;
+    background: var(--bn-panel); border: 1px solid var(--bn-line);
+    color: var(--bn-text); border-radius: 5px;
+    font: inherit; font-size: 14px; font-variant-numeric: tabular-nums;
+  }
+  .planner input:focus { border-color: var(--bn-accent); outline: 0; }
+  .planner .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+  .planner .label { font-size: 10px; color: var(--bn-muted); text-transform: uppercase; letter-spacing: .4px; font-weight: 700; }
+  .planner-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .planner-result {
+    margin-top: 10px; padding: 10px 12px;
+    background: var(--bn-panel); border: 1px solid var(--bn-line);
+    border-radius: 5px;
+    font-size: 12px;
+    display: grid; grid-template-columns: auto 1fr auto; gap: 4px 14px;
+    align-items: baseline;
+  }
+  .planner-result .k { color: var(--bn-muted); }
+  .planner-result .v { font-weight: 800; font-variant-numeric: tabular-nums; text-align: right; color: var(--bn-text); }
+  .planner-result .v.good { color: var(--bn-good); }
+  .planner-result .v.bad  { color: var(--bn-bad); }
+  .planner-presets { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+  .planner-presets button {
+    background: var(--bn-panel); border: 1px solid var(--bn-line);
+    color: var(--bn-text); font-size: 11px;
+    padding: 3px 8px; border-radius: 3px;
+    cursor: pointer; font-variant-numeric: tabular-nums;
+  }
+  .planner-presets button:hover { background: rgba(41, 182, 246, .15); border-color: var(--bn-accent); }
+
+  /* Search box */
+  .search-bar {
+    display: flex; gap: 8px; align-items: center;
+    margin-bottom: 14px;
+    background: var(--bn-panel); border: 1px solid var(--bn-line);
+    border-radius: 7px; padding: 8px 11px;
+  }
+  .search-bar input {
+    flex: 1; background: transparent; border: 0; outline: 0;
+    color: var(--bn-text); font-size: 14px;
+    text-transform: uppercase; letter-spacing: .3px; font-weight: 600;
+  }
+  .search-bar input::placeholder { color: var(--bn-muted); text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .search-bar select {
+    background: var(--bn-panel-2); color: var(--bn-text);
+    border: 1px solid var(--bn-line); border-radius: 5px;
+    padding: 6px 10px; font: inherit; font-size: 12px;
+  }
+
+  .kv-grid {
+    display: grid; grid-template-columns: auto 1fr;
+    gap: 8px 16px;
+    font-size: 12px;
+  }
+  .kv-grid .k { color: var(--bn-muted); }
+  .kv-grid .v { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+  .kv-grid .v.good { color: var(--bn-good); }
+  .kv-grid .v.bad  { color: var(--bn-bad); }
+
+  /* Position pill (shown when held) */
+  .pos-pill {
+    background: rgba(41, 182, 246, .08);
+    border: 1px solid rgba(41, 182, 246, .35);
+    border-radius: 6px; padding: 8px 12px;
+    font-size: 12px;
+    display: grid; grid-template-columns: auto 1fr; gap: 4px 12px;
+  }
+  .pos-pill .k { color: var(--bn-muted); }
+  .pos-pill .v { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+</style>
+</head>
+<body class="zd">
+<div class="zd-wrap">
+
+  <h1 class="zd-title">📈 Stock Detail · NSE / BSE</h1>
+  <div class="zd-sub">
+    Per-symbol deep dive — depth, VWAP, volume, position, and a
+    sell-price planner. Search any NSE/BSE symbol or open via
+    <code>?sym=RELIANCE&amp;exch=NSE</code>.
+    Commodity equivalent at
+    <a href="/zerodha-commodity-detail.html" style="color:var(--bn-accent);">Commodity Detail</a>.
+  </div>
+
+  <!-- Search -->
+  <div class="search-bar">
+    <span style="color:var(--bn-muted)">🔎</span>
+    <input id="search-input" type="text" placeholder="Symbol — e.g. RELIANCE, HDFCBANK, TCS" autocomplete="off" autocapitalize="characters" />
+    <select id="exch-select">
+      <option value="NSE">NSE</option>
+      <option value="BSE">BSE</option>
+    </select>
+  </div>
+
+  <!-- Status chips -->
+  <div class="zd-row" style="margin-bottom: 12px;">
+    <div class="zd-chip"            id="chip-engine"><span class="dot"></span><span>engine <strong id="engine-val">…</strong></span></div>
+    <div class="zd-chip"            id="chip-symbol"><span class="dot"></span><span>symbol <strong id="symbol-val">—</strong></span></div>
+    <div class="zd-chip" id="chip-as-of">refresh <strong id="as-of-val">—</strong></div>
+  </div>
+
+  <!-- Header card -->
+  <div class="header-card" id="header-card" style="display:none;">
+    <div class="left">
+      <div class="sym" id="hd-sym">—</div>
+      <div class="sub">
+        <span id="hd-sector">—</span>
+        <span>·</span>
+        <span id="hd-exch">NSE</span>
+        <span>·</span>
+        <span id="hd-vol">vol —</span>
+      </div>
+    </div>
+    <div class="right">
+      <div class="ltp" id="hd-ltp">—</div>
+      <div class="change" id="hd-change">—</div>
+    </div>
+  </div>
+
+  <!-- Position pill (if currently held) -->
+  <div id="position-pill" style="display:none; margin-bottom: 12px;">
+    <div class="pos-pill">
+      <span class="k">Position</span> <span class="v" id="pos-qty">—</span>
+      <span class="k">Avg buy</span>  <span class="v" id="pos-avg">—</span>
+      <span class="k">P&L</span>      <span class="v" id="pos-pnl">—</span>
+      <span class="k">Source</span>   <span class="v" id="pos-src">—</span>
+    </div>
+  </div>
+
+  <!-- Quick actions -->
+  <div class="zd-row" style="margin-bottom: 14px;">
+    <a href="#" class="zd-btn buy" id="btn-buy">🛒 BUY this symbol</a>
+    <a href="#" class="zd-btn sell" id="btn-sell">📤 SELL this symbol</a>
+    <a href="#" class="zd-btn ghost" id="btn-flow">📊 See flow</a>
+  </div>
+
+  <!-- ── First row: price + depth + planner ────────────────────── -->
+  <div class="grid-3">
+
+    <!-- Price card -->
+    <div class="zd-card">
+      <h3><span class="ic">💹</span> Price snapshot</h3>
+      <div class="kv-grid">
+        <span class="k">LTP</span>          <span class="v" id="pr-ltp">—</span>
+        <span class="k">Prev close</span>   <span class="v" id="pr-close">—</span>
+        <span class="k">Open</span>         <span class="v" id="pr-open">—</span>
+        <span class="k">Day high</span>     <span class="v good" id="pr-high">—</span>
+        <span class="k">Day low</span>      <span class="v bad"  id="pr-low">—</span>
+        <span class="k">Day range</span>    <span class="v" id="pr-range">—</span>
+        <span class="k">VWAP</span>         <span class="v" id="pr-vwap">—</span>
+        <span class="k">vs VWAP</span>      <span class="v" id="pr-vsvwap">—</span>
+        <span class="k">Day Δ</span>        <span class="v" id="pr-day">—</span>
+        <span class="k">Gap from prev</span><span class="v" id="pr-gap">—</span>
+      </div>
+      <!-- Range bar showing LTP position in day range with VWAP marker -->
+      <div style="margin-top: 12px;">
+        <div style="font-size:10px; color:var(--bn-muted); text-transform:uppercase; letter-spacing:.4px; font-weight:700; margin-bottom:4px;">
+          Day range position
+        </div>
+        <div class="range-bar" id="range-bar"></div>
+        <div style="font-size:10px; color:var(--bn-muted); margin-top:4px; display:flex; justify-content:space-between;">
+          <span id="rb-lo">low</span>
+          <span id="rb-vwap">VWAP</span>
+          <span id="rb-hi">high</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Depth card -->
+    <div class="zd-card">
+      <h3><span class="ic">📚</span> Order book (top 5)</h3>
+      <div class="depth">
+        <div class="side bid">
+          <span class="h">Bid</span>
+          <span class="h" style="text-align:right;">Qty</span>
+          <span class="h" style="text-align:right;">Orders</span>
+          <span class="empty-row" id="bid-empty" style="grid-column:1/-1; color:var(--bn-muted); padding:8px 0; text-align:center;">Loading…</span>
+        </div>
+        <div class="side ask">
+          <span class="h">Ask</span>
+          <span class="h" style="text-align:right;">Qty</span>
+          <span class="h" style="text-align:right;">Orders</span>
+          <span class="empty-row" id="ask-empty" style="grid-column:1/-1; color:var(--bn-muted); padding:8px 0; text-align:center;">Loading…</span>
+        </div>
+      </div>
+      <div style="margin-top: 10px; font-size: 11px; color: var(--bn-muted); display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
+        <span>Total bid qty: <strong style="color:var(--bn-text);" id="bid-total">—</strong></span>
+        <span style="text-align:right;">Total ask qty: <strong style="color:var(--bn-text);" id="ask-total">—</strong></span>
+      </div>
+      <!-- Pressure bar (bid vs ask in book) -->
+      <div style="margin-top: 8px;">
+        <div id="pbar-container">${''}</div>
+        <div style="font-size:10px; color:var(--bn-muted); margin-top:3px; text-align:center;" id="pbar-label">—</div>
+      </div>
+    </div>
+
+    <!-- Sell-price planner -->
+    <div class="zd-card">
+      <h3><span class="ic">🎯</span> Sell-price planner</h3>
+      <div class="planner">
+        <div class="planner-row">
+          <div class="field">
+            <span class="label">Buy price (₹)</span>
+            <input id="pl-buy" type="number" step="0.05" placeholder="auto-fills LTP" />
+          </div>
+          <div class="field">
+            <span class="label">Quantity</span>
+            <input id="pl-qty" type="number" step="1" value="1" />
+          </div>
+        </div>
+        <div class="field">
+          <span class="label">Target NET profit %</span>
+          <input id="pl-pct" type="number" step="0.25" value="1.0" />
+          <div class="planner-presets" id="pl-presets">
+            <button data-v="0.5">0.5%</button>
+            <button data-v="1.0">1.0%</button>
+            <button data-v="1.5">1.5%</button>
+            <button data-v="2.0">2.0%</button>
+            <button data-v="3.0">3.0%</button>
+            <button data-v="5.0">5.0%</button>
+          </div>
+        </div>
+        <div class="planner-result" id="pl-result">
+          <span class="k">Target sell ₹</span>  <span class="v" id="pl-target">—</span> <span class="k" id="pl-target-pct">—</span>
+          <span class="k">Brokerage est.</span> <span class="v mute" id="pl-fees">—</span> <span class="k"></span>
+          <span class="k">NET profit ₹</span>   <span class="v good" id="pl-profit">—</span> <span class="k" id="pl-profit-pct">—</span>
+          <span class="k">Stop-loss (-1%)</span><span class="v bad"  id="pl-sl">—</span> <span class="k">−1%</span>
+        </div>
+        <div style="font-size:10px; color:var(--bn-muted); margin-top:8px; line-height:1.5;">
+          Brokerage approximation: 0.03% buy + sell (Zerodha's CNC charges).
+          STT 0.1% on sell. Doesn't include exchange/SEBI/stamp duty
+          (those are paise-level on liquid large caps).
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Second row: volume + open orders + GTT triggers ──────── -->
+  <div class="grid-3" style="margin-top: 14px;">
+
+    <!-- Volume + flow card -->
+    <div class="zd-card">
+      <h3><span class="ic">📊</span> Volume + flow</h3>
+      <div class="kv-grid">
+        <span class="k">Today's volume</span> <span class="v" id="vol-today">—</span>
+        <span class="k">Avg trade price</span><span class="v" id="vol-vwap">—</span>
+        <span class="k">Last traded qty</span><span class="v" id="vol-lastqty">—</span>
+        <span class="k">Total bid qty</span>  <span class="v good" id="vol-bid">—</span>
+        <span class="k">Total ask qty</span>  <span class="v bad"  id="vol-ask">—</span>
+        <span class="k">Buy pressure</span>   <span class="v" id="vol-pressure">—</span>
+        <span class="k">Net delta</span>      <span class="v" id="vol-delta">—</span>
+      </div>
+    </div>
+
+    <!-- Open orders for this symbol -->
+    <div class="zd-card">
+      <h3><span class="ic">⏳</span> Open orders <span style="margin-left:auto;font-size:11px;color:var(--bn-muted);font-weight:600;text-transform:none;" id="oo-count">0</span></h3>
+      <div style="overflow-x:auto;">
+        <table class="zd-table" style="font-size:11px;">
+          <thead><tr><th>Side</th><th>Type</th><th class="num">Qty</th><th class="num">Price</th><th>Status</th></tr></thead>
+          <tbody id="oo-tbody">
+            <tr><td colspan="5" class="zd-empty">No open orders</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Active GTTs for this symbol -->
+    <div class="zd-card">
+      <h3><span class="ic">🎯</span> Active GTTs <span style="margin-left:auto;font-size:11px;color:var(--bn-muted);font-weight:600;text-transform:none;" id="gtt-count">0</span></h3>
+      <div id="gtt-list">
+        <div class="zd-empty" style="padding: 18px 0;">No GTT triggers for this symbol</div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<script src="/nav.js"></script>
+<script src="/js/nifty100.js"></script>
+<script>
+/* ──────────────────────────────────────────────────────────────────────
+ * Config
+ * ──────────────────────────────────────────────────────────────────── */
+const POLL_MS = 4000;
+const $ = id => document.getElementById(id);
+
+let currentSym = '';
+let currentExch = 'NSE';
+let lastQuote = null;
+
+/* ── Format helpers ──────────────────────────────────────────────── */
+function inr(v, d=2) { if(v==null||isNaN(v)) return '₹—'; return '₹'+Number(v).toLocaleString('en-IN',{minimumFractionDigits:d, maximumFractionDigits:d}); }
+function num(v, d=2) { if(v==null||isNaN(v)) return '—'; return Number(v).toLocaleString('en-IN',{minimumFractionDigits:d, maximumFractionDigits:d}); }
+function pct(v, d=2) { if(v==null||isNaN(v)) return '—'; return Number(v).toFixed(d)+'%'; }
+function sign(v) { return v>0 ? '+' : ''; }
+function klass(v) { return v>0 ? 'good' : v<0 ? 'bad' : 'mute'; }
+function compactVol(v) {
+  if(v==null||isNaN(v)) return '—';
+  const n = Number(v);
+  if (n >= 1e7) return (n/1e7).toFixed(1) + ' Cr';
+  if (n >= 1e5) return (n/1e5).toFixed(1) + ' L';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'k';
+  return String(Math.round(n));
+}
+function setChip(id, kls, val) {
+  const el = $(id); if (!el) return;
+  el.classList.remove('good','bad','warn','accent');
+  if (kls) el.classList.add(kls);
+  const v = el.querySelector('strong'); if (v) v.textContent = val;
+}
+
+function pressureBar(buyQty, sellQty) {
+  const total = (buyQty || 0) + (sellQty || 0);
+  if (!total) return '<div class="pbar"><div class="b" style="width:50%"></div><div class="s" style="width:50%"></div></div>';
+  const buyPct  = (buyQty / total) * 100;
+  const sellPct = 100 - buyPct;
+  const bLabel = buyPct  >= 20 ? `${buyPct.toFixed(0)}%` : '';
+  const sLabel = sellPct >= 20 ? `${sellPct.toFixed(0)}%` : '';
+  return `<div class="pbar">
+    <div class="b" style="width:${buyPct}%">${bLabel}</div>
+    <div class="s" style="width:${sellPct}%">${sLabel}</div>
+  </div>`;
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Fetch the focal symbol's quote + cross-context (holdings, orders, GTTs)
+ * ──────────────────────────────────────────────────────────────── */
+async function fetchAll() {
+  if (!currentSym) return;
+  const key = `${currentExch}:${currentSym}`;
+  try {
+    const [qr, hr, pr, or, gr] = await Promise.all([
+      fetch(`/api/zerodha/v1/quote?syms=${encodeURIComponent(key)}`),
+      fetch('/api/zerodha/v1/holdings').catch(()=>null),
+      fetch('/api/zerodha/v1/positions').catch(()=>null),
+      fetch('/api/zerodha/v1/orders').catch(()=>null),
+      fetch('/api/zerodha/v1/gtt').catch(()=>null),
+    ]);
+
+    if (qr.status === 503) {
+      const body = await qr.json().catch(() => ({}));
+      const detail = body.detail || {};
+      if (detail.error === 'kite_auth_unavailable') {
+        setChip('chip-engine', 'warn', 'auth missing');
+        $('header-card').style.display = 'none';
+        return;
+      }
+    }
+    if (!qr.ok) {
+      setChip('chip-engine', 'bad', 'down');
+      return;
+    }
+    setChip('chip-engine', 'good', 'up');
+
+    const data = await qr.json();
+    const v = data[key] || data[Object.keys(data)[0]];
+    if (!v) return;
+    lastQuote = v;
+    renderHeader(v);
+    renderPriceCard(v);
+    renderDepthCard(v);
+    renderVolumeCard(v);
+
+    if (hr && hr.ok) renderPosition(await hr.json(), pr && pr.ok ? await pr.json() : null);
+    else if (pr && pr.ok) renderPosition([], await pr.json());
+
+    if (or && or.ok) renderOpenOrders(await or.json());
+    if (gr && gr.ok) renderGtts(await gr.json());
+
+    // Update planner if buy field is empty
+    if (!$('pl-buy').value) {
+      $('pl-buy').value = v.last_price ? v.last_price.toFixed(2) : '';
+      computePlanner();
+    }
+
+    $('as-of-val').textContent = new Date().toLocaleTimeString('en-IN', { hour12:false });
+  } catch (e) {
+    console.warn('fetch error:', e);
+  }
+}
+
+/* ── Header card ─────────────────────────────────────────────────── */
+function renderHeader(v) {
+  $('header-card').style.display = '';
+  $('hd-sym').textContent = currentSym;
+  const meta = (window.NIFTY100 || []).find(o => o.sym === currentSym);
+  $('hd-sector').textContent = meta?.sector || '—';
+  $('hd-exch').textContent = currentExch;
+  $('hd-vol').textContent = 'vol ' + compactVol(v.volume_traded || v.volume);
+
+  const ltp = v.last_price;
+  $('hd-ltp').textContent = inr(ltp);
+
+  const ohlc = v.ohlc || {};
+  const close = ohlc.close || ltp;
+  const dayChange = ltp - close;
+  const dayPct = close ? (dayChange / close) * 100 : 0;
+  const cls = klass(dayPct);
+  $('hd-change').className = 'change ' + cls;
+  $('hd-change').innerHTML = `${sign(dayChange)}${num(dayChange)} <span style="opacity:.7;">(${sign(dayPct)}${pct(dayPct)})</span>`;
+
+  // Quick action targets
+  $('btn-buy').href = `/zerodha-spot.html?sym=${encodeURIComponent(currentSym)}&exch=${currentExch}&side=BUY`;
+  $('btn-sell').href = `/zerodha-spot.html?sym=${encodeURIComponent(currentSym)}&exch=${currentExch}&side=SELL`;
+  $('btn-flow').href = '/zerodha-orderflow-spot.html';
+}
+
+/* ── Price card ──────────────────────────────────────────────────── */
+function renderPriceCard(v) {
+  const ohlc = v.ohlc || {};
+  const ltp   = v.last_price;
+  const close = ohlc.close || ltp;
+  const open  = ohlc.open  || ltp;
+  const high  = ohlc.high  || ltp;
+  const low   = ohlc.low   || ltp;
+  const vwap  = v.average_traded_price;
+
+  $('pr-ltp').textContent   = inr(ltp);
+  $('pr-close').textContent = inr(close);
+  $('pr-open').textContent  = inr(open);
+  $('pr-high').textContent  = inr(high);
+  $('pr-low').textContent   = inr(low);
+  $('pr-range').textContent = (high && low) ? inr(high - low) + ' (' + pct((high - low) / close * 100) + ')' : '—';
+  $('pr-vwap').textContent  = vwap ? inr(vwap) : '—';
+
+  const vsVwap = vwap ? (ltp - vwap) / vwap * 100 : 0;
+  $('pr-vsvwap').textContent = vwap ? sign(vsVwap) + pct(vsVwap) : '—';
+  $('pr-vsvwap').className   = 'v ' + klass(vsVwap);
+
+  const dayPct = close ? (ltp - close) / close * 100 : 0;
+  $('pr-day').textContent = sign(dayPct) + pct(dayPct);
+  $('pr-day').className   = 'v ' + klass(dayPct);
+
+  const gapPct = close ? (open - close) / close * 100 : 0;
+  $('pr-gap').textContent = sign(gapPct) + pct(gapPct);
+  $('pr-gap').className   = 'v ' + klass(gapPct);
+
+  // Range bar
+  if (high && low && high > low) {
+    const ltpPos = ((ltp - low) / (high - low)) * 100;
+    const vwapPos = vwap ? ((vwap - low) / (high - low)) * 100 : null;
+    $('range-bar').innerHTML = `
+      ${vwapPos != null ? `<div class="vwap" style="left:${vwapPos}%"></div>` : ''}
+      <div class="ltp" style="left:${ltpPos}%"></div>
+    `;
+    $('rb-lo').textContent = inr(low);
+    $('rb-vwap').textContent = vwap ? 'VWAP ' + inr(vwap) : '';
+    $('rb-hi').textContent = inr(high);
+  } else {
+    $('range-bar').innerHTML = '';
+  }
+}
+
+/* ── Depth card ──────────────────────────────────────────────────── */
+function renderDepthCard(v) {
+  const depth = v.depth || {};
+  const bids = (depth.buy  || []).slice(0, 5);
+  const asks = (depth.sell || []).slice(0, 5);
+
+  // Render bid side
+  const bidSide = document.querySelector('.depth .bid');
+  bidSide.innerHTML = `
+    <span class="h">Bid</span><span class="h" style="text-align:right;">Qty</span><span class="h" style="text-align:right;">Orders</span>
+    ${bids.length ? bids.map(b => `
+      <span class="px">${inr(b.price)}</span>
+      <span class="qty">${num(b.quantity, 0)}</span>
+      <span class="orders">${b.orders || 0}</span>
+    `).join('') : '<span style="grid-column:1/-1;color:var(--bn-muted);padding:8px 0;text-align:center;">No bids</span>'}
+  `;
+
+  // Render ask side
+  const askSide = document.querySelector('.depth .ask');
+  askSide.innerHTML = `
+    <span class="h">Ask</span><span class="h" style="text-align:right;">Qty</span><span class="h" style="text-align:right;">Orders</span>
+    ${asks.length ? asks.map(a => `
+      <span class="px">${inr(a.price)}</span>
+      <span class="qty">${num(a.quantity, 0)}</span>
+      <span class="orders">${a.orders || 0}</span>
+    `).join('') : '<span style="grid-column:1/-1;color:var(--bn-muted);padding:8px 0;text-align:center;">No asks</span>'}
+  `;
+
+  // Totals + pressure bar
+  const bidTotal = bids.reduce((s, b) => s + (b.quantity || 0), 0);
+  const askTotal = asks.reduce((s, a) => s + (a.quantity || 0), 0);
+  $('bid-total').textContent = num(bidTotal, 0);
+  $('ask-total').textContent = num(askTotal, 0);
+
+  const buyQty  = v.buy_quantity  || v.total_buy_quantity  || bidTotal;
+  const sellQty = v.sell_quantity || v.total_sell_quantity || askTotal;
+  const total = buyQty + sellQty;
+  $('pbar-container').innerHTML = pressureBar(buyQty, sellQty);
+  $('pbar-label').textContent = total
+    ? `${((buyQty/total)*100).toFixed(1)}% bid vs ${((sellQty/total)*100).toFixed(1)}% ask`
+    : '—';
+}
+
+/* ── Volume card ─────────────────────────────────────────────────── */
+function renderVolumeCard(v) {
+  const buyQty  = v.buy_quantity  || v.total_buy_quantity  || 0;
+  const sellQty = v.sell_quantity || v.total_sell_quantity || 0;
+  const total = buyQty + sellQty;
+  const buyPct = total ? (buyQty / total) * 100 : 50;
+  const netDelta = total ? ((buyQty - sellQty) / total) * 100 : 0;
+
+  $('vol-today').textContent   = compactVol(v.volume_traded || v.volume);
+  $('vol-vwap').textContent    = v.average_traded_price ? inr(v.average_traded_price) : '—';
+  $('vol-lastqty').textContent = num(v.last_traded_quantity || 0, 0);
+  $('vol-bid').textContent     = num(buyQty, 0);
+  $('vol-ask').textContent     = num(sellQty, 0);
+  $('vol-pressure').textContent = `${buyPct.toFixed(1)}%`;
+  $('vol-pressure').className = 'v ' + klass(buyPct - 50);
+  $('vol-delta').textContent = sign(netDelta) + num(netDelta, 1) + '%';
+  $('vol-delta').className = 'v ' + klass(netDelta);
+}
+
+/* ── Position card (from holdings or net positions) ─────────────── */
+function renderPosition(holdings, positions) {
+  let qty = 0, avg = 0, src = '';
+
+  if (Array.isArray(holdings)) {
+    const h = holdings.find(x => (x.tradingsymbol || '').toUpperCase() === currentSym);
+    if (h && h.quantity) {
+      qty = h.quantity;
+      avg = h.average_price;
+      src = 'CNC holding';
+    }
+  }
+  if (!qty && positions && positions.net) {
+    const p = positions.net.find(x => (x.tradingsymbol || '').toUpperCase() === currentSym && x.quantity !== 0);
+    if (p) {
+      qty = p.quantity;
+      avg = p.average_price;
+      src = `${p.product} position`;
+    }
+  }
+
+  if (qty === 0) {
+    $('position-pill').style.display = 'none';
+    return;
+  }
+
+  $('position-pill').style.display = '';
+  $('pos-qty').textContent = num(qty, 0);
+  $('pos-avg').textContent = inr(avg);
+  if (lastQuote && lastQuote.last_price && avg) {
+    const pnl = (lastQuote.last_price - avg) * qty;
+    const pnlPct = (lastQuote.last_price - avg) / avg * 100;
+    $('pos-pnl').textContent = inr(pnl) + ' (' + sign(pnlPct) + pct(pnlPct) + ')';
+    $('pos-pnl').className = 'v ' + klass(pnl);
+  } else {
+    $('pos-pnl').textContent = '—';
+  }
+  $('pos-src').textContent = src;
+}
+
+/* ── Open orders ─────────────────────────────────────────────────── */
+function renderOpenOrders(orders) {
+  if (!Array.isArray(orders)) return;
+  const mine = orders.filter(o =>
+    (o.tradingsymbol || '').toUpperCase() === currentSym &&
+    ['OPEN','TRIGGER PENDING','OPEN PENDING','VALIDATION PENDING','PUT ORDER REQ RECEIVED'].includes((o.status||'').toUpperCase())
+  );
+  $('oo-count').textContent = mine.length;
+  const tbody = $('oo-tbody');
+  if (!mine.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="zd-empty">No open orders</td></tr>';
+    return;
+  }
+  tbody.innerHTML = mine.map(o => {
+    const side = (o.transaction_type || '').toUpperCase();
+    const cls = side === 'BUY' ? 'good' : 'bad';
+    return `<tr>
+      <td class="${cls}">${side}</td>
+      <td class="mute">${o.order_type}</td>
+      <td class="num">${num(o.quantity, 0)}</td>
+      <td class="num">${o.price ? num(o.price) : (o.trigger_price ? 'trig ' + num(o.trigger_price) : '—')}</td>
+      <td class="mute">${o.status}</td>
+    </tr>`;
+  }).join('');
+}
+
+/* ── GTT triggers (filter to this symbol) ───────────────────────── */
+function renderGtts(gtts) {
+  if (!Array.isArray(gtts)) return;
+  const mine = gtts.filter(g => {
+    const cond = g.condition || {};
+    return (cond.tradingsymbol || '').toUpperCase() === currentSym && ['active','triggered'].includes(g.status);
+  });
+  $('gtt-count').textContent = mine.length;
+  const wrap = $('gtt-list');
+  if (!mine.length) {
+    wrap.innerHTML = '<div class="zd-empty" style="padding: 18px 0;">No GTT triggers for this symbol</div>';
+    return;
+  }
+  wrap.innerHTML = mine.map(g => {
+    const tv = (g.condition || {}).trigger_values || [];
+    const isOco = g.type === 'two-leg';
+    return `<div style="background:var(--bn-panel-2); padding:8px 10px; border-radius:5px; margin-bottom:6px; font-size:11px;">
+      <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+        <span style="font-weight:700;">${isOco ? 'OCO' : 'SINGLE'} #${g.id}</span>
+        <span class="zd-tag ${g.status==='active'?'open':'complete'}">${g.status}</span>
+      </div>
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:4px; font-variant-numeric:tabular-nums;">
+        ${tv[0] != null ? `<span style="color:var(--bn-bad);">SL ${inr(tv[0])}</span>` : ''}
+        ${tv[1] != null ? `<span style="color:var(--bn-good); text-align:right;">TP ${inr(tv[1])}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Sell-price planner — Zerodha CNC brokerage approximation
+ * ──────────────────────────────────────────────────────────────── */
+const BROKERAGE_PCT = 0.0003;  // 0.03% per side (Zerodha CNC)
+const STT_PCT = 0.001;         // 0.1% on sell (delivery)
+
+function computePlanner() {
+  const buyPx = parseFloat($('pl-buy').value);
+  const qty   = parseInt($('pl-qty').value || '0', 10);
+  const tgtPct = parseFloat($('pl-pct').value);
+
+  if (!buyPx || !qty || isNaN(tgtPct)) {
+    $('pl-target').textContent  = '—';
+    $('pl-fees').textContent    = '—';
+    $('pl-profit').textContent  = '—';
+    $('pl-sl').textContent      = '—';
+    return;
+  }
+
+  // We want NET profit % of buy value
+  // gross = sellPx * qty * (1 - brokerage - STT) - buyPx * qty * (1 + brokerage)
+  // Set gross / (buyPx * qty) = tgtPct/100 and solve for sellPx
+  const buyValue = buyPx * qty;
+  const buyFee   = buyValue * BROKERAGE_PCT;
+  const sellPxNeeded = (buyValue * (1 + tgtPct/100) + buyFee) / (qty * (1 - BROKERAGE_PCT - STT_PCT));
+  const sellValue = sellPxNeeded * qty;
+  const sellFee   = sellValue * (BROKERAGE_PCT + STT_PCT);
+  const totalFees = buyFee + sellFee;
+  const netProfit = sellValue - buyValue - totalFees;
+  const netProfitPct = (netProfit / buyValue) * 100;
+  const grossPct = ((sellPxNeeded - buyPx) / buyPx) * 100;
+
+  $('pl-target').textContent     = inr(sellPxNeeded);
+  $('pl-target-pct').textContent = '+' + pct(grossPct);
+  $('pl-fees').textContent       = inr(totalFees);
+  $('pl-profit').textContent     = inr(netProfit);
+  $('pl-profit-pct').textContent = '+' + pct(netProfitPct);
+
+  // Stop-loss preset (-1% from buy after fees)
+  const slPx = buyPx * 0.99;
+  $('pl-sl').textContent = inr(slPx);
+}
+
+['pl-buy', 'pl-qty', 'pl-pct'].forEach(id => $(id).addEventListener('input', computePlanner));
+document.querySelectorAll('#pl-presets button').forEach(b => {
+  b.addEventListener('click', () => {
+    $('pl-pct').value = b.dataset.v;
+    computePlanner();
+  });
+});
+
+/* ──────────────────────────────────────────────────────────────────
+ * Symbol switching
+ * ──────────────────────────────────────────────────────────────── */
+function setSymbol(sym, exch) {
+  currentSym  = (sym || '').toUpperCase().trim();
+  currentExch = (exch || 'NSE').toUpperCase();
+  if (!currentSym) return;
+  $('search-input').value = currentSym;
+  $('exch-select').value = currentExch;
+  setChip('chip-symbol', 'accent', `${currentExch}:${currentSym}`);
+  // Clear buy field so it auto-fills with the new LTP on first quote
+  $('pl-buy').value = '';
+  history.replaceState({}, '', `?sym=${encodeURIComponent(currentSym)}&exch=${currentExch}`);
+  fetchAll();
+}
+
+$('search-input').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const s = e.target.value.trim().toUpperCase();
+  if (s) setSymbol(s, $('exch-select').value);
+});
+$('exch-select').addEventListener('change', () => {
+  if (currentSym) setSymbol(currentSym, $('exch-select').value);
+});
+
+/* ──────────────────────────────────────────────────────────────────
+ * Boot
+ * ──────────────────────────────────────────────────────────────── */
+(function init() {
+  const q = new URLSearchParams(location.search);
+  const sym = q.get('sym');
+  const exch = (q.get('exch') || 'NSE').toUpperCase();
+  if (sym) setSymbol(sym, exch);
+  else setChip('chip-symbol', '', 'no symbol');
+  setInterval(fetchAll, POLL_MS);
+})();
+</script>
+</body>
+</html>

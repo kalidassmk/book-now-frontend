@@ -662,11 +662,14 @@ function rankPercentile(rows, getter) {
  * Render
  * ──────────────────────────────────────────────────────────────── */
 
+// Row click → detail page (where you decide what to do); the detail page
+// has BUY / SELL quick links of its own. Direct trade-ticket links are
+// still available from elsewhere (overview, portfolio rows, etc.).
 function tradeUrl(sym, exch) {
-  return `/zerodha-spot.html?sym=${encodeURIComponent(sym)}&exch=${exch||'NSE'}`;
+  return `/zerodha-stock-detail.html?sym=${encodeURIComponent(sym)}&exch=${exch||'NSE'}`;
 }
 function tradeMcxUrl(underlying) {
-  return `/zerodha-mcx.html?u=${encodeURIComponent(underlying)}`;
+  return `/zerodha-commodity-detail.html?u=${encodeURIComponent(underlying)}`;
 }
 
 function renderTable(tbodyId, rows, cols) {
