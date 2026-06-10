@@ -193,6 +193,23 @@
     snapshot Kite served. Numbers will go live again at 09:15 IST.
   </div>
 
+  <!-- Auth-missing banner — surfaced when the backend returns 503 with
+       kite_auth_unavailable. The most common cause early in setup is an
+       empty ZERODHA_TOTP_SECRET in /opt/booknow/.env.zerodha. -->
+  <div class="closed-banner" id="auth-banner"
+       style="background: rgba(231,76,60,.07); border-color: rgba(231,76,60,.4); color: var(--bn-bad);">
+    <strong>⚠ Kite auth not configured.</strong>
+    Set <code style="background:rgba(0,0,0,.25); padding:1px 6px; border-radius:3px;">ZERODHA_TOTP_SECRET</code>
+    (and the 5 sibling vars) in
+    <code style="background:rgba(0,0,0,.25); padding:1px 6px; border-radius:3px;">/opt/booknow/.env.zerodha</code>,
+    then on the Hetzner box run:
+    <pre style="background:var(--bn-panel-2); padding:8px 12px; margin-top:6px; border-radius:5px; font-size:11px; color:var(--bn-text); overflow-x:auto;">docker compose -f /opt/booknow/docker-compose.yml \
+  -f /opt/booknow/zerodha-deploy/docker-compose.zerodha.yml \
+  restart zerodha-backend</pre>
+    The scanner will populate within ~30s of a successful auth refresh.
+    <div id="auth-banner-detail" style="font-size:10px; color:var(--bn-muted); margin-top:6px;"></div>
+  </div>
+
   <!-- Hero strip: top status chips -->
   <div class="zd-row" style="margin-bottom:12px;">
     <div class="zd-chip"            id="chip-engine"><span class="dot"></span><span>engine <strong id="engine-val">…</strong></span></div>
@@ -488,8 +505,22 @@ async function fetchUniverse() {
   const url = '/api/zerodha/v1/quote?syms=' + encodeURIComponent(syms.join(','));
   try {
     const r = await fetch(url);
+    if (r.status === 503) {
+      // Backend is up but Kite auth isn't configured — show the banner
+      // explaining how to fix it. Don't throw; the banner is the answer.
+      const body = await r.json().catch(() => ({}));
+      const detail = body.detail || {};
+      if (detail.error === 'kite_auth_unavailable') {
+        document.getElementById('auth-banner').classList.add('show');
+        document.getElementById('auth-banner-detail').textContent =
+          detail.message || '';
+        setChip('chip-engine', 'warn', 'auth missing');
+        return null;
+      }
+    }
     if (!r.ok) throw new Error('status ' + r.status);
     const raw = await r.json();
+    document.getElementById('auth-banner').classList.remove('show');
     lastFetchOK = true;
     setChip('chip-engine', 'good', 'up');
 
