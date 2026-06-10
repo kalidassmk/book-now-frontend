@@ -6,6 +6,19 @@ const path = require('path');
 const { spawn } = require('child_process');
 // Node v20+ has native fetch built-in — no extra package needed
 
+// ── Defensive process-level error guards (Z-iter16) ─────────────────────────
+// Without these, an unhandled error from any background WS (notably the
+// Binance miniTicker stream, which can intermittently 5xx for non-US IPs)
+// kills the entire Node process — including the Zerodha WS proxy that
+// only needs the local `ws` library, not Binance. We log loudly so the
+// underlying issue is still visible.
+process.on('uncaughtException', (err) => {
+    console.error('[fatal-caught] uncaughtException:', err && err.message, err && err.stack);
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('[fatal-caught] unhandledRejection:', reason);
+});
+
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3000', 10);
