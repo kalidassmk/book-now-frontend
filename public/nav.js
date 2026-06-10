@@ -153,6 +153,20 @@ window.bnQuickTradeLinkHtml = function (sym, opts) {
         { href: '/pro.html',               label: 'Pro',              icon: '🎖️', desc: 'Pro tier' },
       ],
     },
+    // Z-iter4 — Zerodha (Kite Connect) dashboard.  Separate top-level
+    // menu so it never gets confused with Binance pages.  Backend lives
+    // in book-now-zerodha-backend (port 8084).
+    {
+      key: 'zerodha',
+      label: 'Zerodha',
+      icon: '🇮🇳',
+      items: [
+        { href: '/zerodha.html',           label: 'Overview',         icon: '📊', desc: 'Session + funds + holdings + positions at a glance', highlight: true },
+        { href: '/zerodha-spot.html',      label: 'Spot Equity',      icon: '🧾', desc: 'NSE/BSE — CNC delivery buy/sell + OCO GTT for SL/TP' },
+        { href: '/zerodha-mcx.html',       label: 'MCX Commodity',    icon: '🛢️', desc: 'CRUDE/GOLD/NATGAS — front-month resolver + lot-aware orders' },
+        { href: '/zerodha-portfolio.html', label: 'Portfolio',        icon: '💼', desc: 'Holdings + positions + orders + trades + GTT triggers' },
+      ],
+    },
     {
       key: 'admin',
       label: 'Admin',

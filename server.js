@@ -25,6 +25,21 @@ const ENGINE_DIR = path.resolve(__dirname, '../python-engine');
 // frontend bundle is rebuilt.
 const SPRING_BASE = ENGINE_BASE;
 
+// ── Zerodha (Kite Connect) backend ──────────────────────────────────────────
+// Distinct process from the Binance engine — runs on its own Docker
+// container (zerodha-backend) and exposes the /api/zerodha/v1/* surface
+// defined in book-now-zerodha-backend/booknow/api/routes_kite.py.
+//
+// In docker-compose the in-network DNS name is `zerodha-backend:8084`;
+// for laptop dev that's `localhost:8084`. Override either with env.
+//
+// The proxy is wildcard-based — any /api/zerodha/* the dashboard hits
+// gets forwarded as-is so we don't have to maintain per-endpoint route
+// declarations. See `app.use('/api/zerodha', …)` farther down.
+const ZERODHA_ENGINE_PORT = parseInt(process.env.ZERODHA_ENGINE_PORT || '8084', 10);
+const ZERODHA_ENGINE_BASE = process.env.ZERODHA_ENGINE_BASE
+    || `http://localhost:${ZERODHA_ENGINE_PORT}`;
+
 // ─── Engine process handle ──────────────────────────────────────────────────
 let engineProc = null;   // ChildProcess when we own the python-engine process
 
@@ -94,6 +109,50 @@ app.use(express.static(path.join(__dirname, 'public'), {
     }
   },
 }));
+
+// ── Zerodha backend proxy (Z-iter4) ──────────────────────────────────────────
+// One catch-all forwarder for /api/zerodha/* → zerodha-backend on port 8084.
+// Path, method, query string, JSON body, and response status all pass
+// through unchanged.
+//
+// This sits BEFORE the dashboard's own /api/* routes (which are Binance-
+// specific) so the path prefix is what disambiguates.
+//
+// We use the standard library `fetch` (Node 20+) — no extra proxy package
+// needed. Streaming-large-response is not a concern here: every Zerodha
+// endpoint returns small JSON.
+app.use('/api/zerodha', async (req, res) => {
+    // req.url is the path under /api/zerodha (e.g. "/v1/holdings?syms=…")
+    const targetUrl = `${ZERODHA_ENGINE_BASE}/api/zerodha${req.url}`;
+    try {
+        const init = {
+            method: req.method,
+            headers: { 'Accept': 'application/json' },
+        };
+        // Forward JSON bodies for POST/PUT/DELETE-with-body. We don't
+        // proxy multipart — none of the Zerodha endpoints take it.
+        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.body && Object.keys(req.body).length) {
+            init.headers['Content-Type'] = 'application/json';
+            init.body = JSON.stringify(req.body);
+        }
+        const r = await fetch(targetUrl, init);
+        const ct = r.headers.get('content-type') || '';
+        res.status(r.status);
+        if (ct.includes('application/json')) {
+            const j = await r.json();
+            res.json(j);
+        } else {
+            const t = await r.text();
+            res.type(ct || 'text/plain').send(t);
+        }
+    } catch (err) {
+        res.status(502).json({
+            error: 'Zerodha backend unreachable',
+            target: targetUrl,
+            detail: String(err),
+        });
+    }
+});
 
 // ── Order-Flow Scalper (proxy to Python engine) ──────────────────────────────
 // The engine exposes /api/v1/scalper/* (snapshots, status, signals). Proxy them

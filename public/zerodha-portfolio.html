@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+  public/zerodha-portfolio.html
+  ──────────────────────────────────────────────────────────────────────────
+  Zerodha Portfolio — read-only consolidated view across spot + commodity.
+
+  Five sections, all polled from the engine:
+    1. Funds breakdown    (equity + commodity, span/exposure)
+    2. Holdings           (CNC settled equity — value, day Δ, total P&L)
+    3. Net positions      (intraday + carry, equity AND MCX)
+    4. Today's orders     (filterable by status + segment)
+    5. Today's trades     (actual fills)
+    6. GTT triggers       (one card per active OCO + single)
+
+  Polling cadence: 4s for fast-changing (positions, orders, trades),
+  10s for slower (funds, holdings, GTT).
+
+  Cross-link: clicking a holding row jumps to /zerodha-spot.html?sym=X;
+  clicking an MCX position jumps to /zerodha-mcx.html?u=UNDERLYING.
+
+  Backend deps:
+    GET /api/zerodha/v1/funds
+    GET /api/zerodha/v1/holdings
+    GET /api/zerodha/v1/positions
+    GET /api/zerodha/v1/orders
+    GET /api/zerodha/v1/trades
+    GET /api/zerodha/v1/gtt
+-->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Zerodha Portfolio — BookNow</title>
+<link rel="stylesheet" href="/css/zerodha.css" />
+<style>
+  .filter-row {
+    display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px;
+    align-items: center;
+  }
+  .filter-row .lbl {
+    color: var(--bn-muted); font-size: 11px;
+    text-transform: uppercase; letter-spacing: .4px;
+    margin-right: 4px;
+  }
+  .gtt-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  @media (max-width: 1100px) { .gtt-grid { grid-template-columns: 1fr; } }
+  .gtt-card {
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 7px; padding: 12px 14px;
+    position: relative;
+  }
+  .gtt-card .head {
+    display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px;
+  }
+  .gtt-card .sym { font-weight: 800; font-size: 14px; }
+  .gtt-card .meta { font-size: 11px; color: var(--bn-muted); margin-left: auto; }
+  .gtt-card .legs {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+    font-size: 11px; font-variant-numeric: tabular-nums;
+  }
+  .gtt-card .leg {
+    background: var(--bn-panel-2);
+    padding: 8px 10px; border-radius: 5px;
+  }
+  .gtt-card .leg.sl { border-left: 3px solid var(--bn-bad); }
+  .gtt-card .leg.tp { border-left: 3px solid var(--bn-good); }
+  .gtt-card .leg .l { color: var(--bn-muted); }
+  .gtt-card .leg .px { font-weight: 800; font-size: 13px; }
+  .gtt-card .leg.sl .px { color: var(--bn-bad); }
+  .gtt-card .leg.tp .px { color: var(--bn-good); }
+  .gtt-card .actions { position: absolute; top: 12px; right: 14px; }
+</style>
+</head>
+<body class="zd">
+<div class="zd-wrap">
+
+  <h1 class="zd-title">💼 Zerodha Portfolio</h1>
+  <div class="zd-sub">
+    Consolidated read-only view — holdings (CNC), positions (MIS + NRML),
+    today's orders and fills, and active GTTs.
+    Trade actions live on
+    <a href="/zerodha-spot.html" style="color:var(--bn-accent);">Spot</a> /
+    <a href="/zerodha-mcx.html"  style="color:var(--bn-accent);">MCX</a>.
+  </div>
+
+  <!-- ── Funds breakdown ─────────────────────────────────────────── -->
+  <h2 class="zd-section-h">Funds</h2>
+  <div class="zd-grid cols-2">
+    <div class="zd-card">
+      <h3><span class="ic">📈</span> Equity segment</h3>
+      <div class="kv"><span class="k">Available cash</span>   <span class="v" id="eq-cash">—</span></div>
+      <div class="kv"><span class="k">Collateral (margin)</span> <span class="v" id="eq-collateral">—</span></div>
+      <div class="kv"><span class="k">Live balance</span>     <span class="v" id="eq-live">—</span></div>
+      <div class="kv"><span class="k">Opening balance</span>  <span class="v mute" id="eq-opening">—</span></div>
+      <div class="kv"><span class="k">Used (span+exposure)</span> <span class="v" id="eq-used">—</span></div>
+    </div>
+    <div class="zd-card">
+      <h3><span class="ic">🛢️</span> Commodity segment</h3>
+      <div class="kv"><span class="k">Available cash</span>   <span class="v" id="cm-cash">—</span></div>
+      <div class="kv"><span class="k">Collateral</span>       <span class="v" id="cm-collateral">—</span></div>
+      <div class="kv"><span class="k">Live balance</span>     <span class="v" id="cm-live">—</span></div>
+      <div class="kv"><span class="k">Opening balance</span>  <span class="v mute" id="cm-opening">—</span></div>
+      <div class="kv"><span class="k">Used (span+exposure)</span> <span class="v" id="cm-used">—</span></div>
+    </div>
+  </div>
+
+  <!-- ── Day summary stats ───────────────────────────────────────── -->
+  <div class="zd-grid cols-4" style="margin-top:12px;">
+    <div class="zd-stat">
+      <div class="lbl">Holdings value</div>
+      <div class="val" id="stat-hv">—</div>
+      <div class="sub" id="stat-hv-sub">CNC at LTP</div>
+    </div>
+    <div class="zd-stat">
+      <div class="lbl">Holdings day P&L</div>
+      <div class="val" id="stat-hp">—</div>
+      <div class="sub">vs prev close</div>
+    </div>
+    <div class="zd-stat">
+      <div class="lbl">Positions M2M</div>
+      <div class="val" id="stat-pm">—</div>
+      <div class="sub">running</div>
+    </div>
+    <div class="zd-stat">
+      <div class="lbl">Realised today</div>
+      <div class="val" id="stat-rp">—</div>
+      <div class="sub">closed positions</div>
+    </div>
+  </div>
+
+  <!-- ── Holdings ────────────────────────────────────────────────── -->
+  <h2 class="zd-section-h">Holdings (CNC) <span class="count" id="h-count">0</span></h2>
+  <div class="zd-table-wrap" style="margin-bottom:18px;">
+    <table class="zd-table" id="holdings-table">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Exch</th>
+          <th class="num">Qty</th>
+          <th class="num">Avg buy</th>
+          <th class="num">LTP</th>
+          <th class="num">Day Δ</th>
+          <th class="num">Value</th>
+          <th class="num">Day P&L</th>
+          <th class="num">Total P&L</th>
+        </tr>
+      </thead>
+      <tbody id="holdings-tbody">
+        <tr><td colspan="9" class="zd-empty">No holdings</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── Positions (net) ────────────────────────────────────────── -->
+  <h2 class="zd-section-h">Net positions <span class="count" id="p-count">0</span></h2>
+  <div class="zd-table-wrap" style="margin-bottom:18px;">
+    <table class="zd-table" id="pos-table">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Exch</th>
+          <th>Product</th>
+          <th class="num">Net qty</th>
+          <th class="num">Buy qty</th>
+          <th class="num">Sell qty</th>
+          <th class="num">Avg buy</th>
+          <th class="num">LTP</th>
+          <th class="num">M2M</th>
+          <th class="num">P&L</th>
+        </tr>
+      </thead>
+      <tbody id="pos-tbody">
+        <tr><td colspan="10" class="zd-empty">No positions</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── Orders (today) ──────────────────────────────────────────── -->
+  <h2 class="zd-section-h" id="orders">
+    Today's orders <span class="count" id="o-count">0</span>
+  </h2>
+  <div class="filter-row">
+    <span class="lbl">Status</span>
+    <div class="zd-toggle" id="status-filter">
+      <button data-v="ALL"       class="on">ALL</button>
+      <button data-v="OPEN">OPEN</button>
+      <button data-v="COMPLETE">COMPLETE</button>
+      <button data-v="CANCELLED">CANCELLED</button>
+      <button data-v="REJECTED">REJECTED</button>
+    </div>
+    <span class="lbl" style="margin-left:14px;">Segment</span>
+    <div class="zd-toggle" id="segment-filter">
+      <button data-v="ALL"       class="on">ALL</button>
+      <button data-v="EQUITY">EQUITY</button>
+      <button data-v="MCX">MCX</button>
+    </div>
+  </div>
+  <div class="zd-table-wrap" style="margin-bottom:18px;">
+    <table class="zd-table" id="orders-table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Side</th>
+          <th>Symbol</th>
+          <th>Exch</th>
+          <th>Type</th>
+          <th>Product</th>
+          <th class="num">Qty</th>
+          <th class="num">Filled</th>
+          <th class="num">Avg / Price</th>
+          <th>Status</th>
+          <th>Tag</th>
+        </tr>
+      </thead>
+      <tbody id="orders-tbody">
+        <tr><td colspan="11" class="zd-empty">No orders</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── Trades (fills) ─────────────────────────────────────────── -->
+  <h2 class="zd-section-h">Today's trades (fills) <span class="count" id="t-count">0</span></h2>
+  <div class="zd-table-wrap" style="margin-bottom:18px;">
+    <table class="zd-table" id="trades-table">
+      <thead>
+        <tr>
+          <th>Fill time</th>
+          <th>Side</th>
+          <th>Symbol</th>
+          <th>Exch</th>
+          <th>Product</th>
+          <th class="num">Qty</th>
+          <th class="num">Price</th>
+          <th class="num">Value</th>
+          <th>Order ID</th>
+        </tr>
+      </thead>
+      <tbody id="trades-tbody">
+        <tr><td colspan="9" class="zd-empty">No fills</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── GTTs ───────────────────────────────────────────────────── -->
+  <h2 class="zd-section-h">Active GTTs <span class="count" id="g-count">0</span></h2>
+  <div class="gtt-grid" id="gtt-grid">
+    <div class="zd-empty" style="grid-column:1/-1;">No active GTTs</div>
+  </div>
+
+</div>
+
+<div class="zd-toast" id="toast"><div class="head"></div><div class="body"></div></div>
+
+<script src="/nav.js"></script>
+<script>
+const POLL_FAST = 4000, POLL_SLOW = 10000;
+const $ = id => document.getElementById(id);
+
+function inr(v, d=2) {
+  if (v == null || isNaN(v)) return '₹—';
+  return '₹' + Number(v).toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function num(v, d=2) {
+  if (v == null || isNaN(v)) return '—';
+  return Number(v).toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function pct(v, d=2) {
+  if (v == null || isNaN(v)) return '—';
+  return Number(v).toFixed(d) + '%';
+}
+function shortTime(iso) {
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleTimeString('en-IN', { hour12:false }); }
+  catch { return iso; }
+}
+function toast(kind, head, body) {
+  const t = $('toast');
+  t.className = 'zd-toast ' + (kind === 'bad' ? 'bad' : 'good');
+  t.querySelector('.head').textContent = head;
+  t.querySelector('.body').textContent = body || '';
+  t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), 4500);
+}
+function pnlClass(v) { return v > 0 ? 'good' : v < 0 ? 'bad' : 'mute'; }
+function pnlSign(v) { return v > 0 ? '+' : ''; }
+
+/* Extract MCX underlying (strip month+year+FUT suffix) for cross-link. */
+function mcxUnderlying(sym) {
+  const s = String(sym || '').toUpperCase();
+  return s.replace(/\d+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d*FUT$/, '').replace(/FUT$/, '');
+}
+
+/* ── Filter state ────────────────────────────────────────────────── */
+let statusFilter  = 'ALL';
+let segmentFilter = 'ALL';
+
+document.querySelectorAll('#status-filter button').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('#status-filter button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    statusFilter = b.dataset.v;
+    renderOrders();
+  });
+});
+document.querySelectorAll('#segment-filter button').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('#segment-filter button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    segmentFilter = b.dataset.v;
+    renderOrders();
+  });
+});
+
+/* ── Data caches ────────────────────────────────────────────────── */
+let ordersRows = [];
+let tradesRows = [];
+
+/* ── Pollers ────────────────────────────────────────────────────── */
+async function pollFunds() {
+  try {
+    const r = await fetch('/api/zerodha/v1/funds');
+    if (!r.ok) return;
+    const data = await r.json();
+    const fillSeg = (segKey, prefix) => {
+      const seg = data[segKey] || {};
+      const avail = seg.available || {};
+      const used = seg.utilised || {};
+      const net  = seg.net != null ? seg.net : (avail.live_balance ?? avail.cash);
+      $(prefix + '-cash').textContent       = inr(avail.cash);
+      $(prefix + '-collateral').textContent = inr(avail.collateral);
+      $(prefix + '-live').textContent       = inr(net);
+      $(prefix + '-opening').textContent    = inr(avail.opening_balance);
+      $(prefix + '-used').textContent       =
+        inr((used.span || 0) + (used.exposure || 0) + (used.var || 0) + (used.var_margin || 0));
+    };
+    fillSeg('equity',    'eq');
+    fillSeg('commodity', 'cm');
+  } catch (_) {}
+}
+
+async function pollHoldings() {
+  try {
+    const r = await fetch('/api/zerodha/v1/holdings');
+    if (!r.ok) return;
+    const rows = await r.json();
+    if (!Array.isArray(rows)) return;
+    $('h-count').textContent = rows.length;
+    let totalValue = 0, dayPnl = 0, totalPnl = 0;
+    rows.forEach(h => {
+      const ltp = h.last_price ?? h.average_price;
+      totalValue += ltp * (h.quantity || 0);
+      dayPnl     += (h.day_change || 0) * (h.quantity || 0);
+      totalPnl   += (ltp - h.average_price) * (h.quantity || 0);
+    });
+    $('stat-hv').textContent = inr(totalValue);
+    $('stat-hv-sub').textContent = `${rows.length} symbols`;
+    const hpEl = $('stat-hp');  hpEl.textContent = inr(dayPnl);  hpEl.className = 'val ' + pnlClass(dayPnl);
+    const tbody = $('holdings-tbody');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="9" class="zd-empty">No holdings</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(h => {
+      const ltp = h.last_price ?? h.average_price;
+      const value = ltp * h.quantity;
+      const day   = (h.day_change || 0) * h.quantity;
+      const tot   = (ltp - h.average_price) * h.quantity;
+      const dayPctV = h.day_change_percentage;
+      return `<tr style="cursor:pointer;" onclick="location.href='/zerodha-spot.html?sym=${h.tradingsymbol}&exch=${h.exchange}'">
+        <td class="sym">${h.tradingsymbol}</td>
+        <td class="mute">${h.exchange||''}</td>
+        <td class="num">${h.quantity}</td>
+        <td class="num">${num(h.average_price)}</td>
+        <td class="num">${num(ltp)}</td>
+        <td class="num ${pnlClass(dayPctV)}">${pnlSign(dayPctV)}${pct(dayPctV)}</td>
+        <td class="num">${num(value)}</td>
+        <td class="num ${pnlClass(day)}">${pnlSign(day)}${num(day)}</td>
+        <td class="num ${pnlClass(tot)}">${pnlSign(tot)}${num(tot)}</td>
+      </tr>`;
+    }).join('');
+  } catch (_) {}
+}
+
+async function pollPositions() {
+  try {
+    const r = await fetch('/api/zerodha/v1/positions');
+    if (!r.ok) return;
+    const data = await r.json();
+    const net = (data && data.net) || [];
+    const open = net.filter(p => p.quantity !== 0);
+    $('p-count').textContent = open.length;
+    let m2m = 0, realised = 0;
+    net.forEach(p => {
+      m2m += p.m2m || 0;
+      realised += p.realised || 0;
+    });
+    const pmEl = $('stat-pm'); pmEl.textContent = inr(m2m); pmEl.className = 'val ' + pnlClass(m2m);
+    const rpEl = $('stat-rp'); rpEl.textContent = inr(realised); rpEl.className = 'val ' + pnlClass(realised);
+    const tbody = $('pos-tbody');
+    if (!open.length) {
+      tbody.innerHTML = '<tr><td colspan="10" class="zd-empty">No positions</td></tr>';
+      return;
+    }
+    tbody.innerHTML = open.map(p => {
+      const link = p.exchange === 'MCX'
+        ? `/zerodha-mcx.html?u=${mcxUnderlying(p.tradingsymbol)}`
+        : `/zerodha-spot.html?sym=${p.tradingsymbol}&exch=${p.exchange}`;
+      return `<tr style="cursor:pointer;" onclick="location.href='${link}'">
+        <td class="sym">${p.tradingsymbol}</td>
+        <td class="mute">${p.exchange||''}</td>
+        <td class="mute">${p.product||''}</td>
+        <td class="num ${p.quantity>0?'good':p.quantity<0?'bad':'mute'}">${p.quantity}</td>
+        <td class="num">${p.buy_quantity || 0}</td>
+        <td class="num">${p.sell_quantity || 0}</td>
+        <td class="num">${num(p.average_price)}</td>
+        <td class="num">${num(p.last_price)}</td>
+        <td class="num ${pnlClass(p.m2m)}">${pnlSign(p.m2m)}${num(p.m2m)}</td>
+        <td class="num ${pnlClass(p.pnl)}">${pnlSign(p.pnl)}${num(p.pnl)}</td>
+      </tr>`;
+    }).join('');
+  } catch (_) {}
+}
+
+async function pollOrders() {
+  try {
+    const r = await fetch('/api/zerodha/v1/orders');
+    if (!r.ok) return;
+    const rows = await r.json();
+    if (!Array.isArray(rows)) return;
+    ordersRows = rows.slice().sort((a,b) =>
+      String(b.order_timestamp || '').localeCompare(String(a.order_timestamp || ''))
+    );
+    renderOrders();
+  } catch (_) {}
+}
+
+function renderOrders() {
+  let view = ordersRows.slice();
+  if (statusFilter !== 'ALL') {
+    const target = statusFilter === 'OPEN'
+      ? ['OPEN','TRIGGER PENDING','OPEN PENDING','VALIDATION PENDING','PUT ORDER REQ RECEIVED']
+      : [statusFilter];
+    view = view.filter(o => target.includes((o.status||'').toUpperCase()));
+  }
+  if (segmentFilter !== 'ALL') {
+    if (segmentFilter === 'EQUITY') {
+      view = view.filter(o => ['NSE','BSE'].includes((o.exchange||'').toUpperCase()));
+    } else if (segmentFilter === 'MCX') {
+      view = view.filter(o => (o.exchange||'').toUpperCase() === 'MCX');
+    }
+  }
+  $('o-count').textContent = view.length;
+  const tbody = $('orders-tbody');
+  if (!view.length) {
+    tbody.innerHTML = '<tr><td colspan="11" class="zd-empty">No orders match filters</td></tr>';
+    return;
+  }
+  tbody.innerHTML = view.map(o => {
+    const sideTag = `<span class="zd-tag ${(o.transaction_type||'').toLowerCase()==='buy'?'buy':'sell'}">${o.transaction_type}</span>`;
+    const sKey = (o.status||'').toLowerCase().replace(/\s+/g, '');
+    const statusTag = `<span class="zd-tag ${
+      sKey === 'complete' ? 'complete' :
+      sKey === 'cancelled' ? 'cancelled' :
+      sKey === 'rejected' ? 'rejected' : 'open'
+    }">${o.status}</span>`;
+    return `<tr>
+      <td class="mute">${shortTime(o.order_timestamp)}</td>
+      <td>${sideTag}</td>
+      <td class="sym">${o.tradingsymbol}</td>
+      <td class="mute">${o.exchange}</td>
+      <td class="mute">${o.order_type}</td>
+      <td class="mute">${o.product}</td>
+      <td class="num">${o.quantity}</td>
+      <td class="num">${o.filled_quantity || 0}</td>
+      <td class="num">${o.average_price ? num(o.average_price) : (o.price ? num(o.price) : '—')}</td>
+      <td>${statusTag}</td>
+      <td class="mute">${o.tag||''}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function pollTrades() {
+  try {
+    const r = await fetch('/api/zerodha/v1/trades');
+    if (!r.ok) return;
+    const rows = await r.json();
+    if (!Array.isArray(rows)) return;
+    tradesRows = rows.slice().sort((a,b) =>
+      String(b.fill_timestamp || b.exchange_timestamp || '').localeCompare(String(a.fill_timestamp || a.exchange_timestamp || ''))
+    );
+    $('t-count').textContent = tradesRows.length;
+    const tbody = $('trades-tbody');
+    if (!tradesRows.length) {
+      tbody.innerHTML = '<tr><td colspan="9" class="zd-empty">No fills</td></tr>';
+      return;
+    }
+    tbody.innerHTML = tradesRows.map(t => {
+      const sideTag = `<span class="zd-tag ${(t.transaction_type||'').toLowerCase()==='buy'?'buy':'sell'}">${t.transaction_type}</span>`;
+      const value = (t.quantity || 0) * (t.average_price || t.price || 0);
+      return `<tr>
+        <td class="mute">${shortTime(t.fill_timestamp || t.exchange_timestamp)}</td>
+        <td>${sideTag}</td>
+        <td class="sym">${t.tradingsymbol}</td>
+        <td class="mute">${t.exchange}</td>
+        <td class="mute">${t.product||''}</td>
+        <td class="num">${t.quantity}</td>
+        <td class="num">${num(t.average_price || t.price)}</td>
+        <td class="num">${num(value)}</td>
+        <td class="mute">${t.order_id||''}</td>
+      </tr>`;
+    }).join('');
+  } catch (_) {}
+}
+
+async function pollGtts() {
+  try {
+    const r = await fetch('/api/zerodha/v1/gtt');
+    if (!r.ok) return;
+    const rows = await r.json();
+    if (!Array.isArray(rows)) return;
+    const active = rows.filter(g => ['active', 'triggered'].includes(g.status));
+    $('g-count').textContent = active.length;
+    const grid = $('gtt-grid');
+    if (!active.length) {
+      grid.innerHTML = '<div class="zd-empty" style="grid-column:1/-1;">No active GTTs</div>';
+      return;
+    }
+    grid.innerHTML = active.map(g => {
+      const cond = g.condition || {};
+      const orders = g.orders || [];
+      const tv = cond.trigger_values || [];
+      const isOco = g.type === 'two-leg';
+      const sl = tv[0]; const tp = tv[1];
+      const qty = (orders[0] && orders[0].quantity) || 0;
+      const slLimit = (orders[0] && orders[0].price) || 0;
+      const tpLimit = (orders[1] && orders[1].price) || 0;
+      return `<div class="gtt-card">
+        <div class="head">
+          <span class="sym">${cond.tradingsymbol||''}</span>
+          <span class="zd-tag ${isOco?'open':''}">${isOco?'OCO':'SINGLE'}</span>
+          <span class="meta">${cond.exchange||''} • qty ${qty} • created ${shortTime(g.created_at)}</span>
+        </div>
+        <div class="legs">
+          ${sl != null ? `
+            <div class="leg sl">
+              <div class="l">Stop loss</div>
+              <div class="px">${inr(sl)}</div>
+              <div class="l">limit ${inr(slLimit)}</div>
+            </div>` : ''}
+          ${(isOco ? tp : (sl == null ? sl : null)) != null ? `
+            <div class="leg tp">
+              <div class="l">Take profit</div>
+              <div class="px">${inr(isOco ? tp : sl)}</div>
+              <div class="l">limit ${inr(tpLimit)}</div>
+            </div>` : ''}
+        </div>
+        <div class="actions">
+          <button class="zd-btn sm ghost" onclick="cancelGtt(${g.id})">✕ Cancel</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (_) {}
+}
+
+async function cancelGtt(id) {
+  if (!confirm('Cancel GTT ' + id + '?')) return;
+  try {
+    const r = await fetch(`/api/zerodha/v1/gtt/${id}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error('status ' + r.status);
+    toast('good', 'GTT cancelled', 'trigger_id ' + id);
+    pollGtts();
+  } catch (e) {
+    toast('bad', 'Cancel failed', String(e.message || e));
+  }
+}
+window.cancelGtt = cancelGtt;
+
+/* ── Boot ─────────────────────────────────────────────────────────── */
+function refreshFast() { pollPositions(); pollOrders(); pollTrades(); }
+function refreshSlow() { pollFunds(); pollHoldings(); pollGtts(); }
+
+refreshFast(); refreshSlow();
+setInterval(refreshFast, POLL_FAST);
+setInterval(refreshSlow, POLL_SLOW);
+</script>
+</body>
+</html>
