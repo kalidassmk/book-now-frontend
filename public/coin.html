@@ -1541,8 +1541,15 @@ function notifyNewBuys(topBuys){
         const priceStr = (ev.signal_price != null ? ev.signal_price
                         : ev.price != null ? ev.price : null);
         const priceTail = priceStr != null ? ` @ $${(+priceStr).toPrecision(6)}` : '';
+        // iter140 — coin name MUST live in the body too. On macOS /
+        // Chrome, when several notifications stack or get collapsed
+        // into the Notification Center summary, the title gets hidden
+        // and the user sees only the body. Without the symbol in the
+        // body they couldn't tell which coin fired the alert. Lead
+        // the body with the symbol in uppercase so it's the first
+        // thing visible even in compact views.
         const n = new Notification(`🔥 ${sym} — ${detector}`, {
-          body: `Strong BUY signal${priceTail}. Click to open dashboard.`,
+          body: `${sym}: strong BUY signal${priceTail}. Click to open dashboard.`,
           tag: `bn-buy-${sym}-${ev.kind}-${ev.ts}`,  // de-dup if two ticks race
           renotify: false,
         });

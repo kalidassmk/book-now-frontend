@@ -381,18 +381,29 @@
           bell.classList.add('flash');
           setTimeout(() => bell.classList.remove('flash'), 800);
         }
+        // iter140 — prepend the coin symbol to every notification body.
+        // The title already carries the symbol but macOS / Chrome can
+        // hide titles in stacked or collapsed notification summaries,
+        // leaving the user without the coin name. Leading the body
+        // with `${sym}:` keeps the coin identifiable in every view.
         const tradeNew = newOnes.find(e => e.kind === 'trade');
         if (tradeNew) {
           soundTrade();
-          browserNotify(`Bot ${tradeNew.action}: ${tradeNew.symbol}`,
-                        `${tradeNew.price ? '$' + (+tradeNew.price).toPrecision(4) : ''}${tradeNew.realised_net != null ? ' P&L ' + (tradeNew.realised_net >= 0 ? '+' : '') + '$' + (+tradeNew.realised_net).toFixed(2) : ''}`,
-                        'trade-' + tradeNew.symbol + '-' + tradeNew.ts);
+          const sym = tradeNew.symbol || '?';
+          const priceStr = tradeNew.price ? '$' + (+tradeNew.price).toPrecision(4) : '';
+          const pnlStr = tradeNew.realised_net != null
+            ? ' P&L ' + (tradeNew.realised_net >= 0 ? '+' : '') + '$' + (+tradeNew.realised_net).toFixed(2)
+            : '';
+          browserNotify(`Bot ${tradeNew.action}: ${sym}`,
+                        `${sym} ${tradeNew.action} ${priceStr}${pnlStr}`.trim(),
+                        'trade-' + sym + '-' + tradeNew.ts);
         } else {
           soundPump();
           const top = newOnes[0];
-          browserNotify(`Alert: ${top.symbol}`,
-                        summarize(top).text,
-                        'alert-' + top.symbol + '-' + top.ts);
+          const sym = top.symbol || '?';
+          browserNotify(`Alert: ${sym}`,
+                        `${sym}: ${summarize(top).text}`,
+                        'alert-' + sym + '-' + top.ts);
         }
       }
       events.sort((a, b) => b.ts - a.ts);
