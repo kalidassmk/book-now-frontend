@@ -2,288 +2,742 @@
 <html lang="en">
 <head>
 <!--
-  public/zerodha-stock-chart.html
+  public/zerodha-stock-chart.html  (Z-iter17 redesign)
   ──────────────────────────────────────────────────────────────────────────
-  Stock candlestick chart (NSE / BSE) with timeframe toggle + live
-  WebSocket updates from the Kite ticker.
+  Full trading workspace for NSE/BSE equities.
 
-  Data flow:
-    1. On load, GET /api/zerodha/v1/historical/NSE/{sym}?interval=X
-       → seeds the chart with the past N bars (defaults vary per interval).
-    2. Open a WebSocket to /api/zerodha/v1/ws/ticks and subscribe to
-       the symbol. Every tick updates the LAST candle (or starts a new
-       one when the bar boundary rolls over).
-    3. Switching timeframe re-runs step 1 (historical) but keeps the
-       same WS subscription — only the aggregation grain changes
-       client-side.
+  Layout (desktop):
 
-  Special timeframes:
-    * 1s — built purely from live ticks (Kite's historical API only
-           goes down to 1-minute). The chart starts empty and grows
-           as ticks arrive. The selector is disabled until the WS
-           connects.
-    * 1m - 1mo — historical seeded + WS update of the latest bar.
+    ┌──────────────────────────────────────────────────────────────────┐
+    │  Top bar — search · symbol · TF buttons · WS pill                │
+    ├────────────────────────────────────────┬─────────────────────────┤
+    │                                        │  Price snapshot         │
+    │                                        ├─────────────────────────┤
+    │                                        │  Order entry            │
+    │              CHART                     │   (BUY / SELL, qty,     │
+    │   (candles + volume + crosshair)       │    type, product, GTT)  │
+    │                                        ├─────────────────────────┤
+    │                                        │  Order book (top 5)     │
+    │                                        ├─────────────────────────┤
+    │                                        │  Position pill          │
+    ├────────────────────────────────────────┴─────────────────────────┤
+    │  Tabs · Open orders | Recent fills | Active GTTs                 │
+    └──────────────────────────────────────────────────────────────────┘
 
-  Library: TradingView's lightweight-charts via CDN. We use
-  v4 which has a stable createChart() API.
+  Chart rendering fixes vs the old version:
+    * Removed `overflow: hidden` on the container so the right price
+      scale + bottom time axis aren't clipped.
+    * Two SEPARATE panes (price + volume) instead of an overlay —
+      volume on its own price-scale axis so it doesn't smush at the
+      bottom of the price candles.
+    * Chart resizes on window resize AND on layout shifts (right panel
+      collapse on mobile).
+    * Crosshair tooltip stays inside the chart, doesn't bleed into
+      the right panel.
+
+  Order entry features:
+    * BUY / SELL toggle with colour cue.
+    * MARKET / LIMIT order types — LIMIT auto-snaps to tick size.
+    * Product: CNC / MIS for spot equity.
+    * Auto-AMO when market is closed (auto_amo=true to backend).
+    * "Use LTP" / "Mid-price" / "Last trade" quick-fill buttons.
+    * OCO GTT inline — SL% + TP% inputs, live preview, one click to arm.
+    * Click any row in the order book to copy that price into the
+      LIMIT field. World-class trading apps do this; so do we.
+
+  Live data:
+    * Historical seed via /api/zerodha/v1/historical/...
+    * Live update via existing WebSocket /api/zerodha/v1/ws/ticks
+    * Open orders / fills / GTTs polled every 5s when their tab is active.
+
+  URL: /zerodha-stock-chart.html?sym=RELIANCE&exch=NSE&tf=5m
 -->
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Stock Chart · Zerodha · BookNow</title>
+<title>Stock Workspace · Zerodha · BookNow</title>
 <link rel="stylesheet" href="/css/zerodha.css" />
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
-  .chart-header {
+  /* ── Layout grid ─────────────────────────────────────────────── */
+  body.zd { min-height: 100vh; }
+  .ws-wrap {
+    max-width: 1640px;
+    margin: 0 auto;
+    padding: 14px 18px 24px;
+    display: grid;
+    grid-template-rows: auto auto 1fr auto;
+    gap: 12px;
+    min-height: calc(100vh - 80px);
+  }
+  /* Two-column main row — chart left, side panel right. */
+  .main-row {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 12px;
+    align-items: stretch;
+    min-height: 0;
+  }
+  @media (max-width: 980px) {
+    .main-row { grid-template-columns: 1fr; }
+    .side { order: 2; }
+    .chart-panel { order: 1; min-height: 460px; }
+  }
+
+  /* ── Top bar ──────────────────────────────────────────────────── */
+  .top-bar {
     background: var(--bn-panel);
     border: 1px solid var(--bn-line);
     border-radius: 8px;
-    padding: 14px 18px;
-    margin-bottom: 12px;
+    padding: 10px 14px;
     display: grid;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: 1fr auto auto;
     gap: 12px;
     align-items: center;
   }
-  .chart-header .left {
-    display: flex; flex-direction: column; gap: 2px;
-  }
-  .chart-header .sym {
-    font-size: 22px; font-weight: 800; letter-spacing: -.2px;
-  }
-  .chart-header .sub {
-    color: var(--bn-muted); font-size: 12px;
-    display: flex; gap: 12px; align-items: center;
-  }
-  .chart-header .right {
-    display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
-  }
-  .chart-header .ltp {
-    font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums;
-  }
-  .chart-header .change { font-size: 12px; font-weight: 700; }
-  .chart-header .change.good { color: var(--bn-good); }
-  .chart-header .change.bad { color: var(--bn-bad); }
-
-  .tf-bar {
-    display: flex; gap: 2px; flex-wrap: wrap;
-    margin-bottom: 12px;
-    background: var(--bn-panel);
-    border: 1px solid var(--bn-line);
-    border-radius: 7px;
-    padding: 4px;
-  }
-  .tf-btn {
-    background: transparent;
-    color: var(--bn-muted);
-    border: 0;
-    padding: 6px 12px;
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: 700;
-    cursor: pointer;
-    letter-spacing: .2px;
-    font-variant-numeric: tabular-nums;
-    transition: background .12s, color .12s;
-  }
-  .tf-btn:hover { color: var(--bn-text); background: var(--bn-panel-2); }
-  .tf-btn.on {
-    background: var(--bn-accent);
-    color: #fff;
-  }
-  .tf-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-  .tf-bar .sep {
-    width: 1px; background: var(--bn-line); margin: 4px 4px;
-  }
-
-  .search-bar {
+  .top-bar .search {
     display: flex; gap: 8px; align-items: center;
-    margin-bottom: 12px;
-    background: var(--bn-panel); border: 1px solid var(--bn-line);
-    border-radius: 7px; padding: 8px 11px;
   }
-  .search-bar input {
-    flex: 1; background: transparent; border: 0; outline: 0;
-    color: var(--bn-text); font-size: 14px;
-    text-transform: uppercase; letter-spacing: .3px; font-weight: 600;
+  .top-bar .search input {
+    background: var(--bn-panel-2); border: 1px solid var(--bn-line);
+    color: var(--bn-text); padding: 6px 10px; border-radius: 5px;
+    font: inherit; font-size: 13px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .3px;
+    width: 180px;
+    outline: 0;
   }
-  .search-bar input::placeholder { color: var(--bn-muted); text-transform: none; letter-spacing: 0; font-weight: 400; }
-  .search-bar select {
+  .top-bar .search input:focus { border-color: var(--bn-accent); }
+  .top-bar .search select {
     background: var(--bn-panel-2); color: var(--bn-text);
     border: 1px solid var(--bn-line); border-radius: 5px;
     padding: 6px 10px; font: inherit; font-size: 12px;
   }
+  .top-bar .symbol-meta {
+    color: var(--bn-muted); font-size: 11px;
+    display: flex; gap: 10px; align-items: baseline;
+  }
+  .top-bar .symbol-meta strong { color: var(--bn-text); font-weight: 700; font-size: 13px; }
 
-  /* Chart container */
-  #chart {
-    width: 100%;
-    height: 560px;
-    background: var(--bn-panel);
-    border: 1px solid var(--bn-line);
-    border-radius: 8px;
-    overflow: hidden;
-    position: relative;
+  /* Timeframe bar */
+  .tf-bar {
+    display: flex; gap: 1px;
+    background: var(--bn-panel); border: 1px solid var(--bn-line);
+    border-radius: 6px; padding: 3px;
   }
-  #chart-loading {
-    position: absolute; inset: 0;
-    display: flex; align-items: center; justify-content: center;
-    color: var(--bn-muted); font-size: 13px;
-    pointer-events: none;
-    background: rgba(20, 27, 36, 0.7);
-    backdrop-filter: blur(2px);
-    transition: opacity .25s;
+  .tf-btn {
+    background: transparent; color: var(--bn-muted);
+    border: 0; padding: 4px 9px;
+    border-radius: 3px; font-size: 11px; font-weight: 700;
+    cursor: pointer; font-variant-numeric: tabular-nums;
+    transition: background .12s, color .12s;
   }
-  #chart-loading.hidden { opacity: 0; pointer-events: none; }
+  .tf-btn:hover { color: var(--bn-text); background: var(--bn-panel-2); }
+  .tf-btn.on { background: var(--bn-accent); color: #fff; }
+  .tf-sep { width: 1px; background: var(--bn-line); margin: 3px 2px; }
 
-  /* Footer stats */
-  .chart-stats {
-    margin-top: 12px;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-    gap: 8px;
-  }
-  .chart-stats .stat {
-    background: var(--bn-panel);
-    border: 1px solid var(--bn-line);
-    border-radius: 6px;
-    padding: 8px 12px;
-  }
-  .chart-stats .stat .k {
-    color: var(--bn-muted); font-size: 10px;
-    text-transform: uppercase; letter-spacing: .4px; font-weight: 700;
-  }
-  .chart-stats .stat .v {
-    font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums;
-    margin-top: 2px;
-  }
-  .chart-stats .stat .v.good { color: var(--bn-good); }
-  .chart-stats .stat .v.bad  { color: var(--bn-bad); }
-
-  /* WS connection indicator */
+  /* WS pill */
   .ws-pill {
     display: inline-flex; align-items: center; gap: 6px;
-    padding: 3px 10px; border-radius: 12px;
+    padding: 4px 10px; border-radius: 12px;
     background: var(--bn-panel-2); border: 1px solid var(--bn-line);
     font-size: 11px; font-weight: 700;
     color: var(--bn-muted);
   }
   .ws-pill .dot {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--bn-muted);
+    width: 7px; height: 7px; border-radius: 50%; background: var(--bn-muted);
   }
   .ws-pill.on  { color: var(--bn-good); border-color: rgba(46,204,113,.35); }
   .ws-pill.on  .dot { background: var(--bn-good); animation: bnPulse 1.6s ease-in-out infinite; }
   .ws-pill.off { color: var(--bn-bad); }
   .ws-pill.off .dot { background: var(--bn-bad); }
   @keyframes bnPulse { 0%,100%{opacity:1;} 50%{opacity:.4;} }
+
+  /* ── Symbol header (under top bar) ───────────────────────────── */
+  .sym-header {
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 8px;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+  .sym-header .sym {
+    font-size: 22px; font-weight: 800;
+    letter-spacing: -.2px;
+  }
+  .sym-header .ltp {
+    font-size: 22px; font-weight: 800;
+    font-variant-numeric: tabular-nums;
+  }
+  .sym-header .change { font-size: 13px; font-weight: 700; }
+  .sym-header .change.good { color: var(--bn-good); }
+  .sym-header .change.bad  { color: var(--bn-bad); }
+  .sym-header .sub {
+    color: var(--bn-muted); font-size: 11px;
+    margin-left: auto;
+    display: flex; gap: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+  .sym-header .sub strong { color: var(--bn-text); font-weight: 700; }
+
+  /* ── Chart panel ─────────────────────────────────────────────── */
+  .chart-panel {
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 8px;
+    position: relative;
+    /* Padding around the chart so the price + time scales aren't
+       clipped against the rounded border. */
+    padding: 4px 4px 4px 8px;
+    min-height: 540px;
+    display: flex;
+    flex-direction: column;
+  }
+  #chart {
+    flex: 1;
+    min-height: 0;       /* allow grid child to shrink properly */
+    /* IMPORTANT: no overflow:hidden — that clips the lightweight-chart's
+       internal scales. The chart library manages its own clipping. */
+  }
+  #chart-loading {
+    position: absolute; inset: 8px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--bn-muted); font-size: 13px;
+    background: rgba(20, 27, 36, 0.85);
+    border-radius: 5px;
+    pointer-events: none;
+    transition: opacity .25s;
+    z-index: 5;
+  }
+  #chart-loading.hidden { opacity: 0; pointer-events: none; }
+
+  /* ── Right side panel ────────────────────────────────────────── */
+  .side {
+    display: grid;
+    grid-template-rows: auto auto auto auto;
+    gap: 10px;
+    align-content: start;
+  }
+  .panel {
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 8px;
+    padding: 11px 14px;
+  }
+  .panel h4 {
+    margin: 0 0 9px;
+    font-size: 11px; font-weight: 700;
+    color: var(--bn-muted);
+    text-transform: uppercase; letter-spacing: .5px;
+    display: flex; align-items: center; gap: 6px;
+  }
+
+  /* Price snapshot mini-grid */
+  .price-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 14px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .price-grid .k { color: var(--bn-muted); }
+  .price-grid .v { color: var(--bn-text); font-weight: 700; text-align: right; }
+  .price-grid .v.good { color: var(--bn-good); }
+  .price-grid .v.bad  { color: var(--bn-bad); }
+
+  /* ── Order entry form ────────────────────────────────────────── */
+  .side-toggle {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px;
+    background: var(--bn-panel-2);
+    border: 1px solid var(--bn-line);
+    border-radius: 5px;
+    padding: 2px;
+    margin-bottom: 8px;
+  }
+  .side-toggle button {
+    background: transparent;
+    color: var(--bn-muted);
+    border: 0;
+    padding: 6px 0;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .4px;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: background .12s, color .12s;
+  }
+  .side-toggle button.on.buy  { background: var(--bn-good); color: #fff; }
+  .side-toggle button.on.sell { background: var(--bn-bad);  color: #fff; }
+
+  .field-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .field-row.three { grid-template-columns: 1fr 1fr 1fr; }
+  .field {
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .field label {
+    font-size: 9px; color: var(--bn-muted);
+    text-transform: uppercase; letter-spacing: .4px; font-weight: 700;
+  }
+  .field input, .field select {
+    background: var(--bn-panel-2);
+    color: var(--bn-text);
+    border: 1px solid var(--bn-line);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font: inherit; font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    outline: 0;
+    transition: border-color .12s;
+  }
+  .field input:focus, .field select:focus { border-color: var(--bn-accent); }
+  .field input:disabled { opacity: .5; }
+
+  .quick-fill {
+    display: flex; gap: 3px; margin-top: 2px;
+    font-size: 10px;
+  }
+  .quick-fill button {
+    background: var(--bn-panel-2);
+    color: var(--bn-muted);
+    border: 1px solid var(--bn-line);
+    border-radius: 3px;
+    padding: 2px 6px;
+    font-size: 10px; font-weight: 600;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+  }
+  .quick-fill button:hover { color: var(--bn-text); border-color: var(--bn-accent); }
+
+  .place-btn {
+    width: 100%;
+    padding: 9px;
+    font: inherit; font-size: 13px; font-weight: 800;
+    letter-spacing: .5px;
+    text-transform: uppercase;
+    border: 0;
+    border-radius: 5px;
+    cursor: pointer;
+    margin-top: 4px;
+    transition: transform .12s, opacity .12s;
+  }
+  .place-btn.buy  { background: var(--bn-good); color: #fff; }
+  .place-btn.sell { background: var(--bn-bad);  color: #fff; }
+  .place-btn:hover:not(:disabled) { transform: translateY(-1px); }
+  .place-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* GTT inline section */
+  .gtt-section {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--bn-line);
+  }
+  .gtt-preview {
+    margin-top: 6px;
+    background: var(--bn-panel-2);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 2px 10px;
+    align-items: baseline;
+  }
+  .gtt-preview .k { color: var(--bn-muted); }
+  .gtt-preview .v { color: var(--bn-text); font-weight: 700; text-align: right; }
+  .gtt-preview .v.good { color: var(--bn-good); }
+  .gtt-preview .v.bad  { color: var(--bn-bad); }
+
+  /* ── Order book ──────────────────────────────────────────────── */
+  .book-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .book-side {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    gap: 1px 4px;
+  }
+  .book-side .h {
+    color: var(--bn-muted); font-size: 9px;
+    font-weight: 700; letter-spacing: .4px;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--bn-line);
+    padding-bottom: 3px;
+  }
+  .book-side .px {
+    font-weight: 700;
+    cursor: pointer;
+    padding: 1px 0;
+  }
+  .book-side.bid .px { color: var(--bn-good); }
+  .book-side.ask .px { color: var(--bn-bad); }
+  .book-side .px:hover { background: rgba(41, 182, 246, .1); }
+  .book-side .qty { text-align: right; color: var(--bn-text); }
+
+  /* ── Position pill ───────────────────────────────────────────── */
+  .pos-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 3px 12px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .pos-grid .k { color: var(--bn-muted); }
+  .pos-grid .v { font-weight: 700; text-align: right; }
+  .pos-grid .v.good { color: var(--bn-good); }
+  .pos-grid .v.bad  { color: var(--bn-bad); }
+
+  /* ── Bottom tabs ─────────────────────────────────────────────── */
+  .bottom-tabs {
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 8px;
+    padding: 0;
+  }
+  .tab-bar {
+    display: flex;
+    border-bottom: 1px solid var(--bn-line);
+    padding: 0 6px;
+  }
+  .tab-btn {
+    background: transparent;
+    color: var(--bn-muted);
+    border: 0;
+    padding: 9px 14px;
+    font: inherit; font-size: 12px; font-weight: 700;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color .12s, border-color .12s;
+  }
+  .tab-btn:hover { color: var(--bn-text); }
+  .tab-btn.on {
+    color: var(--bn-text);
+    border-bottom-color: var(--bn-accent);
+  }
+  .tab-content {
+    padding: 10px 14px;
+    min-height: 100px;
+    overflow-x: auto;
+  }
+  .tab-content table { width: 100%; border-collapse: collapse; }
+  .tab-content th, .tab-content td {
+    padding: 5px 8px;
+    font-size: 11px;
+    border-bottom: 1px solid rgba(31,41,51,.5);
+    white-space: nowrap;
+  }
+  .tab-content th {
+    color: var(--bn-muted);
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 9px;
+    letter-spacing: .4px;
+  }
+  .tab-content td.num, .tab-content th.num {
+    text-align: right; font-variant-numeric: tabular-nums;
+  }
+  .tab-content .empty {
+    color: var(--bn-muted);
+    text-align: center;
+    padding: 20px;
+    font-size: 12px;
+  }
+  .tab-content .good { color: var(--bn-good); font-weight: 700; }
+  .tab-content .bad  { color: var(--bn-bad);  font-weight: 700; }
+
+  /* Toast */
+  .zd-toast {
+    position: fixed; right: 20px; bottom: 20px;
+    background: var(--bn-panel); border: 1px solid var(--bn-line);
+    color: var(--bn-text);
+    padding: 11px 15px; border-radius: 6px;
+    font-size: 12px; font-weight: 600;
+    z-index: 10000;
+    opacity: 0; transform: translateY(8px);
+    transition: opacity .2s, transform .2s;
+    max-width: 380px;
+  }
+  .zd-toast.show { opacity: 1; transform: translateY(0); }
+  .zd-toast.good { border-color: rgba(46, 204, 113, .5); }
+  .zd-toast.bad  { border-color: rgba(231, 76, 60, .5); }
+  .zd-toast .head { font-weight: 800; margin-bottom: 3px; }
+  .zd-toast.good .head { color: var(--bn-good); }
+  .zd-toast.bad  .head { color: var(--bn-bad); }
 </style>
 </head>
 <body class="zd">
-<div class="zd-wrap">
+<div class="ws-wrap">
 
-  <h1 class="zd-title">📊 Stock Chart · NSE / BSE</h1>
-  <div class="zd-sub">
-    Candlestick chart with 1s tick → 1mo timeframes. Live updates via
-    the Kite WebSocket once the engine ticker connects.
-    Commodity equivalent at
-    <a href="/zerodha-commodity-chart.html" style="color:var(--bn-accent);">Commodity Chart</a>.
-  </div>
-
-  <div class="search-bar">
-    <span style="color:var(--bn-muted)">🔎</span>
-    <input id="search-input" type="text" placeholder="Symbol — e.g. RELIANCE, HDFCBANK" autocomplete="off" autocapitalize="characters" />
-    <select id="exch-select">
-      <option value="NSE">NSE</option>
-      <option value="BSE">BSE</option>
-    </select>
-  </div>
-
-  <div class="chart-header" id="chart-header" style="display:none;">
-    <div class="left">
-      <div class="sym" id="hd-sym">—</div>
-      <div class="sub">
-        <span id="hd-exch">NSE</span>
-        <span>·</span>
-        <span id="hd-tf">5m</span>
-        <span class="ws-pill" id="ws-pill"><span class="dot"></span><span id="ws-text">WS …</span></span>
+  <!-- ─── Top bar ───────────────────────────────────────────── -->
+  <div class="top-bar">
+    <div class="search">
+      <input id="search-input" type="text" placeholder="RELIANCE" autocomplete="off" autocapitalize="characters" />
+      <select id="exch-select">
+        <option value="NSE">NSE</option>
+        <option value="BSE">BSE</option>
+      </select>
+      <div class="symbol-meta">
+        <span>Sector <strong id="meta-sector">—</strong></span>
+        <span>Lot <strong id="meta-lot">1</strong></span>
+        <span>Tick <strong id="meta-tick">₹0.05</strong></span>
       </div>
     </div>
-    <div class="right">
-      <div class="ltp" id="hd-ltp">—</div>
-      <div class="change" id="hd-change">—</div>
+
+    <div class="tf-bar" id="tf-bar">
+      <button class="tf-btn" data-tf="1s">1s</button>
+      <button class="tf-btn" data-tf="1m">1m</button>
+      <button class="tf-btn" data-tf="3m">3m</button>
+      <button class="tf-btn" data-tf="5m">5m</button>
+      <button class="tf-btn" data-tf="15m">15m</button>
+      <button class="tf-btn" data-tf="30m">30m</button>
+      <span class="tf-sep"></span>
+      <button class="tf-btn" data-tf="1h">1h</button>
+      <button class="tf-btn" data-tf="2h">2h</button>
+      <button class="tf-btn" data-tf="4h">4h</button>
+      <span class="tf-sep"></span>
+      <button class="tf-btn" data-tf="1d">1d</button>
+      <button class="tf-btn" data-tf="1w">1w</button>
+      <button class="tf-btn" data-tf="1mo">1mo</button>
+    </div>
+
+    <div class="ws-pill" id="ws-pill"><span class="dot"></span><span id="ws-text">connecting…</span></div>
+  </div>
+
+  <!-- ─── Symbol header ─────────────────────────────────────── -->
+  <div class="sym-header">
+    <span class="sym" id="hd-sym">—</span>
+    <span class="ltp" id="hd-ltp">—</span>
+    <span class="change" id="hd-change">—</span>
+    <div class="sub">
+      <span>O <strong id="hd-open">—</strong></span>
+      <span>H <strong id="hd-high">—</strong></span>
+      <span>L <strong id="hd-low">—</strong></span>
+      <span>VWAP <strong id="hd-vwap">—</strong></span>
+      <span>Vol <strong id="hd-vol">—</strong></span>
     </div>
   </div>
 
-  <!-- Timeframe toggle -->
-  <div class="tf-bar" id="tf-bar">
-    <button class="tf-btn" data-tf="1s">1s</button>
-    <button class="tf-btn" data-tf="1m">1m</button>
-    <button class="tf-btn" data-tf="3m">3m</button>
-    <button class="tf-btn" data-tf="5m">5m</button>
-    <button class="tf-btn" data-tf="15m">15m</button>
-    <button class="tf-btn" data-tf="30m">30m</button>
-    <span class="sep"></span>
-    <button class="tf-btn" data-tf="1h">1h</button>
-    <button class="tf-btn" data-tf="2h">2h</button>
-    <button class="tf-btn" data-tf="4h">4h</button>
-    <span class="sep"></span>
-    <button class="tf-btn" data-tf="1d">1d</button>
-    <button class="tf-btn" data-tf="1w">1w</button>
-    <button class="tf-btn" data-tf="1mo">1mo</button>
+  <!-- ─── Main row (chart + side) ───────────────────────────── -->
+  <div class="main-row">
+
+    <!-- Chart panel -->
+    <div class="chart-panel">
+      <div id="chart"></div>
+      <div id="chart-loading">Pick a symbol to see candles</div>
+    </div>
+
+    <!-- Right side panel -->
+    <div class="side">
+
+      <!-- Price snapshot -->
+      <div class="panel">
+        <h4>💹 Price snapshot</h4>
+        <div class="price-grid">
+          <span class="k">Open</span>      <span class="v" id="p-open">—</span>
+          <span class="k">High</span>      <span class="v good" id="p-high">—</span>
+          <span class="k">Low</span>       <span class="v bad" id="p-low">—</span>
+          <span class="k">Close</span>     <span class="v" id="p-close">—</span>
+          <span class="k">VWAP</span>      <span class="v" id="p-vwap">—</span>
+          <span class="k">vs VWAP</span>   <span class="v" id="p-vsvwap">—</span>
+          <span class="k">Day Δ</span>     <span class="v" id="p-day">—</span>
+          <span class="k">Range</span>     <span class="v" id="p-range">—</span>
+        </div>
+      </div>
+
+      <!-- Order entry -->
+      <div class="panel">
+        <h4>🛒 Order entry</h4>
+        <div class="side-toggle" id="side-toggle">
+          <button data-side="BUY"  class="buy on">BUY</button>
+          <button data-side="SELL" class="sell">SELL</button>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label>Order type</label>
+            <select id="ord-type">
+              <option value="MARKET">MARKET</option>
+              <option value="LIMIT">LIMIT</option>
+              <option value="SL">SL (stop-loss)</option>
+              <option value="SL-M">SL-M</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Product</label>
+            <select id="ord-product">
+              <option value="CNC">CNC (delivery)</option>
+              <option value="MIS">MIS (intraday)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label>Quantity</label>
+            <input id="ord-qty" type="number" min="1" step="1" value="1" />
+          </div>
+          <div class="field" id="price-field-wrap">
+            <label>Limit price (₹)</label>
+            <input id="ord-price" type="number" min="0" step="0.05" placeholder="auto" />
+          </div>
+        </div>
+
+        <div class="field-row" id="trigger-field-wrap" style="display:none;">
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Trigger price (₹)</label>
+            <input id="ord-trigger" type="number" min="0" step="0.05" placeholder="trigger price for SL/SL-M" />
+          </div>
+        </div>
+
+        <div class="quick-fill" id="quick-fill">
+          <button data-fill="ltp">LTP</button>
+          <button data-fill="bid">Bid</button>
+          <button data-fill="ask">Ask</button>
+          <button data-fill="mid">Mid</button>
+          <button data-fill="open">Open</button>
+          <button data-fill="-1">-1%</button>
+          <button data-fill="+1">+1%</button>
+        </div>
+
+        <button class="place-btn buy" id="place-btn">🛒 Place BUY · MARKET</button>
+
+        <!-- Inline OCO GTT (only for BUY/CNC) -->
+        <div class="gtt-section" id="gtt-section">
+          <h4 style="margin-top:0;">🎯 Auto-protect (OCO GTT)</h4>
+          <div class="field-row three">
+            <div class="field">
+              <label>Use?</label>
+              <select id="gtt-enable">
+                <option value="0">No</option>
+                <option value="1">Arm after fill</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>SL %</label>
+              <input id="gtt-sl" type="number" min="0.25" step="0.25" value="2.0" />
+            </div>
+            <div class="field">
+              <label>TP %</label>
+              <input id="gtt-tp" type="number" min="0.25" step="0.25" value="5.0" />
+            </div>
+          </div>
+          <div class="gtt-preview" id="gtt-preview">
+            <span class="k">SL at</span>  <span class="v bad" id="gtt-sl-px">—</span> <span class="k" id="gtt-sl-d">—</span>
+            <span class="k">TP at</span>  <span class="v good" id="gtt-tp-px">—</span> <span class="k" id="gtt-tp-d">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Order book (top 5) -->
+      <div class="panel">
+        <h4>📚 Order book <span style="margin-left:auto;font-size:9px;font-weight:600;color:var(--bn-muted);">click price → limit</span></h4>
+        <div class="book-grid">
+          <div class="book-side bid" id="book-bid">
+            <span class="h">Bid</span><span class="h" style="text-align:right;">Qty</span>
+            <span style="grid-column:1/-1;color:var(--bn-muted);text-align:center;padding:6px 0;font-size:10px;">—</span>
+          </div>
+          <div class="book-side ask" id="book-ask">
+            <span class="h">Ask</span><span class="h" style="text-align:right;">Qty</span>
+            <span style="grid-column:1/-1;color:var(--bn-muted);text-align:center;padding:6px 0;font-size:10px;">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Position -->
+      <div class="panel">
+        <h4>💼 Position <span id="pos-pill" style="margin-left:auto;font-size:9px;font-weight:600;color:var(--bn-muted);">none</span></h4>
+        <div class="pos-grid">
+          <span class="k">Source</span>   <span class="v" id="pos-src">—</span>
+          <span class="k">Qty</span>      <span class="v" id="pos-qty">—</span>
+          <span class="k">Avg buy</span>  <span class="v" id="pos-avg">—</span>
+          <span class="k">M2M P&L</span>  <span class="v" id="pos-pnl">—</span>
+          <span class="k">P&L %</span>    <span class="v" id="pos-pct">—</span>
+        </div>
+      </div>
+
+    </div>
   </div>
 
-  <!-- Chart canvas -->
-  <div id="chart">
-    <div id="chart-loading">Pick a symbol to see candles</div>
+  <!-- ─── Bottom tabs ───────────────────────────────────────── -->
+  <div class="bottom-tabs">
+    <div class="tab-bar">
+      <button class="tab-btn on" data-tab="orders">Open orders <span id="tab-c-orders" style="color:var(--bn-muted);font-weight:600;margin-left:4px;">0</span></button>
+      <button class="tab-btn" data-tab="fills">Recent fills <span id="tab-c-fills" style="color:var(--bn-muted);font-weight:600;margin-left:4px;">0</span></button>
+      <button class="tab-btn" data-tab="gtts">Active GTTs <span id="tab-c-gtts" style="color:var(--bn-muted);font-weight:600;margin-left:4px;">0</span></button>
+    </div>
+    <div class="tab-content" id="tab-content">
+      <div class="empty">Loading…</div>
+    </div>
   </div>
-
-  <!-- Stats row -->
-  <div class="chart-stats" id="chart-stats" style="display:none;">
-    <div class="stat"><div class="k">Open</div>     <div class="v" id="s-open">—</div></div>
-    <div class="stat"><div class="k">High</div>     <div class="v good" id="s-high">—</div></div>
-    <div class="stat"><div class="k">Low</div>      <div class="v bad" id="s-low">—</div></div>
-    <div class="stat"><div class="k">Close</div>    <div class="v" id="s-close">—</div></div>
-    <div class="stat"><div class="k">Volume</div>   <div class="v" id="s-vol">—</div></div>
-    <div class="stat"><div class="k">Range</div>    <div class="v" id="s-range">—</div></div>
-    <div class="stat"><div class="k">Bars</div>     <div class="v" id="s-bars">—</div></div>
-  </div>
-
 </div>
 
+<div class="zd-toast" id="toast"><div class="head"></div><div class="body"></div></div>
+
 <script src="/nav.js"></script>
+<script src="/js/nifty100.js"></script>
 <script>
 /* ──────────────────────────────────────────────────────────────────────
- * Config
+ * State + config
  * ──────────────────────────────────────────────────────────────────── */
 const $ = id => document.getElementById(id);
 
 let currentSym  = '';
 let currentExch = 'NSE';
 let currentTf   = '5m';
-let ws          = null;       // browser → frontend ws proxy → backend
-let wsConnected = false;
+let currentSide = 'BUY';
+let currentTab  = 'orders';
+let ws          = null;
 let chart, candleSeries, volumeSeries;
-let bars = [];                 // current array of {t, o, h, l, c, v}
-let lastBarTime = null;        // unix seconds, START of current bar
-let prevClose = null;
-let ltpSubscribed = false;
+let bars        = [];
+let lastBarTime = null;
+let prevClose   = null;
+let lastQuote   = null;     // latest /quote response for sidebar
+let tickInstr   = null;     // {tick_size, lot_size} cached for the symbol
 
-/* ── Format helpers ──────────────────────────────────────────────── */
+const SEC = { '1s':1, '1m':60, '3m':180, '5m':300, '15m':900, '30m':1800,
+              '1h':3600, '2h':7200, '4h':14400, '1d':86400, '1w':86400*7 };
+
+/* ── Format ───────────────────────────────────────────────────────── */
 function inr(v, d=2) { if(v==null||isNaN(v)) return '₹—'; return '₹'+Number(v).toLocaleString('en-IN',{minimumFractionDigits:d, maximumFractionDigits:d}); }
-function num(v, d=0) { if(v==null||isNaN(v)) return '—'; return Number(v).toLocaleString('en-IN',{minimumFractionDigits:d, maximumFractionDigits:d}); }
+function num(v, d=2) { if(v==null||isNaN(v)) return '—'; return Number(v).toLocaleString('en-IN',{minimumFractionDigits:d, maximumFractionDigits:d}); }
 function pct(v, d=2) { if(v==null||isNaN(v)) return '—'; return Number(v).toFixed(d)+'%'; }
 function sign(v) { return v>0 ? '+' : ''; }
 function klass(v) { return v>0 ? 'good' : v<0 ? 'bad' : 'mute'; }
 function compactVol(v) {
   if(v==null||isNaN(v)) return '—';
   const n = Number(v);
-  if (n >= 1e7) return (n/1e7).toFixed(1) + ' Cr';
-  if (n >= 1e5) return (n/1e5).toFixed(1) + ' L';
+  if (n >= 1e7) return (n/1e7).toFixed(1) + 'Cr';
+  if (n >= 1e5) return (n/1e5).toFixed(1) + 'L';
   if (n >= 1e3) return (n/1e3).toFixed(1) + 'k';
   return String(Math.round(n));
 }
 
+function toast(kind, head, body) {
+  const t = $('toast');
+  t.className = 'zd-toast ' + (kind === 'bad' ? 'bad' : 'good');
+  t.querySelector('.head').textContent = head;
+  t.querySelector('.body').textContent = body || '';
+  t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), 4500);
+}
+
 /* ──────────────────────────────────────────────────────────────────
- * Chart initialisation
+ * Chart
  * ──────────────────────────────────────────────────────────────── */
 function makeChart() {
   const el = $('chart');
@@ -295,69 +749,77 @@ function makeChart() {
       background: { color: 'transparent' },
       textColor: '#8b949e',
       fontFamily: '-apple-system, "Segoe UI", Roboto, sans-serif',
+      fontSize: 11,
     },
     grid: {
       vertLines: { color: 'rgba(31, 41, 51, .5)' },
       horzLines: { color: 'rgba(31, 41, 51, .5)' },
     },
-    rightPriceScale: { borderColor: '#1f2933' },
+    rightPriceScale: {
+      borderColor: '#1f2933',
+      scaleMargins: { top: 0.08, bottom: 0.28 },  // leave bottom for volume pane
+      autoScale: true,
+    },
     timeScale: {
       borderColor: '#1f2933',
       timeVisible: ['1s','1m','3m','5m','15m','30m','1h','2h','4h'].includes(currentTf),
       secondsVisible: currentTf === '1s',
+      rightOffset: 6,
+      barSpacing: 8,
     },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
   });
 
   candleSeries = chart.addCandlestickSeries({
-    upColor:   '#2ecc71', downColor:   '#e74c3c',
+    upColor: '#2ecc71', downColor: '#e74c3c',
     borderUpColor: '#2ecc71', borderDownColor: '#e74c3c',
     wickUpColor: '#2ecc71', wickDownColor: '#e74c3c',
   });
 
+  // Volume in its OWN price scale so it gets a dedicated bottom band
+  // instead of smushing on top of candles.
   volumeSeries = chart.addHistogramSeries({
-    color: '#4b9fff',
     priceFormat: { type: 'volume' },
-    priceScaleId: '',  // overlay on its own pane
-    scaleMargins: { top: 0.82, bottom: 0 },
+    priceScaleId: 'vol',
+    color: '#4b9fff',
+  });
+  chart.priceScale('vol').applyOptions({
+    scaleMargins: { top: 0.78, bottom: 0.02 },
+    borderColor: '#1f2933',
   });
 
-  // Update stats on crosshair move
-  chart.subscribeCrosshairMove((param) => {
-    if (!param || !param.seriesData) return;
-    const cd = param.seriesData.get(candleSeries);
-    if (!cd) return;
-    $('s-open').textContent  = inr(cd.open);
-    $('s-high').textContent  = inr(cd.high);
-    $('s-low').textContent   = inr(cd.low);
-    $('s-close').textContent = inr(cd.close);
-    $('s-range').textContent = inr(cd.high - cd.low);
+  // Click on chart to copy crosshair price into LIMIT field
+  chart.subscribeClick((param) => {
+    if (!param || !param.point) return;
+    const price = candleSeries.coordinateToPrice(param.point.y);
+    if (price != null && isFinite(price)) {
+      const tick = (tickInstr && tickInstr.tick_size) || 0.05;
+      const snapped = Math.round(price / tick) * tick;
+      $('ord-price').value = snapped.toFixed(2);
+      $('ord-type').value = 'LIMIT';
+      onOrderTypeChange();
+    }
   });
 
-  // Resize handler
   if (!makeChart._resized) {
-    window.addEventListener('resize', () => {
+    new ResizeObserver(() => {
       if (chart) chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
-    });
+    }).observe(el);
     makeChart._resized = true;
   }
 }
 
-/* ──────────────────────────────────────────────────────────────────
- * Historical load
- * ──────────────────────────────────────────────────────────────── */
+/* ── Historical seed ─────────────────────────────────────────────── */
 async function loadHistorical() {
   if (!currentSym) return;
   $('chart-loading').classList.remove('hidden');
   $('chart-loading').textContent = `Loading ${currentExch}:${currentSym} · ${currentTf}…`;
 
   if (currentTf === '1s') {
-    // No historical API at 1-second grain. Start empty; bars come from WS.
     bars = [];
     candleSeries.setData([]);
     volumeSeries.setData([]);
-    $('chart-loading').textContent = `1s chart — waiting for ticks…`;
-    $('s-bars').textContent = '0';
+    $('chart-loading').textContent = '1s chart — waiting for ticks…';
     return;
   }
 
@@ -367,16 +829,13 @@ async function loadHistorical() {
       const body = await r.json().catch(() => ({}));
       const detail = body.detail || {};
       if (detail.error === 'kite_auth_unavailable') {
-        $('chart-loading').textContent = '⚠ Kite auth not configured — see Scanner page for fix steps';
+        $('chart-loading').textContent = '⚠ Kite auth not configured';
         return;
       }
       $('chart-loading').textContent = `Service unavailable — ${detail.message || r.status}`;
       return;
     }
-    if (!r.ok) {
-      $('chart-loading').textContent = `Error: HTTP ${r.status}`;
-      return;
-    }
+    if (!r.ok) { $('chart-loading').textContent = `Error: HTTP ${r.status}`; return; }
     const data = await r.json();
     if (!Array.isArray(data) || !data.length) {
       $('chart-loading').textContent = 'No data for this interval/symbol';
@@ -386,41 +845,22 @@ async function loadHistorical() {
       time: Math.floor(new Date(b.t).getTime() / 1000),
       open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v,
     }));
-    candleSeries.setData(bars.map(b => ({
-      time: b.time, open: b.open, high: b.high, low: b.low, close: b.close,
-    })));
+    candleSeries.setData(bars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close })));
     volumeSeries.setData(bars.map(b => ({
       time: b.time, value: b.volume,
-      color: b.close >= b.open ? 'rgba(46,204,113,.45)' : 'rgba(231,76,60,.45)',
+      color: b.close >= b.open ? 'rgba(46,204,113,.5)' : 'rgba(231,76,60,.5)',
     })));
     lastBarTime = bars.length ? bars[bars.length-1].time : null;
     prevClose = bars.length >= 2 ? bars[bars.length-2].close : (bars[0] || {}).close;
     chart.timeScale().fitContent();
-    $('s-bars').textContent = bars.length;
     $('chart-loading').classList.add('hidden');
-    updateHeaderFromLastBar();
   } catch (e) {
     $('chart-loading').textContent = 'Fetch failed: ' + e.message;
   }
 }
 
-/* ──────────────────────────────────────────────────────────────────
- * Live tick handling
- * ──────────────────────────────────────────────────────────────── */
-
-/**
- * Round a unix-second timestamp to the START of the bucket for the
- * current timeframe. Used to decide whether a tick belongs to the
- * existing last bar or starts a new one.
- */
 function bucketStart(ts) {
-  const SEC = {
-    '1s':  1,        '1m':  60,    '3m':  180,   '5m':  300,
-    '15m': 900,      '30m': 1800,  '1h':  3600,  '2h':  7200,
-    '4h':  14400,    '1d':  86400, '1w':  86400*7,
-  };
   if (currentTf === '1mo') {
-    // Bucket by calendar month start, IST.
     const d = new Date(ts * 1000);
     const ist = new Date(d.getTime() + (5.5 - d.getTimezoneOffset()/60) * 3600000);
     return Math.floor(new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), 1)).getTime() / 1000);
@@ -436,125 +876,481 @@ function onTick(msg) {
   const bucket = bucketStart(ts);
 
   if (bars.length && bucket === lastBarTime) {
-    // Update last bar
     const b = bars[bars.length - 1];
     b.high = Math.max(b.high, px);
     b.low  = Math.min(b.low, px);
     b.close = px;
     candleSeries.update({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close });
   } else {
-    // Start a new bar
     const last = bars[bars.length - 1];
     const b = {
       time: bucket,
-      open:  last ? last.close : px,
-      high:  px, low: px, close: px,
+      open: last ? last.close : px,
+      high: px, low: px, close: px,
       volume: 0,
     };
     bars.push(b);
-    if (bars.length > 5000) bars.shift();  // memory guard
+    if (bars.length > 5000) bars.shift();
     lastBarTime = bucket;
     candleSeries.update({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close });
-    $('s-bars').textContent = bars.length;
   }
 
   $('hd-ltp').textContent = inr(px);
-  updateHeaderChange(px);
+  if (prevClose) {
+    const d = px - prevClose;
+    const p = (d / prevClose) * 100;
+    $('hd-change').className = 'change ' + klass(p);
+    $('hd-change').innerHTML = `${sign(d)}${num(d, 2)} (${sign(p)}${pct(p)})`;
+  }
+  // Refresh planner / GTT preview off the new LTP
+  updateGttPreview();
+  updatePosition();
 }
 
-function updateHeaderFromLastBar() {
-  if (!bars.length) return;
-  const last = bars[bars.length - 1];
-  $('hd-ltp').textContent = inr(last.close);
-  updateHeaderChange(last.close);
+/* ── WebSocket ───────────────────────────────────────────────────── */
+function setWsPill(state, text) {
+  const pill = $('ws-pill');
+  pill.classList.remove('on', 'off');
+  if (state) pill.classList.add(state);
+  $('ws-text').textContent = text;
 }
-function updateHeaderChange(ltp) {
-  if (prevClose) {
-    const d = ltp - prevClose;
-    const p = (d / prevClose) * 100;
-    const cls = klass(p);
-    $('hd-change').className = 'change ' + cls;
-    $('hd-change').innerHTML = `${sign(d)}${num(d, 2)} (${sign(p)}${pct(p)})`;
+function openWs() {
+  if (ws && ws.readyState <= 1) return;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/api/zerodha/v1/ws/ticks`);
+  ws.onopen = () => {
+    setWsPill('on', 'live');
+    subscribeCurrent();
+  };
+  ws.onmessage = (e) => {
+    try { const msg = JSON.parse(e.data); if (msg.type === 'tick') onTick(msg); } catch (_) {}
+  };
+  ws.onclose = () => { setWsPill('off', 'reconnect…'); setTimeout(openWs, 3000); };
+  ws.onerror = () => setWsPill('off', 'error');
+}
+function subscribeCurrent() {
+  if (!ws || ws.readyState !== 1 || !currentSym) return;
+  ws.send(JSON.stringify({ action: 'subscribe', symbols: [`${currentExch}:${currentSym}`] }));
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Quote polling — fills the right side panel (price, book, position, header)
+ * ──────────────────────────────────────────────────────────────── */
+async function fetchQuote() {
+  if (!currentSym) return;
+  const key = `${currentExch}:${currentSym}`;
+  try {
+    const r = await fetch(`/api/zerodha/v1/quote?syms=${encodeURIComponent(key)}`);
+    if (!r.ok) return;
+    const data = await r.json();
+    const v = data[key] || data[Object.keys(data)[0]];
+    if (!v) return;
+    lastQuote = v;
+    renderPriceSnapshot(v);
+    renderBook(v);
+    updateGttPreview();
+  } catch (_) {}
+}
+
+function renderPriceSnapshot(v) {
+  const ohlc = v.ohlc || {};
+  const ltp = v.last_price;
+  const close = ohlc.close || ltp;
+  const open  = ohlc.open  || ltp;
+  const high  = ohlc.high  || ltp;
+  const low   = ohlc.low   || ltp;
+  const vwap  = v.average_traded_price;
+
+  // Header big numbers
+  $('hd-sym').textContent = currentSym;
+  $('hd-ltp').textContent = inr(ltp);
+  const dayChange = ltp - close;
+  const dayPct = close ? (dayChange / close) * 100 : 0;
+  $('hd-change').className = 'change ' + klass(dayPct);
+  $('hd-change').innerHTML = `${sign(dayChange)}${num(dayChange, 2)} (${sign(dayPct)}${pct(dayPct)})`;
+
+  // Header sub stats
+  $('hd-open').textContent  = num(open);
+  $('hd-high').textContent  = num(high);
+  $('hd-low').textContent   = num(low);
+  $('hd-vwap').textContent  = vwap ? num(vwap) : '—';
+  $('hd-vol').textContent   = compactVol(v.volume || v.volume_traded);
+
+  // Side panel snapshot
+  $('p-open').textContent  = inr(open);
+  $('p-high').textContent  = inr(high);
+  $('p-low').textContent   = inr(low);
+  $('p-close').textContent = inr(close);
+  $('p-vwap').textContent  = vwap ? inr(vwap) : '—';
+  const vsv = vwap ? ((ltp - vwap) / vwap) * 100 : 0;
+  $('p-vsvwap').textContent = vwap ? `${sign(vsv)}${pct(vsv)}` : '—';
+  $('p-vsvwap').className = 'v ' + klass(vsv);
+  $('p-day').textContent = `${sign(dayPct)}${pct(dayPct)}`;
+  $('p-day').className = 'v ' + klass(dayPct);
+  $('p-range').textContent = `${num(high-low)} (${pct((high-low)/close*100,1)})`;
+
+  prevClose = close;
+}
+
+function renderBook(v) {
+  const depth = v.depth || {};
+  const bids = (depth.buy  || []).slice(0, 5);
+  const asks = (depth.sell || []).slice(0, 5);
+
+  const bidEl = $('book-bid');
+  if (bids.length) {
+    bidEl.innerHTML = '<span class="h">Bid</span><span class="h" style="text-align:right;">Qty</span>' +
+      bids.map(b => `<span class="px" onclick="copyToLimit(${b.price})">${inr(b.price)}</span><span class="qty">${num(b.quantity, 0)}</span>`).join('');
+  } else {
+    bidEl.innerHTML = '<span class="h">Bid</span><span class="h" style="text-align:right;">Qty</span><span style="grid-column:1/-1;color:var(--bn-muted);text-align:center;padding:6px 0;font-size:10px;">No bids</span>';
+  }
+
+  const askEl = $('book-ask');
+  if (asks.length) {
+    askEl.innerHTML = '<span class="h">Ask</span><span class="h" style="text-align:right;">Qty</span>' +
+      asks.map(a => `<span class="px" onclick="copyToLimit(${a.price})">${inr(a.price)}</span><span class="qty">${num(a.quantity, 0)}</span>`).join('');
+  } else {
+    askEl.innerHTML = '<span class="h">Ask</span><span class="h" style="text-align:right;">Qty</span><span style="grid-column:1/-1;color:var(--bn-muted);text-align:center;padding:6px 0;font-size:10px;">No asks</span>';
+  }
+}
+
+window.copyToLimit = function (px) {
+  $('ord-price').value = Number(px).toFixed(2);
+  $('ord-type').value = 'LIMIT';
+  onOrderTypeChange();
+};
+
+/* ──────────────────────────────────────────────────────────────────
+ * Position
+ * ──────────────────────────────────────────────────────────────── */
+async function updatePosition() {
+  if (!currentSym) return;
+  try {
+    const [hr, prr] = await Promise.all([
+      fetch('/api/zerodha/v1/holdings').catch(()=>null),
+      fetch('/api/zerodha/v1/positions').catch(()=>null),
+    ]);
+    let qty = 0, avg = 0, src = '', pnl = 0, pnlPct = 0;
+    if (hr && hr.ok) {
+      const rows = await hr.json();
+      if (Array.isArray(rows)) {
+        const h = rows.find(x => (x.tradingsymbol || '').toUpperCase() === currentSym);
+        if (h && h.quantity) {
+          qty = h.quantity; avg = h.average_price; src = 'CNC';
+        }
+      }
+    }
+    if (!qty && prr && prr.ok) {
+      const pp = await prr.json();
+      const net = (pp.net || []);
+      const p = net.find(x => (x.tradingsymbol || '').toUpperCase() === currentSym && x.quantity !== 0);
+      if (p) { qty = p.quantity; avg = p.average_price; src = p.product; }
+    }
+    if (qty && lastQuote) {
+      pnl = (lastQuote.last_price - avg) * qty;
+      pnlPct = ((lastQuote.last_price - avg) / avg) * 100;
+    }
+    $('pos-pill').textContent = qty ? `${num(qty,0)} sh` : 'none';
+    $('pos-src').textContent = src || '—';
+    $('pos-qty').textContent = qty ? num(qty, 0) : '—';
+    $('pos-avg').textContent = avg ? inr(avg) : '—';
+    $('pos-pnl').textContent = qty ? inr(pnl) : '—';
+    $('pos-pnl').className = 'v ' + klass(pnl);
+    $('pos-pct').textContent = qty ? `${sign(pnlPct)}${pct(pnlPct)}` : '—';
+    $('pos-pct').className = 'v ' + klass(pnlPct);
+  } catch (_) {}
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Order entry
+ * ──────────────────────────────────────────────────────────────── */
+function onSideChange() {
+  document.querySelectorAll('#side-toggle button').forEach(b => b.classList.toggle('on', b.dataset.side === currentSide));
+  const btn = $('place-btn');
+  btn.classList.remove('buy', 'sell');
+  btn.classList.add(currentSide.toLowerCase());
+  updatePlaceLabel();
+  // GTT only makes sense for BUY/CNC long protection
+  $('gtt-section').style.display = (currentSide === 'BUY' && $('ord-product').value === 'CNC') ? '' : 'none';
+}
+
+function onOrderTypeChange() {
+  const t = $('ord-type').value;
+  $('price-field-wrap').style.display = (t === 'LIMIT' || t === 'SL') ? '' : 'none';
+  $('trigger-field-wrap').style.display = (t === 'SL' || t === 'SL-M') ? '' : 'none';
+  updatePlaceLabel();
+}
+
+function updatePlaceLabel() {
+  const t = $('ord-type').value;
+  $('place-btn').textContent = (currentSide === 'BUY' ? '🛒 BUY · ' : '📤 SELL · ') + t;
+}
+
+function updateGttPreview() {
+  const lp = lastQuote ? lastQuote.last_price : null;
+  const sl = parseFloat($('gtt-sl').value);
+  const tp = parseFloat($('gtt-tp').value);
+  if (!lp || isNaN(sl) || isNaN(tp)) {
+    $('gtt-sl-px').textContent = '—'; $('gtt-tp-px').textContent = '—';
+    $('gtt-sl-d').textContent = ''; $('gtt-tp-d').textContent = '';
+    return;
+  }
+  const slPx = lp * (1 - sl/100);
+  const tpPx = lp * (1 + tp/100);
+  $('gtt-sl-px').textContent = inr(slPx);
+  $('gtt-tp-px').textContent = inr(tpPx);
+  $('gtt-sl-d').textContent = `-${pct(sl, 1)}`;
+  $('gtt-tp-d').textContent = `+${pct(tp, 1)}`;
+}
+
+async function placeOrder() {
+  if (!currentSym) return toast('bad', 'No symbol', 'Pick a tradingsymbol first.');
+  const qty = parseInt($('ord-qty').value, 10);
+  if (!qty || qty <= 0) return toast('bad', 'Bad quantity', 'Quantity must be > 0.');
+  const orderType = $('ord-type').value;
+  const product = $('ord-product').value;
+  const body = {
+    tradingsymbol: currentSym,
+    exchange:      currentExch,
+    quantity:      qty,
+    order_type:    orderType,
+    product:       product,
+    tag:           'MANUAL_DASHBOARD',
+    auto_amo:      true,
+  };
+  if (orderType === 'LIMIT' || orderType === 'SL') {
+    const px = parseFloat($('ord-price').value);
+    if (!px || px <= 0) return toast('bad', 'Bad price', 'Limit price required.');
+    body.price = px;
+  }
+  if (orderType === 'SL' || orderType === 'SL-M') {
+    const tp = parseFloat($('ord-trigger').value);
+    if (!tp || tp <= 0) return toast('bad', 'Bad trigger', 'Trigger price required for SL/SL-M.');
+    body.trigger_price = tp;
+  }
+  if (currentSide === 'SELL') {
+    if (!confirm(`Confirm SELL ${qty} ${currentSym} @ ${orderType}${body.price ? ' ₹' + body.price : ''} ?`)) return;
+  }
+  $('place-btn').disabled = true;
+  try {
+    const path = currentSide === 'BUY' ? 'equity/buy' : 'equity/sell';
+    const r = await fetch(`/api/zerodha/v1/${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || j.error || `status ${r.status}`);
+    toast('good', `${currentSide} placed`, `${currentSym} qty=${qty} → ${j.order_id}`);
+
+    // OCO GTT post-fill (Z-iter17 feature) — armed asynchronously after
+    // the buy fill is reported via order_update. For now we surface a
+    // toast describing what's planned; engine wiring is next iter.
+    if (currentSide === 'BUY' && product === 'CNC' && $('gtt-enable').value === '1') {
+      const sl = parseFloat($('gtt-sl').value);
+      const tp = parseFloat($('gtt-tp').value);
+      if (sl > 0 && tp > 0 && lastQuote) {
+        const slPx = lastQuote.last_price * (1 - sl/100);
+        const tpPx = lastQuote.last_price * (1 + tp/100);
+        // Place OCO GTT immediately (don't wait for fill in MVP).
+        try {
+          const gr = await fetch('/api/zerodha/v1/gtt/oco', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              tradingsymbol: currentSym, exchange: currentExch,
+              quantity: qty, last_price: lastQuote.last_price,
+              stop_loss_trigger: slPx, take_profit_trigger: tpPx,
+              product: 'CNC',
+            }),
+          });
+          if (gr.ok) { const gj = await gr.json(); toast('good', 'OCO GTT armed', `trigger_id ${gj.trigger_id}`); }
+        } catch (_) {}
+      }
+    }
+
+    refreshTab();
+    updatePosition();
+  } catch (e) {
+    toast('bad', `${currentSide} failed`, String(e.message || e));
+  } finally {
+    $('place-btn').disabled = false;
+  }
+}
+
+/* Quick-fill handlers ────────────────────────────────────────── */
+function quickFill(kind) {
+  if (!lastQuote) return;
+  const ltp = lastQuote.last_price;
+  const depth = lastQuote.depth || {};
+  const bids = depth.buy || [];
+  const asks = depth.sell || [];
+  let px = null;
+  if (kind === 'ltp')   px = ltp;
+  if (kind === 'bid')   px = bids[0] && bids[0].price;
+  if (kind === 'ask')   px = asks[0] && asks[0].price;
+  if (kind === 'mid')   px = (bids[0]?.price && asks[0]?.price) ? (bids[0].price + asks[0].price)/2 : ltp;
+  if (kind === 'open')  px = (lastQuote.ohlc || {}).open || ltp;
+  if (kind === '-1')    px = ltp * 0.99;
+  if (kind === '+1')    px = ltp * 1.01;
+  if (px != null) {
+    const tick = (tickInstr && tickInstr.tick_size) || 0.05;
+    px = Math.round(px / tick) * tick;
+    $('ord-price').value = px.toFixed(2);
+    $('ord-type').value = 'LIMIT';
+    onOrderTypeChange();
   }
 }
 
 /* ──────────────────────────────────────────────────────────────────
- * WebSocket — open once, re-subscribe on symbol/TF switch
+ * Bottom tabs (orders / fills / GTTs)
  * ──────────────────────────────────────────────────────────────── */
-function setWsPill(state, text) {
-  const pill = $('ws-pill');
-  pill.classList.remove('on', 'off');
-  if (state === 'on')  pill.classList.add('on');
-  if (state === 'off') pill.classList.add('off');
-  $('ws-text').textContent = text;
-}
-
-function openWs() {
-  if (ws && ws.readyState <= 1) return; // already open or connecting
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${proto}//${location.host}/api/zerodha/v1/ws/ticks`);
-  ws.onopen = () => {
-    wsConnected = true;
-    setWsPill('on', 'WS live');
-    subscribeCurrent();
-  };
-  ws.onmessage = (e) => {
+async function refreshTab() {
+  if (!currentSym) {
+    $('tab-content').innerHTML = '<div class="empty">Pick a symbol first</div>';
+    return;
+  }
+  const sym = currentSym;
+  if (currentTab === 'orders') {
     try {
-      const msg = JSON.parse(e.data);
-      if (msg.type === 'tick') onTick(msg);
-    } catch (_) {}
-  };
-  ws.onclose = () => {
-    wsConnected = false;
-    setWsPill('off', 'WS down');
-    // Reconnect after 3s
-    setTimeout(openWs, 3000);
-  };
-  ws.onerror = () => setWsPill('off', 'WS error');
+      const r = await fetch('/api/zerodha/v1/orders');
+      if (!r.ok) { $('tab-content').innerHTML = '<div class="empty">Failed to load</div>'; return; }
+      const all = await r.json();
+      const mine = (Array.isArray(all) ? all : []).filter(o =>
+        (o.tradingsymbol || '').toUpperCase() === sym &&
+        ['OPEN','TRIGGER PENDING','OPEN PENDING','VALIDATION PENDING','PUT ORDER REQ RECEIVED'].includes((o.status||'').toUpperCase())
+      );
+      $('tab-c-orders').textContent = mine.length;
+      if (!mine.length) { $('tab-content').innerHTML = '<div class="empty">No open orders</div>'; return; }
+      $('tab-content').innerHTML = `<table>
+        <thead><tr><th>Time</th><th>Side</th><th>Type</th><th>Product</th><th class="num">Qty</th><th class="num">Filled</th><th class="num">Price/Trig</th><th>Status</th><th>Tag</th><th></th></tr></thead>
+        <tbody>${mine.map(o => `<tr>
+          <td>${(o.order_timestamp||'').slice(11,19)}</td>
+          <td class="${(o.transaction_type||'').toLowerCase()==='buy'?'good':'bad'}">${o.transaction_type}</td>
+          <td>${o.order_type}</td>
+          <td>${o.product}</td>
+          <td class="num">${num(o.quantity, 0)}</td>
+          <td class="num">${num(o.filled_quantity || 0, 0)}</td>
+          <td class="num">${o.price ? num(o.price) : (o.trigger_price ? 'trig ' + num(o.trigger_price) : '—')}</td>
+          <td>${o.status}</td>
+          <td>${o.tag||''}</td>
+          <td><button onclick="cancelOrder('${o.order_id}')" style="background:transparent;border:1px solid var(--bn-line);color:var(--bn-muted);font-size:10px;padding:2px 6px;border-radius:3px;cursor:pointer;">✕</button></td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+    } catch (e) {
+      $('tab-content').innerHTML = '<div class="empty">Error: ' + e.message + '</div>';
+    }
+  } else if (currentTab === 'fills') {
+    try {
+      const r = await fetch('/api/zerodha/v1/trades');
+      if (!r.ok) { $('tab-content').innerHTML = '<div class="empty">Failed to load</div>'; return; }
+      const all = await r.json();
+      const mine = (Array.isArray(all) ? all : []).filter(t => (t.tradingsymbol || '').toUpperCase() === sym);
+      $('tab-c-fills').textContent = mine.length;
+      if (!mine.length) { $('tab-content').innerHTML = '<div class="empty">No fills today</div>'; return; }
+      $('tab-content').innerHTML = `<table>
+        <thead><tr><th>Fill time</th><th>Side</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Value</th><th>Order ID</th></tr></thead>
+        <tbody>${mine.map(t => {
+          const val = (t.quantity || 0) * (t.average_price || t.price || 0);
+          return `<tr>
+            <td>${(t.fill_timestamp || t.exchange_timestamp || '').slice(11,19)}</td>
+            <td class="${(t.transaction_type||'').toLowerCase()==='buy'?'good':'bad'}">${t.transaction_type}</td>
+            <td class="num">${num(t.quantity, 0)}</td>
+            <td class="num">${num(t.average_price || t.price)}</td>
+            <td class="num">${num(val)}</td>
+            <td>${t.order_id||''}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>`;
+    } catch (e) {
+      $('tab-content').innerHTML = '<div class="empty">Error: ' + e.message + '</div>';
+    }
+  } else if (currentTab === 'gtts') {
+    try {
+      const r = await fetch('/api/zerodha/v1/gtt');
+      if (!r.ok) { $('tab-content').innerHTML = '<div class="empty">Failed to load</div>'; return; }
+      const all = await r.json();
+      const mine = (Array.isArray(all) ? all : []).filter(g => {
+        const cond = g.condition || {};
+        return (cond.tradingsymbol || '').toUpperCase() === sym && ['active','triggered'].includes(g.status);
+      });
+      $('tab-c-gtts').textContent = mine.length;
+      if (!mine.length) { $('tab-content').innerHTML = '<div class="empty">No active GTTs</div>'; return; }
+      $('tab-content').innerHTML = `<table>
+        <thead><tr><th>ID</th><th>Type</th><th class="num">SL</th><th class="num">TP</th><th class="num">Qty</th><th>Status</th><th>Created</th><th></th></tr></thead>
+        <tbody>${mine.map(g => {
+          const cond = g.condition || {};
+          const orders = g.orders || [];
+          const tv = cond.trigger_values || [];
+          return `<tr>
+            <td>${g.id||''}</td>
+            <td>${g.type === 'two-leg' ? 'OCO' : 'SINGLE'}</td>
+            <td class="num bad">${tv[0]!=null?num(tv[0]):'—'}</td>
+            <td class="num good">${tv[1]!=null?num(tv[1]):'—'}</td>
+            <td class="num">${num((orders[0]||{}).quantity || 0, 0)}</td>
+            <td>${g.status}</td>
+            <td>${(g.created_at||'').slice(0, 16).replace('T', ' ')}</td>
+            <td><button onclick="cancelGtt(${g.id})" style="background:transparent;border:1px solid var(--bn-line);color:var(--bn-muted);font-size:10px;padding:2px 6px;border-radius:3px;cursor:pointer;">✕</button></td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>`;
+    } catch (e) {
+      $('tab-content').innerHTML = '<div class="empty">Error: ' + e.message + '</div>';
+    }
+  }
 }
 
-function subscribeCurrent() {
-  if (!ws || ws.readyState !== 1 || !currentSym) return;
-  const key = `${currentExch}:${currentSym}`;
-  ws.send(JSON.stringify({ action: 'subscribe', symbols: [key] }));
-  ltpSubscribed = true;
-}
+window.cancelOrder = async function (id) {
+  if (!confirm('Cancel order ' + id + '?')) return;
+  try {
+    const r = await fetch(`/api/zerodha/v1/order/cancel/${id}`, { method: 'POST' });
+    if (!r.ok) throw new Error('status ' + r.status);
+    toast('good', 'Order cancelled', id);
+    refreshTab();
+  } catch (e) { toast('bad', 'Cancel failed', String(e.message || e)); }
+};
+window.cancelGtt = async function (id) {
+  if (!confirm('Cancel GTT ' + id + '?')) return;
+  try {
+    const r = await fetch(`/api/zerodha/v1/gtt/${id}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error('status ' + r.status);
+    toast('good', 'GTT cancelled', String(id));
+    refreshTab();
+  } catch (e) { toast('bad', 'Cancel failed', String(e.message || e)); }
+};
 
 /* ──────────────────────────────────────────────────────────────────
  * Wiring
  * ──────────────────────────────────────────────────────────────── */
 function setSymbol(sym, exch) {
-  const newSym = (sym || '').toUpperCase().trim();
-  const newExch = (exch || 'NSE').toUpperCase();
-  if (!newSym) return;
-
-  // If switching symbol, unsub from the previous one
-  if (ws && ws.readyState === 1 && currentSym && (newSym !== currentSym || newExch !== currentExch)) {
+  const ns = (sym || '').toUpperCase().trim();
+  const ne = (exch || 'NSE').toUpperCase();
+  if (!ns) return;
+  if (ws && ws.readyState === 1 && currentSym && (ns !== currentSym || ne !== currentExch)) {
     ws.send(JSON.stringify({ action: 'unsubscribe', symbols: [`${currentExch}:${currentSym}`] }));
   }
+  currentSym = ns;
+  currentExch = ne;
+  $('search-input').value = ns;
+  $('exch-select').value = ne;
+  $('hd-sym').textContent = ns;
 
-  currentSym = newSym;
-  currentExch = newExch;
-  $('search-input').value = currentSym;
-  $('exch-select').value = currentExch;
-  $('hd-sym').textContent = currentSym;
-  $('hd-exch').textContent = currentExch;
-  $('chart-header').style.display = '';
-  $('chart-stats').style.display = '';
+  const meta = (window.NIFTY100 || []).find(o => o.sym === ns);
+  $('meta-sector').textContent = meta?.sector || '—';
 
-  history.replaceState({}, '', `?sym=${encodeURIComponent(currentSym)}&exch=${currentExch}&tf=${currentTf}`);
+  history.replaceState({}, '', `?sym=${encodeURIComponent(ns)}&exch=${ne}&tf=${currentTf}`);
   if (!chart) makeChart();
   loadHistorical();
+  fetchQuote();
+  updatePosition();
+  refreshTab();
   subscribeCurrent();
 }
 
 function setTimeframe(tf) {
   currentTf = tf;
   document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('on', b.dataset.tf === tf));
-  $('hd-tf').textContent = tf;
-  history.replaceState({}, '', `?sym=${encodeURIComponent(currentSym)}&exch=${currentExch}&tf=${currentTf}`);
+  history.replaceState({}, '', `?sym=${encodeURIComponent(currentSym)}&exch=${currentExch}&tf=${tf}`);
   if (!chart) makeChart();
-  // Re-apply chart options for time-scale behaviour
   chart.applyOptions({
     timeScale: {
       timeVisible: ['1s','1m','3m','5m','15m','30m','1h','2h','4h'].includes(tf),
@@ -564,6 +1360,13 @@ function setTimeframe(tf) {
   if (currentSym) loadHistorical();
 }
 
+function setTab(t) {
+  currentTab = t;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  refreshTab();
+}
+
+// Wire up events
 $('search-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') {
     const s = e.target.value.trim().toUpperCase();
@@ -573,10 +1376,16 @@ $('search-input').addEventListener('keydown', e => {
 $('exch-select').addEventListener('change', () => {
   if (currentSym) setSymbol(currentSym, $('exch-select').value);
 });
-
-document.querySelectorAll('.tf-btn').forEach(b => {
-  b.addEventListener('click', () => setTimeframe(b.dataset.tf));
-});
+document.querySelectorAll('.tf-btn').forEach(b => b.addEventListener('click', () => setTimeframe(b.dataset.tf)));
+document.querySelectorAll('#side-toggle button').forEach(b => b.addEventListener('click', () => {
+  currentSide = b.dataset.side; onSideChange();
+}));
+$('ord-type').addEventListener('change', onOrderTypeChange);
+$('ord-product').addEventListener('change', onSideChange);   // re-evaluates GTT visibility
+['gtt-sl', 'gtt-tp'].forEach(id => $(id).addEventListener('input', updateGttPreview));
+$('place-btn').addEventListener('click', placeOrder);
+document.querySelectorAll('#quick-fill button').forEach(b => b.addEventListener('click', () => quickFill(b.dataset.fill)));
+document.querySelectorAll('.tab-btn').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
 
 /* ──────────────────────────────────────────────────────────────────
  * Boot
@@ -587,9 +1396,15 @@ document.querySelectorAll('.tf-btn').forEach(b => {
   const exch = (q.get('exch') || 'NSE').toUpperCase();
   const tf = q.get('tf') || '5m';
   setTimeframe(tf);
-  setWsPill('off', 'WS connecting…');
+  onSideChange();
+  onOrderTypeChange();
+  setWsPill('off', 'connecting…');
   openWs();
   if (sym) setSymbol(sym, exch);
+  // Polling cadences
+  setInterval(() => { if (currentSym) fetchQuote(); }, 3000);
+  setInterval(() => { if (currentSym) updatePosition(); }, 8000);
+  setInterval(() => { if (currentSym) refreshTab(); }, 6000);
 })();
 </script>
 </body>
