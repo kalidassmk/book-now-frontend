@@ -477,6 +477,99 @@
   .zd-toast .head { font-weight: 800; margin-bottom: 3px; }
   .zd-toast.good .head { color: var(--bn-good); }
   .zd-toast.bad  .head { color: var(--bn-bad); }
+
+  /* ── Price Planner card ──────────────────────────────────────────
+     Reads order book + order flow + day-range positioning and emits a
+     verdict + suggested BUY/SELL prices + R:R + confidence bar. */
+  .planner-verdict {
+    display: grid; grid-template-columns: 1fr 1fr 64px; gap: 8px;
+    margin-bottom: 8px;
+  }
+  .planner-verdict .vbox {
+    background: var(--bn-panel-2); border: 1px solid var(--bn-line);
+    border-radius: 5px; padding: 6px 8px;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .planner-verdict .vbox .lbl {
+    font-size: 9px; text-transform: uppercase; color: var(--bn-muted);
+    letter-spacing: .4px; font-weight: 700;
+  }
+  .planner-verdict .vbox .val {
+    font-size: 14px; font-weight: 800;
+    font-variant-numeric: tabular-nums;
+  }
+  .planner-verdict .vbox .val.good { color: var(--bn-good); }
+  .planner-verdict .vbox .val.bad  { color: var(--bn-bad); }
+  .planner-verdict .vbox .val.mute { color: var(--bn-muted); }
+
+  .verdict-chip {
+    margin-left: auto;
+    font-size: 9px; font-weight: 800; letter-spacing: .4px;
+    padding: 2px 7px; border-radius: 10px;
+    text-transform: uppercase;
+    border: 1px solid;
+  }
+  .verdict-chip.strong-buy { background: rgba(46,204,113,.2); color: var(--bn-good); border-color: rgba(46,204,113,.5); }
+  .verdict-chip.buy        { background: rgba(46,204,113,.1); color: var(--bn-good); border-color: rgba(46,204,113,.35); }
+  .verdict-chip.neutral    { background: rgba(160,170,180,.1); color: var(--bn-muted); border-color: rgba(160,170,180,.3); }
+  .verdict-chip.wait       { background: rgba(241,196,15,.12); color: var(--bn-warn); border-color: rgba(241,196,15,.35); }
+  .verdict-chip.avoid      { background: rgba(231,76,60,.15); color: var(--bn-bad); border-color: rgba(231,76,60,.45); }
+
+  .conf-bar {
+    position: relative;
+    height: 6px; background: var(--bn-panel-2); border-radius: 3px;
+    overflow: hidden; margin: 6px 0 4px;
+  }
+  .conf-fill {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: 0%; background: linear-gradient(90deg, var(--bn-bad), var(--bn-warn), var(--bn-good));
+    transition: width .25s;
+  }
+  .conf-text {
+    font-size: 9px; color: var(--bn-muted); font-weight: 700;
+    letter-spacing: .3px; text-transform: uppercase;
+  }
+
+  .planner-chips {
+    display: flex; flex-wrap: wrap; gap: 4px;
+    margin: 6px 0 4px;
+  }
+  .mc {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: var(--bn-panel-2); border: 1px solid var(--bn-line);
+    border-radius: 3px;
+    padding: 2px 6px;
+    font-size: 9px; font-weight: 700; letter-spacing: .3px;
+    text-transform: uppercase;
+    color: var(--bn-muted);
+  }
+  .mc strong { color: var(--bn-text); font-weight: 800; font-variant-numeric: tabular-nums; }
+  .mc.good strong { color: var(--bn-good); }
+  .mc.bad  strong { color: var(--bn-bad); }
+  .mc.warn strong { color: var(--bn-warn); }
+
+  .planner-why {
+    font-size: 10px; color: var(--bn-muted); line-height: 1.4;
+    background: var(--bn-panel-2); border-left: 2px solid var(--bn-accent);
+    padding: 5px 8px; border-radius: 3px;
+    margin: 4px 0 8px;
+  }
+
+  .apply-row { display: flex; gap: 6px; }
+  .apply-btn {
+    flex: 1;
+    border: 1px solid var(--bn-line);
+    background: var(--bn-panel-2);
+    color: var(--bn-text);
+    padding: 6px 8px; border-radius: 4px;
+    font-size: 10px; font-weight: 800; letter-spacing: .3px;
+    text-transform: uppercase; cursor: pointer;
+    transition: background .12s, transform .08s;
+  }
+  .apply-btn:hover { background: var(--bn-panel); }
+  .apply-btn:active { transform: translateY(1px); }
+  .apply-btn.buy  { border-color: rgba(46,204,113,.5); color: var(--bn-good); }
+  .apply-btn.sell { border-color: rgba(231,76,60,.45); color: var(--bn-bad); }
 </style>
 </head>
 <body class="zd">
@@ -670,6 +763,47 @@
             <span class="h">Ask</span><span class="h" style="text-align:right;">Qty</span>
             <span style="grid-column:1/-1;color:var(--bn-muted);text-align:center;padding:6px 0;font-size:10px;">—</span>
           </div>
+        </div>
+      </div>
+
+      <!-- 🎯 Price Planner — analyses depth + order flow + day-range
+           positioning and suggests BUY/SELL prices with R:R. -->
+      <div class="panel" id="planner-card">
+        <h4>🎯 Price Planner <span class="verdict-chip neutral" id="plan-verdict">analysing…</span></h4>
+
+        <div class="planner-verdict">
+          <div class="vbox">
+            <span class="lbl">Suggested BUY</span>
+            <span class="val good" id="plan-buy-px">—</span>
+          </div>
+          <div class="vbox">
+            <span class="lbl">Suggested SELL</span>
+            <span class="val bad" id="plan-sell-px">—</span>
+          </div>
+          <div class="vbox" title="Reward-to-risk ratio (target ÷ stop distance)">
+            <span class="lbl">R : R</span>
+            <span class="val mute" id="plan-rr">—</span>
+          </div>
+        </div>
+
+        <div class="conf-bar"><div class="conf-fill" id="plan-conf-fill"></div></div>
+        <div class="conf-text" id="plan-conf-text">confidence —</div>
+
+        <div class="planner-chips">
+          <span class="mc" id="plan-imb">Depth <strong>—</strong></span>
+          <span class="mc" id="plan-flow">Flow <strong>—</strong></span>
+          <span class="mc" id="plan-spread">Spread <strong>—</strong></span>
+          <span class="mc" id="plan-rangepos">Range pos <strong>—</strong></span>
+          <span class="mc" id="plan-vwap">vs VWAP <strong>—</strong></span>
+        </div>
+
+        <div class="planner-why" id="plan-why">
+          Waiting for order book + ticks to build a recommendation…
+        </div>
+
+        <div class="apply-row">
+          <button type="button" class="apply-btn buy"  id="plan-apply-buy"  onclick="applyPlannerBuy()">Use BUY price</button>
+          <button type="button" class="apply-btn sell" id="plan-apply-sell" onclick="applyPlannerSell()">Use SELL price</button>
         </div>
       </div>
 
@@ -967,9 +1101,158 @@ async function fetchQuote() {
     lastQuote = v;
     renderPriceSnapshot(v);
     renderBook(v);
+    renderPlanner(v);
     updateGttPreview();
   } catch (_) {}
 }
+
+/* ──────────────────────────────────────────────────────────────────
+ * Price Planner — combines order book + order flow + day-range +
+ * VWAP gap into a verdict + suggested BUY/SELL prices + R:R.
+ *
+ * Identical logic to the stock workspace — see zerodha-stock-chart.html
+ * for the full doc-block. MCX-specific note: tickInstr.tick_size comes
+ * from the resolved front-month contract (often ₹1 for CRUDEOIL,
+ * ₹0.05 for NATURALGAS, etc.), so the snap step adapts automatically.
+ * ──────────────────────────────────────────────────────────────── */
+function renderPlanner(v) {
+  const depth = v.depth || {};
+  const bids = (depth.buy  || []).slice(0, 5);
+  const asks = (depth.sell || []).slice(0, 5);
+
+  const ohlc = v.ohlc || {};
+  const ltp  = v.last_price || 0;
+  const high = ohlc.high  || ltp;
+  const low  = ohlc.low   || ltp;
+  const vwap = v.average_price || v.vwap || null;
+  const tick = (tickInstr && tickInstr.tick_size) || 0.05;
+
+  const bestBid = bids[0] ? bids[0].price : ltp - tick;
+  const bestAsk = asks[0] ? asks[0].price : ltp + tick;
+  const mid     = (bestBid + bestAsk) / 2;
+
+  const bidQty = bids.reduce((s, b) => s + (b.quantity || 0), 0);
+  const askQty = asks.reduce((s, a) => s + (a.quantity || 0), 0);
+  const imbalance = (bidQty + askQty) > 0
+    ? (bidQty - askQty) / (bidQty + askQty) : 0;
+
+  const sessBuy  = v.buy_quantity  || v.total_buy_quantity  || 0;
+  const sessSell = v.sell_quantity || v.total_sell_quantity || 0;
+  const sessFlow = (sessBuy + sessSell) > 0
+    ? (sessBuy - sessSell) / (sessBuy + sessSell) : 0;
+
+  const dayRange = Math.max(high - low, tick);
+  const rangePos = (ltp - low) / dayRange;
+  const vwapGap  = vwap ? ((ltp - vwap) / vwap) * 100 : 0;
+  const spreadPct = mid > 0 ? ((bestAsk - bestBid) / mid) * 100 : 0;
+  const spreadPenalty = spreadPct > 0.2 ? Math.min(20, spreadPct * 30) : 0;
+
+  const verdictScore =
+    30 * imbalance +
+    20 * sessFlow +
+    25 * (1 - rangePos) +
+    (-10) * vwapGap +
+    (-1)  * spreadPenalty;
+
+  let verdict, vClass;
+  if      (verdictScore >  50) { verdict = 'STRONG BUY'; vClass = 'strong-buy'; }
+  else if (verdictScore >  20) { verdict = 'BUY';        vClass = 'buy'; }
+  else if (verdictScore > -20) { verdict = 'NEUTRAL';    vClass = 'neutral'; }
+  else if (verdictScore > -50) { verdict = 'WAIT';       vClass = 'wait'; }
+  else                         { verdict = 'AVOID';      vClass = 'avoid'; }
+
+  let buyPx;
+  if      (verdict === 'STRONG BUY') buyPx = bestAsk;
+  else if (verdict === 'BUY')        buyPx = bestBid + tick;
+  else if (verdict === 'NEUTRAL')    buyPx = mid;
+  else if (verdict === 'WAIT')       buyPx = Math.max(low + 0.2 * dayRange,
+                                              vwap ? vwap - 0.5 * dayRange : low + 0.2 * dayRange);
+  else                                buyPx = null;
+
+  const stop = Math.max(low, (vwap || low) - 0.5 * dayRange);
+  const idealTarget = Math.max(high, (vwap || high) + 0.7 * dayRange);
+  let sellPx = null;
+  let rr = null;
+  if (buyPx) {
+    const risk    = Math.max(buyPx - stop, tick);
+    const target  = buyPx + 2 * risk;
+    sellPx = Math.min(target, idealTarget);
+    if (sellPx <= buyPx) sellPx = buyPx + 2 * risk;
+    rr = (sellPx - buyPx) / risk;
+  }
+
+  const snap = (p) => p == null ? null : Math.round(p / tick) * tick;
+  buyPx  = snap(buyPx);
+  sellPx = snap(sellPx);
+
+  const confidence = Math.min(100, Math.max(5, Math.abs(verdictScore) + 30));
+
+  const vc = $('plan-verdict');
+  vc.className = 'verdict-chip ' + vClass;
+  vc.textContent = verdict;
+
+  $('plan-buy-px').textContent  = buyPx  != null ? inr(buyPx)  : 'wait';
+  $('plan-sell-px').textContent = sellPx != null ? inr(sellPx) : '—';
+  $('plan-rr').textContent      = rr     != null ? rr.toFixed(2) + '×' : '—';
+
+  $('plan-conf-fill').style.width = confidence + '%';
+  $('plan-conf-text').textContent =
+    `confidence ${Math.round(confidence)}% · score ${verdictScore.toFixed(0)}`;
+
+  setPlanChip('plan-imb',     `Depth ${(imbalance*100).toFixed(0)}%`,    imbalance);
+  setPlanChip('plan-flow',    `Flow ${(sessFlow*100).toFixed(0)}%`,      sessFlow);
+  setPlanChip('plan-spread',  `Spread ${spreadPct.toFixed(2)}%`,         -spreadPct);
+  setPlanChip('plan-rangepos',`Range pos ${(rangePos*100).toFixed(0)}%`, 0.5 - rangePos);
+  setPlanChip('plan-vwap',    `vs VWAP ${vwapGap.toFixed(2)}%`,          -vwapGap);
+
+  const reasons = [];
+  if (imbalance >  0.2) reasons.push('book stacked on bid side');
+  else if (imbalance < -0.2) reasons.push('book stacked on ask side');
+  if (sessFlow > 0.1)  reasons.push('session flow buyer-heavy');
+  else if (sessFlow < -0.1) reasons.push('session flow seller-heavy');
+  if (rangePos < 0.3)  reasons.push('LTP near day low (dip)');
+  else if (rangePos > 0.75) reasons.push('LTP near day high (extended)');
+  if (vwap && vwapGap < -0.3) reasons.push('below VWAP (mean-revert long)');
+  else if (vwap && vwapGap > 0.5) reasons.push('above VWAP (chasing extension)');
+  if (spreadPct > 0.3) reasons.push('wide spread — pay-up cost is real');
+
+  $('plan-why').textContent = reasons.length
+    ? '➤ ' + reasons.join(' · ')
+    : '➤ Mid-range, flat order flow — no edge either direction.';
+
+  window._plannerSuggest = { buyPx, sellPx, verdict };
+}
+
+function setPlanChip(id, text, signal) {
+  const el = $(id);
+  if (!el) return;
+  el.classList.remove('good', 'bad', 'warn');
+  if (signal > 0.05) el.classList.add('good');
+  else if (signal < -0.05) el.classList.add('bad');
+  else el.classList.add('warn');
+  el.innerHTML = text.replace(/([\-+0-9.]+%?)$/, '<strong>$1</strong>');
+}
+
+window.applyPlannerBuy = function () {
+  const s = window._plannerSuggest;
+  if (!s || s.buyPx == null) { toast('bad', 'No buy suggestion', 'Verdict is WAIT/AVOID.'); return; }
+  document.querySelector('#side-toggle button[data-side="BUY"]').click();
+  $('ord-type').value = 'LIMIT';
+  onOrderTypeChange();
+  $('ord-price').value = Number(s.buyPx).toFixed(2);
+  $('ord-price').focus();
+  toast('good', `BUY ${inr(s.buyPx)}`, `Verdict: ${s.verdict}`);
+};
+window.applyPlannerSell = function () {
+  const s = window._plannerSuggest;
+  if (!s || s.sellPx == null) { toast('bad', 'No sell suggestion', 'Not enough range.'); return; }
+  document.querySelector('#side-toggle button[data-side="SELL"]').click();
+  $('ord-type').value = 'LIMIT';
+  onOrderTypeChange();
+  $('ord-price').value = Number(s.sellPx).toFixed(2);
+  $('ord-price').focus();
+  toast('good', `SELL ${inr(s.sellPx)}`, `Target from planner.`);
+};
 
 function renderPriceSnapshot(v) {
   const ohlc = v.ohlc || {};
