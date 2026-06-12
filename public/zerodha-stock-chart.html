@@ -1044,6 +1044,9 @@ function onTick(msg) {
     if (bars.length > 5000) bars.shift();
     lastBarTime = bucket;
     candleSeries.update({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close });
+    // A fresh bar just opened — slide the window so the live candle stays
+    // in view and the panel stays full instead of the trend freezing.
+    fitChart();
   }
 
   $('hd-ltp').textContent = inr(px);
