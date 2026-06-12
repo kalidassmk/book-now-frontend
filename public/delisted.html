@@ -67,10 +67,10 @@
     <div class="stat"><div class="n" id="s-scraped">—</div><div class="l">Total blocked</div></div>
     <div class="stat predelist"><div class="n" id="s-predelist">—</div><div class="l">🚨 Pre-delisting</div></div>
     <div class="stat monitoring"><div class="n" id="s-monitoring">—</div><div class="l">⚠️ Monitoring tag</div></div>
-    <div class="stat seedtag"><div class="n" id="s-seed">—</div><div class="l">🌱 Seed tag</div></div>
+    <!-- iter117 — SEED bucket retired; coins under the Seed tag are now traded normally. -->
     <div class="stat break"><div class="n" id="s-break">—</div><div class="l">⏸️ Break</div></div>
-    <div class="stat halt"><div class="n" id="s-halt">—</div><div class="l">🛑 Halt</div></div>
-    <div class="stat blocked"><div class="n" id="s-announce">—</div><div class="l">📰 Announcement</div></div>
+    <!-- iter119 — HALT/AUCTION_MATCH stat card removed (no data). -->
+    <!-- iter118 — '📰 Announcement' stat removed: the announcement scraper hasn't produced new rows recently. -->
     <div class="stat active"><div class="n" id="s-active">—</div><div class="l">Active in scalper</div></div>
   </div>
 
@@ -88,11 +88,9 @@
     <div id="r-monitoring" class="chips"></div>
   </section>
 
-  <section>
-    <h2>🌱 Binance SEED tag</h2>
-    <p class="desc">Newly-listed Seed Tag projects — extreme volatility, often pump-and-dump targets. We block these to keep the bots away.</p>
-    <div id="r-seed" class="chips"></div>
-  </section>
+  <!-- iter117 — Seed-tag section removed; the operator chose to let
+       newly-listed Seed projects trade.  Monitoring + Pre-delisting +
+       BREAK remain (iter119 — HALT also retired). -->
 
   <section>
     <h2>⏸️ Status: BREAK</h2>
@@ -100,23 +98,16 @@
     <div id="r-break" class="chips"></div>
   </section>
 
-  <section>
-    <h2>🛑 Status: HALT / AUCTION_MATCH</h2>
-    <p class="desc">Pairs temporarily halted (e.g. during an incident) or in scheduled auction state (<code>exchangeInfo.status = HALT</code> / <code>AUCTION_MATCH</code>).</p>
-    <div id="r-halt" class="chips"></div>
-  </section>
+  <!-- iter119 — '🛑 Status: HALT / AUCTION_MATCH' section retired: no data. -->
 
-  <section>
-    <h2>📰 Delistings from announcements</h2>
-    <p class="desc">Real delistings detected from Binance "Notice of Removal of Spot Trading Pairs" announcements (Redis <code>BINANCE:DELIST:*</code>).</p>
-    <div id="r-announce" class="chips"></div>
-  </section>
+  <!-- iter118 — '📰 Delistings from announcements' section retired:
+       the source announcements feed hasn't produced any rows.  When it
+       does we can re-add the section. -->
 
-  <section>
-    <h2>🔴 Blocked from the scalper</h2>
-    <p class="desc">Coins that were configured for the scalper but are excluded because of any of the above reasons. These are not streamed or shown on the Order Flow tab.</p>
-    <div id="blocked" class="chips"></div>
-  </section>
+  <!-- iter117 — '🔴 Blocked from the scalper' section retired:
+       it was just a cross-cutting view of the same coins already shown
+       in the per-reason sections above.  Active list kept as a quick
+       sanity check. -->
 
   <section>
     <h2>✅ Active in the scalper</h2>
@@ -124,13 +115,7 @@
     <div id="active" class="chips"></div>
   </section>
 
-  <section>
-    <details>
-      <summary>⚙️ Legacy skip seed (reference only — NOT applied to the scalper)</summary>
-      <p class="desc" style="margin-top:10px">A static legacy list the trading bot uses to skip certain pairs. It wrongly contains BTC/ETH, so it is deliberately <strong>not</strong> used to block scalper coins. Shown here only for transparency.</p>
-      <div id="seed" class="chips"></div>
-    </details>
-  </section>
+  <!-- iter117 — Legacy skip-seed reference section removed. -->
 </main>
 <script>
 function chips(arr, cls){
@@ -184,21 +169,17 @@ async function load(){
     const at = d.delist_at_ms || {};
     document.getElementById("s-predelist").textContent  = counts.PRE_DELISTING ?? (buckets.PRE_DELISTING||[]).length;
     document.getElementById("s-monitoring").textContent = counts.MONITORING    ?? (buckets.MONITORING||[]).length;
-    document.getElementById("s-seed").textContent       = counts.SEED          ?? (buckets.SEED||[]).length;
     document.getElementById("s-break").textContent      = counts.BREAK         ?? (buckets.BREAK||[]).length;
-    document.getElementById("s-halt").textContent       = (counts.HALT ?? (buckets.HALT||[]).length) + (counts.AUCTION_MATCH ?? (buckets.AUCTION_MATCH||[]).length);
-    document.getElementById("s-announce").textContent   = counts.ANNOUNCEMENT  ?? (buckets.ANNOUNCEMENT||[]).length;
+    // iter119 — s-halt removed.
+    // iter118 — s-announce + r-announce removed.
     document.getElementById("r-predelist").innerHTML = predelistChips(buckets.PRE_DELISTING, at);
     document.getElementById("r-monitoring").innerHTML = chips(buckets.MONITORING, "monitoring");
-    document.getElementById("r-seed").innerHTML       = chips(buckets.SEED,       "seedtag");
     document.getElementById("r-break").innerHTML      = chips(buckets.BREAK,      "break");
-    // Render HALT + AUCTION_MATCH in the same section
-    const halts = [...(buckets.HALT||[]), ...(buckets.AUCTION_MATCH||[])].sort();
-    document.getElementById("r-halt").innerHTML       = chips(halts, "halt");
-    document.getElementById("r-announce").innerHTML   = chips(buckets.ANNOUNCEMENT, "block");
-    document.getElementById("blocked").innerHTML = chips(sc.blocked, "block");
+    // iter119 — r-halt removed.
+    // iter118 — r-announce removed.
     document.getElementById("active").innerHTML  = chips(sc.active, "active");
-    document.getElementById("seed").innerHTML    = chips(d.legacy_skip_seed, "seed");
+    // iter117 — 'blocked' + 'seed' (legacy_skip_seed reference) elements removed;
+    // their corresponding sections were retired from the page.
   } catch(err){
     setBanner("Cannot reach the dashboard API: " + err);
     document.getElementById("conn").textContent = "disconnected";

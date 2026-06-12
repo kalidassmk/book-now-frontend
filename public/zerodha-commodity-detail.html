@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+  public/zerodha-commodity-detail.html
+  ──────────────────────────────────────────────────────────────────────────
+  Per-commodity deep dive — MCX equivalent of stock-detail.html.
+
+  Differences from the stock version:
+    * Universe is small (8 underlyings) — dropdown instead of free search.
+    * Front-month contract resolver lives on the backend; we display the
+      resolved tradingsymbol + expiry days + lot size + tick size.
+    * Quantities are entered in LOTS (operator-readable), mirrored to
+      UNITS (lots × lot_size) for the actual /quote and order calls.
+    * Margin pre-check via /commodity/estimate-margin per lot, so the
+      operator sees the SPAN + exposure + total req. before placing.
+    * Sell-price planner uses MCX brokerage approximation (₹20 flat per
+      executed order, no STT on commodity, CTT 0.01% on sell).
+    * Expiry chain table — front + next 3 months for roll planning.
+
+  Backend deps:
+    GET  /api/zerodha/v1/commodity/front-month/{u}
+    GET  /api/zerodha/v1/commodity/contracts/{u}?max_months=4
+    GET  /api/zerodha/v1/quote?syms=MCX:{tradingsymbol}
+    POST /api/zerodha/v1/commodity/estimate-margin
+    GET  /api/zerodha/v1/positions
+    GET  /api/zerodha/v1/orders
+
+  URL: /zerodha-commodity-detail.html?u=CRUDEOIL
+  Polling: 4s for quote, 60s for chain (rolls daily).
+-->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Commodity Detail · Zerodha · BookNow</title>
+<link rel="stylesheet" href="/css/zerodha.css" />
+<style>
+  /* Page-local layout — same shape as stock-detail with commodity tweaks */
+  .header-card {
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 8px;
+    padding: 16px 20px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 16px;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+  .header-card .left { display: flex; flex-direction: column; gap: 4px; }
+  .header-card .sym { font-size: 28px; font-weight: 800; letter-spacing: -.3px; }
+  .header-card .sub { color: var(--bn-muted); font-size: 12px; display: flex; align-items: center; gap: 12px; }
+  .header-card .right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+  .header-card .ltp { font-size: 32px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .header-card .change { font-size: 14px; font-weight: 700; }
+  .header-card .change.good { color: var(--bn-good); }
+  .header-card .change.bad  { color: var(--bn-bad); }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  @media (max-width: 980px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+  .depth { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .depth .side {
+    display: grid;
+    grid-template-columns: 1fr 80px 60px;
+    gap: 4px 8px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .depth .side .h {
+    color: var(--bn-muted); font-size: 10px;
+    text-transform: uppercase; letter-spacing: .4px; font-weight: 700;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--bn-line);
+  }
+  .depth .side .px { font-weight: 700; }
+  .depth .bid .px { color: var(--bn-good); }
+  .depth .ask .px { color: var(--bn-bad); }
+  .depth .qty, .depth .orders { text-align: right; }
+  .depth .orders { color: var(--bn-muted); font-size: 11px; }
+
+  /* Sell planner */
+  .planner { background: var(--bn-panel-2); border-radius: 6px; padding: 12px; margin-top: 8px; }
+  .planner input {
+    width: 100%; padding: 8px 10px;
+    background: var(--bn-panel); border: 1px solid var(--bn-line);
+    color: var(--bn-text); border-radius: 5px;
+    font: inherit; font-size: 14px; font-variant-numeric: tabular-nums;
+  }
+  .planner input:focus { border-color: var(--bn-accent); outline: 0; }
+  .planner .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+  .planner .label { font-size: 10px; color: var(--bn-muted); text-transform: uppercase; letter-spacing: .4px; font-weight: 700; }
+  .planner-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .planner-result {
+    margin-top: 10px; padding: 10px 12px;
+    background: var(--bn-panel); border: 1px solid var(--bn-line);
+    border-radius: 5px;
+    font-size: 12px;
+    display: grid; grid-template-columns: auto 1fr auto; gap: 4px 14px;
+    align-items: baseline;
+  }
+  .planner-result .k { color: var(--bn-muted); }
+  .planner-result .v { font-weight: 800; font-variant-numeric: tabular-nums; text-align: right; color: var(--bn-text); }
+  .planner-result .v.good { color: var(--bn-good); }
+  .planner-result .v.bad  { color: var(--bn-bad); }
+  .planner-presets { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+  .planner-presets button {
+    background: var(--bn-panel); border: 1px solid var(--bn-line);
+    color: var(--bn-text); font-size: 11px;
+    padding: 3px 8px; border-radius: 3px;
+    cursor: pointer; font-variant-numeric: tabular-nums;
+  }
+  .planner-presets button:hover { background: rgba(41, 182, 246, .15); border-color: var(--bn-accent); }
+
+  /* Contract metadata strip */
+  .contract-meta {
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 7px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+    font-size: 12px;
+  }
+  .contract-meta .k { color: var(--bn-muted); font-size: 10px; text-transform: uppercase; letter-spacing: .4px; font-weight: 700; }
+  .contract-meta .v { font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .contract-meta .v.warn { color: var(--bn-warn); }
+
+  /* Underlying selector */
+  .selector-bar {
+    display: flex; gap: 8px; align-items: center;
+    margin-bottom: 14px;
+    background: var(--bn-panel); border: 1px solid var(--bn-line);
+    border-radius: 7px; padding: 8px 11px;
+  }
+  .selector-bar select {
+    flex: 1; background: var(--bn-panel-2); color: var(--bn-text);
+    border: 1px solid var(--bn-line); border-radius: 5px;
+    padding: 7px 10px; font: inherit; font-size: 14px; font-weight: 600;
+    text-transform: uppercase;
+  }
+
+  .kv-grid {
+    display: grid; grid-template-columns: auto 1fr;
+    gap: 8px 16px;
+    font-size: 12px;
+  }
+  .kv-grid .k { color: var(--bn-muted); }
+  .kv-grid .v { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+  .kv-grid .v.good { color: var(--bn-good); }
+  .kv-grid .v.bad  { color: var(--bn-bad); }
+
+  .pos-pill {
+    background: rgba(41, 182, 246, .08);
+    border: 1px solid rgba(41, 182, 246, .35);
+    border-radius: 6px; padding: 8px 12px;
+    font-size: 12px;
+    display: grid; grid-template-columns: auto 1fr; gap: 4px 12px;
+  }
+  .pos-pill .k { color: var(--bn-muted); }
+  .pos-pill .v { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+
+  /* Expiry chain table */
+  .chain-row {
+    display: grid;
+    grid-template-columns: 80px 1fr 60px 60px 70px 70px;
+    gap: 10px;
+    padding: 7px 0;
+    font-size: 12px;
+    border-bottom: 1px solid var(--bn-line);
+    align-items: center;
+  }
+  .chain-row.head {
+    color: var(--bn-muted); font-size: 10px;
+    text-transform: uppercase; letter-spacing: .4px; font-weight: 700;
+  }
+  .chain-row:last-child { border-bottom: 0; }
+  .chain-row .sym { font-weight: 700; }
+  .chain-row .num { font-variant-numeric: tabular-nums; text-align: right; }
+  .chain-row .badge { color: var(--bn-good); font-size: 10px; font-weight: 800; }
+</style>
+</head>
+<body class="zd">
+<div class="zd-wrap">
+
+  <h1 class="zd-title">🛢️ Commodity Detail · MCX</h1>
+  <div class="zd-sub">
+    Per-underlying deep dive — front-month contract, depth, VWAP, margin
+    estimate, and a lot-sized sell planner.
+    Equity equivalent at
+    <a href="/zerodha-stock-detail.html" style="color:var(--bn-accent);">Stock Detail</a>.
+  </div>
+
+  <!-- Underlying selector -->
+  <div class="selector-bar">
+    <span style="color:var(--bn-muted)">🛢️</span>
+    <select id="underlying-select">
+      <option value="CRUDEOIL">CRUDEOIL</option>
+      <option value="NATURALGAS">NATURALGAS</option>
+      <option value="GOLD">GOLD</option>
+      <option value="GOLDM">GOLDM (mini)</option>
+      <option value="SILVER">SILVER</option>
+      <option value="SILVERM">SILVERM (mini)</option>
+      <option value="COPPER">COPPER</option>
+      <option value="ZINC">ZINC</option>
+      <option value="ALUMINIUM">ALUMINIUM</option>
+      <option value="LEAD">LEAD</option>
+      <option value="NICKEL">NICKEL</option>
+    </select>
+  </div>
+
+  <!-- Status chips -->
+  <div class="zd-row" style="margin-bottom: 12px;">
+    <div class="zd-chip"            id="chip-engine"><span class="dot"></span><span>engine <strong id="engine-val">…</strong></span></div>
+    <div class="zd-chip"            id="chip-contract"><span class="dot"></span><span>contract <strong id="contract-val">—</strong></span></div>
+    <div class="zd-chip" id="chip-as-of">refresh <strong id="as-of-val">—</strong></div>
+  </div>
+
+  <!-- Header card -->
+  <div class="header-card" id="header-card" style="display:none;">
+    <div class="left">
+      <div class="sym" id="hd-sym">—</div>
+      <div class="sub">
+        <span id="hd-contract">—</span>
+        <span>·</span>
+        <span id="hd-expiry">—</span>
+        <span>·</span>
+        <span id="hd-vol">vol —</span>
+      </div>
+    </div>
+    <div class="right">
+      <div class="ltp" id="hd-ltp">—</div>
+      <div class="change" id="hd-change">—</div>
+    </div>
+  </div>
+
+  <!-- Position pill (if currently held) -->
+  <div id="position-pill" style="display:none; margin-bottom: 12px;">
+    <div class="pos-pill">
+      <span class="k">Net qty</span>     <span class="v" id="pos-qty">—</span>
+      <span class="k">Lots</span>        <span class="v" id="pos-lots">—</span>
+      <span class="k">Avg buy</span>     <span class="v" id="pos-avg">—</span>
+      <span class="k">M2M P&L</span>     <span class="v" id="pos-pnl">—</span>
+      <span class="k">Product</span>     <span class="v" id="pos-prod">—</span>
+    </div>
+  </div>
+
+  <!-- Contract metadata strip -->
+  <div class="contract-meta" id="contract-meta">
+    <div>
+      <div class="k">Front month</div>
+      <div class="v" id="cm-front">—</div>
+    </div>
+    <div>
+      <div class="k">Days to expiry</div>
+      <div class="v" id="cm-days">—</div>
+    </div>
+    <div>
+      <div class="k">Lot size</div>
+      <div class="v" id="cm-lot">—</div>
+    </div>
+    <div>
+      <div class="k">Tick size</div>
+      <div class="v" id="cm-tick">—</div>
+    </div>
+    <div>
+      <div class="k">Contract value (1 lot)</div>
+      <div class="v warn" id="cm-cval">—</div>
+    </div>
+    <div>
+      <div class="k">Margin est. per lot</div>
+      <div class="v warn" id="cm-margin">—</div>
+    </div>
+  </div>
+
+  <!-- Quick actions -->
+  <div class="zd-row" style="margin-bottom: 14px;">
+    <a href="#" class="zd-btn buy" id="btn-buy">🛒 BUY this contract</a>
+    <a href="#" class="zd-btn sell" id="btn-sell">📤 SELL this contract</a>
+    <a href="#" class="zd-btn ghost" id="btn-flow">📊 See flow</a>
+  </div>
+
+  <!-- ── First row: price + depth + planner ────────────────────── -->
+  <div class="grid-3">
+
+    <!-- Price card -->
+    <div class="zd-card">
+      <h3><span class="ic">💹</span> Price snapshot</h3>
+      <div class="kv-grid">
+        <span class="k">LTP</span>           <span class="v" id="pr-ltp">—</span>
+        <span class="k">Prev close</span>    <span class="v" id="pr-close">—</span>
+        <span class="k">Open</span>          <span class="v" id="pr-open">—</span>
+        <span class="k">Day high</span>      <span class="v good" id="pr-high">—</span>
+        <span class="k">Day low</span>       <span class="v bad"  id="pr-low">—</span>
+        <span class="k">Day range</span>     <span class="v" id="pr-range">—</span>
+        <span class="k">VWAP</span>          <span class="v" id="pr-vwap">—</span>
+        <span class="k">vs VWAP</span>       <span class="v" id="pr-vsvwap">—</span>
+        <span class="k">Day Δ</span>         <span class="v" id="pr-day">—</span>
+        <span class="k">Open interest</span> <span class="v mute" id="pr-oi">—</span>
+      </div>
+      <div style="margin-top: 12px;">
+        <div style="font-size:10px; color:var(--bn-muted); text-transform:uppercase; letter-spacing:.4px; font-weight:700; margin-bottom:4px;">
+          Day range position
+        </div>
+        <div class="range-bar" id="range-bar"></div>
+        <div style="font-size:10px; color:var(--bn-muted); margin-top:4px; display:flex; justify-content:space-between;">
+          <span id="rb-lo">low</span>
+          <span id="rb-vwap">VWAP</span>
+          <span id="rb-hi">high</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Depth card -->
+    <div class="zd-card">
+      <h3><span class="ic">📚</span> Order book (top 5)</h3>
+      <div class="depth">
+        <div class="side bid"><span style="grid-column:1/-1;color:var(--bn-muted);padding:8px 0;text-align:center;">Loading…</span></div>
+        <div class="side ask"><span style="grid-column:1/-1;color:var(--bn-muted);padding:8px 0;text-align:center;">Loading…</span></div>
+      </div>
+      <div style="margin-top: 10px; font-size: 11px; color: var(--bn-muted); display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
+        <span>Total bid qty: <strong style="color:var(--bn-text);" id="bid-total">—</strong></span>
+        <span style="text-align:right;">Total ask qty: <strong style="color:var(--bn-text);" id="ask-total">—</strong></span>
+      </div>
+      <div style="margin-top: 8px;">
+        <div id="pbar-container"></div>
+        <div style="font-size:10px; color:var(--bn-muted); margin-top:3px; text-align:center;" id="pbar-label">—</div>
+      </div>
+    </div>
+
+    <!-- Lot-sized sell-price planner -->
+    <div class="zd-card">
+      <h3><span class="ic">🎯</span> Sell-price planner <span style="margin-left:auto;font-size:10px;font-weight:500;text-transform:none;letter-spacing:0;color:var(--bn-muted);">(per lot math)</span></h3>
+      <div class="planner">
+        <div class="planner-row">
+          <div class="field">
+            <span class="label">Buy price (₹ per unit)</span>
+            <input id="pl-buy" type="number" step="0.01" placeholder="auto-fills LTP" />
+          </div>
+          <div class="field">
+            <span class="label">Lots</span>
+            <input id="pl-lots" type="number" step="1" value="1" />
+          </div>
+        </div>
+        <div class="field">
+          <span class="label">Target NET profit %</span>
+          <input id="pl-pct" type="number" step="0.1" value="1.0" />
+          <div class="planner-presets" id="pl-presets">
+            <button data-v="0.5">0.5%</button>
+            <button data-v="1.0">1.0%</button>
+            <button data-v="1.5">1.5%</button>
+            <button data-v="2.0">2.0%</button>
+            <button data-v="3.0">3.0%</button>
+            <button data-v="5.0">5.0%</button>
+          </div>
+        </div>
+        <div class="planner-result" id="pl-result">
+          <span class="k">Units (lots × lot_size)</span> <span class="v" id="pl-units">—</span> <span class="k"></span>
+          <span class="k">Target sell ₹/unit</span>      <span class="v" id="pl-target">—</span> <span class="k" id="pl-target-pct">—</span>
+          <span class="k">Contract value</span>          <span class="v mute" id="pl-cval">—</span> <span class="k"></span>
+          <span class="k">Brokerage est.</span>          <span class="v mute" id="pl-fees">—</span> <span class="k"></span>
+          <span class="k">NET profit ₹</span>            <span class="v good" id="pl-profit">—</span> <span class="k" id="pl-profit-pct">—</span>
+          <span class="k">Stop-loss (-1%)</span>         <span class="v bad"  id="pl-sl">—</span> <span class="k">−1%</span>
+        </div>
+        <div style="font-size:10px; color:var(--bn-muted); margin-top:8px; line-height:1.5;">
+          Brokerage approx: ₹20 flat per executed order (Zerodha MIS / NRML),
+          ÷ 2 if both buy + sell trade. CTT 0.01% on sell-side notional.
+          Excludes exchange + SEBI + stamp duty (paise-level on liquid contracts).
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Second row: volume + open orders + expiry chain ────────── -->
+  <div class="grid-3" style="margin-top: 14px;">
+
+    <!-- Volume + flow card -->
+    <div class="zd-card">
+      <h3><span class="ic">📊</span> Volume + flow</h3>
+      <div class="kv-grid">
+        <span class="k">Today's volume</span> <span class="v" id="vol-today">—</span>
+        <span class="k">Avg trade price</span><span class="v" id="vol-vwap">—</span>
+        <span class="k">Last traded qty</span><span class="v" id="vol-lastqty">—</span>
+        <span class="k">Total bid qty</span>  <span class="v good" id="vol-bid">—</span>
+        <span class="k">Total ask qty</span>  <span class="v bad"  id="vol-ask">—</span>
+        <span class="k">Buy pressure</span>   <span class="v" id="vol-pressure">—</span>
+        <span class="k">Net delta</span>      <span class="v" id="vol-delta">—</span>
+      </div>
+    </div>
+
+    <!-- Open orders for this contract -->
+    <div class="zd-card">
+      <h3><span class="ic">⏳</span> Open orders <span style="margin-left:auto;font-size:11px;color:var(--bn-muted);font-weight:600;text-transform:none;" id="oo-count">0</span></h3>
+      <div style="overflow-x:auto;">
+        <table class="zd-table" style="font-size:11px;">
+          <thead><tr><th>Side</th><th>Type</th><th class="num">Qty</th><th class="num">Price</th><th>Status</th></tr></thead>
+          <tbody id="oo-tbody">
+            <tr><td colspan="5" class="zd-empty">No open orders</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Expiry chain -->
+    <div class="zd-card">
+      <h3><span class="ic">📅</span> Expiry chain</h3>
+      <div id="chain-list">
+        <div class="chain-row head">
+          <span>Front?</span>
+          <span>Contract</span>
+          <span class="num">Days</span>
+          <span class="num">Lot</span>
+          <span class="num">Tick</span>
+          <span class="num">Token</span>
+        </div>
+        <div class="zd-empty" style="padding: 18px 0;">Loading chain…</div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<script src="/nav.js"></script>
+<script>
+/* ──────────────────────────────────────────────────────────────────────
+ * Config
+ * ──────────────────────────────────────────────────────────────────── */
+const POLL_MS = 4000;
+const POLL_CHAIN_MS = 60000;
+const $ = id => document.getElementById(id);
+
+let currentUnderlying = 'CRUDEOIL';
+let currentContract = null;     // resolved front-month from backend
+let expiryChain = [];
+let lastQuote = null;
+let lastMargin = null;
+
+/* ── Format helpers ──────────────────────────────────────────────── */
+function inr(v, d=2) { if(v==null||isNaN(v)) return '₹—'; return '₹'+Number(v).toLocaleString('en-IN',{minimumFractionDigits:d, maximumFractionDigits:d}); }
+function num(v, d=2) { if(v==null||isNaN(v)) return '—'; return Number(v).toLocaleString('en-IN',{minimumFractionDigits:d, maximumFractionDigits:d}); }
+function pct(v, d=2) { if(v==null||isNaN(v)) return '—'; return Number(v).toFixed(d)+'%'; }
+function sign(v) { return v>0 ? '+' : ''; }
+function klass(v) { return v>0 ? 'good' : v<0 ? 'bad' : 'mute'; }
+function compactVol(v) {
+  if(v==null||isNaN(v)) return '—';
+  const n = Number(v);
+  if (n >= 1e7) return (n/1e7).toFixed(1) + ' Cr';
+  if (n >= 1e5) return (n/1e5).toFixed(1) + ' L';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'k';
+  return String(Math.round(n));
+}
+function setChip(id, kls, val) {
+  const el = $(id); if (!el) return;
+  el.classList.remove('good','bad','warn','accent');
+  if (kls) el.classList.add(kls);
+  const v = el.querySelector('strong'); if (v) v.textContent = val;
+}
+function daysToExpiry(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  const now = new Date();
+  return Math.max(0, Math.ceil((d - now) / 86400000));
+}
+
+function pressureBar(buyQty, sellQty) {
+  const total = (buyQty || 0) + (sellQty || 0);
+  if (!total) return '<div class="pbar"><div class="b" style="width:50%"></div><div class="s" style="width:50%"></div></div>';
+  const buyPct  = (buyQty / total) * 100;
+  const sellPct = 100 - buyPct;
+  const bLabel = buyPct  >= 20 ? `${buyPct.toFixed(0)}%` : '';
+  const sLabel = sellPct >= 20 ? `${sellPct.toFixed(0)}%` : '';
+  return `<div class="pbar">
+    <div class="b" style="width:${buyPct}%">${bLabel}</div>
+    <div class="s" style="width:${sellPct}%">${sLabel}</div>
+  </div>`;
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Fetch chain + quote + context
+ * ──────────────────────────────────────────────────────────────── */
+async function refreshChain() {
+  try {
+    const r = await fetch(`/api/zerodha/v1/commodity/contracts/${encodeURIComponent(currentUnderlying)}?max_months=4`);
+    if (!r.ok) {
+      if (r.status === 503) {
+        const body = await r.json().catch(()=>({}));
+        if ((body.detail||{}).error === 'kite_auth_unavailable') {
+          setChip('chip-engine', 'warn', 'auth missing');
+          return;
+        }
+      }
+      setChip('chip-engine', 'bad', 'down');
+      return;
+    }
+    expiryChain = await r.json();
+    if (!Array.isArray(expiryChain) || !expiryChain.length) {
+      $('chain-list').innerHTML = '<div class="chain-row head"><span>Front?</span><span>Contract</span><span class="num">Days</span><span class="num">Lot</span><span class="num">Tick</span><span class="num">Token</span></div><div class="zd-empty" style="padding: 18px 0;">No active contracts (auth or chain not ready)</div>';
+      return;
+    }
+    currentContract = expiryChain[0];
+    setChip('chip-contract', 'accent', currentContract.tradingsymbol);
+    setChip('chip-engine', 'good', 'up');
+    renderContractMeta();
+    renderExpiryChain();
+    fetchEstimateMargin();
+  } catch (e) {
+    setChip('chip-engine', 'bad', 'down');
+  }
+}
+
+async function fetchAll() {
+  if (!currentContract) return;
+  const key = `MCX:${currentContract.tradingsymbol}`;
+  try {
+    const [qr, pr, or] = await Promise.all([
+      fetch(`/api/zerodha/v1/quote?syms=${encodeURIComponent(key)}`),
+      fetch('/api/zerodha/v1/positions').catch(()=>null),
+      fetch('/api/zerodha/v1/orders').catch(()=>null),
+    ]);
+
+    if (qr.status === 503) {
+      const body = await qr.json().catch(()=>({}));
+      if ((body.detail||{}).error === 'kite_auth_unavailable') {
+        setChip('chip-engine', 'warn', 'auth missing');
+        return;
+      }
+    }
+    if (!qr.ok) {
+      setChip('chip-engine', 'bad', 'down');
+      return;
+    }
+
+    const data = await qr.json();
+    const v = data[key] || data[Object.keys(data)[0]];
+    if (!v) return;
+    lastQuote = v;
+
+    renderHeader(v);
+    renderPriceCard(v);
+    renderDepthCard(v);
+    renderVolumeCard(v);
+
+    if (pr && pr.ok) renderPosition(await pr.json());
+    if (or && or.ok) renderOpenOrders(await or.json());
+
+    if (!$('pl-buy').value && v.last_price) {
+      $('pl-buy').value = v.last_price.toFixed(2);
+      computePlanner();
+    }
+
+    $('as-of-val').textContent = new Date().toLocaleTimeString('en-IN', { hour12:false });
+  } catch (e) { /* keep last state */ }
+}
+
+async function fetchEstimateMargin() {
+  if (!currentContract) return;
+  try {
+    const r = await fetch('/api/zerodha/v1/commodity/estimate-margin', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ underlying: currentUnderlying, lots: 1, transaction_type: 'BUY', product: 'NRML' })
+    });
+    if (!r.ok) return;
+    lastMargin = await r.json();
+    renderContractMeta();
+  } catch {}
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Render
+ * ──────────────────────────────────────────────────────────────── */
+function renderContractMeta() {
+  if (!currentContract) return;
+  const c = currentContract;
+  $('cm-front').textContent = c.tradingsymbol;
+  $('cm-days').textContent  = daysToExpiry(c.expiry) + ' days';
+  $('cm-lot').textContent   = c.lot_size;
+  $('cm-tick').textContent  = '₹' + c.tick_size.toFixed(2);
+  if (lastQuote && lastQuote.last_price) {
+    $('cm-cval').textContent = inr(lastQuote.last_price * c.lot_size);
+  }
+  if (lastMargin && lastMargin.total != null) {
+    $('cm-margin').textContent = inr(lastMargin.total);
+  }
+}
+
+function renderHeader(v) {
+  $('header-card').style.display = '';
+  $('hd-sym').textContent = currentUnderlying;
+  $('hd-contract').textContent = currentContract ? currentContract.tradingsymbol : '—';
+  $('hd-expiry').textContent = currentContract ? ('expires ' + currentContract.expiry) : '—';
+  $('hd-vol').textContent = 'vol ' + compactVol(v.volume_traded || v.volume);
+
+  const ltp = v.last_price;
+  $('hd-ltp').textContent = inr(ltp);
+
+  const ohlc = v.ohlc || {};
+  const close = ohlc.close || ltp;
+  const dayChange = ltp - close;
+  const dayPct = close ? (dayChange / close) * 100 : 0;
+  $('hd-change').className = 'change ' + klass(dayPct);
+  $('hd-change').innerHTML = `${sign(dayChange)}${num(dayChange)} <span style="opacity:.7;">(${sign(dayPct)}${pct(dayPct)})</span>`;
+
+  $('btn-buy').href = `/zerodha-mcx.html?u=${encodeURIComponent(currentUnderlying)}&side=BUY`;
+  $('btn-sell').href = `/zerodha-mcx.html?u=${encodeURIComponent(currentUnderlying)}&side=SELL`;
+  $('btn-flow').href = '/zerodha-orderflow-mcx.html';
+}
+
+function renderPriceCard(v) {
+  const ohlc = v.ohlc || {};
+  const ltp   = v.last_price;
+  const close = ohlc.close || ltp;
+  const open  = ohlc.open  || ltp;
+  const high  = ohlc.high  || ltp;
+  const low   = ohlc.low   || ltp;
+  const vwap  = v.average_traded_price;
+
+  $('pr-ltp').textContent   = inr(ltp);
+  $('pr-close').textContent = inr(close);
+  $('pr-open').textContent  = inr(open);
+  $('pr-high').textContent  = inr(high);
+  $('pr-low').textContent   = inr(low);
+  $('pr-range').textContent = (high && low) ? inr(high - low) + ' (' + pct((high - low) / close * 100) + ')' : '—';
+  $('pr-vwap').textContent  = vwap ? inr(vwap) : '—';
+
+  const vsVwap = vwap ? (ltp - vwap) / vwap * 100 : 0;
+  $('pr-vsvwap').textContent = vwap ? sign(vsVwap) + pct(vsVwap) : '—';
+  $('pr-vsvwap').className   = 'v ' + klass(vsVwap);
+
+  const dayPct = close ? (ltp - close) / close * 100 : 0;
+  $('pr-day').textContent = sign(dayPct) + pct(dayPct);
+  $('pr-day').className   = 'v ' + klass(dayPct);
+
+  $('pr-oi').textContent = v.oi ? num(v.oi, 0) : '—';
+
+  if (high && low && high > low) {
+    const ltpPos = ((ltp - low) / (high - low)) * 100;
+    const vwapPos = vwap ? ((vwap - low) / (high - low)) * 100 : null;
+    $('range-bar').innerHTML = `
+      ${vwapPos != null ? `<div class="vwap" style="left:${vwapPos}%"></div>` : ''}
+      <div class="ltp" style="left:${ltpPos}%"></div>
+    `;
+    $('rb-lo').textContent = inr(low);
+    $('rb-vwap').textContent = vwap ? 'VWAP ' + inr(vwap) : '';
+    $('rb-hi').textContent = inr(high);
+  } else {
+    $('range-bar').innerHTML = '';
+  }
+
+  // Contract value updates with LTP
+  if (currentContract) $('cm-cval').textContent = inr(ltp * currentContract.lot_size);
+}
+
+function renderDepthCard(v) {
+  const depth = v.depth || {};
+  const bids = (depth.buy  || []).slice(0, 5);
+  const asks = (depth.sell || []).slice(0, 5);
+
+  const bidSide = document.querySelector('.depth .bid');
+  bidSide.innerHTML = `
+    <span class="h">Bid</span><span class="h" style="text-align:right;">Qty</span><span class="h" style="text-align:right;">Orders</span>
+    ${bids.length ? bids.map(b => `
+      <span class="px">${inr(b.price)}</span>
+      <span class="qty">${num(b.quantity, 0)}</span>
+      <span class="orders">${b.orders || 0}</span>
+    `).join('') : '<span style="grid-column:1/-1;color:var(--bn-muted);padding:8px 0;text-align:center;">No bids</span>'}
+  `;
+
+  const askSide = document.querySelector('.depth .ask');
+  askSide.innerHTML = `
+    <span class="h">Ask</span><span class="h" style="text-align:right;">Qty</span><span class="h" style="text-align:right;">Orders</span>
+    ${asks.length ? asks.map(a => `
+      <span class="px">${inr(a.price)}</span>
+      <span class="qty">${num(a.quantity, 0)}</span>
+      <span class="orders">${a.orders || 0}</span>
+    `).join('') : '<span style="grid-column:1/-1;color:var(--bn-muted);padding:8px 0;text-align:center;">No asks</span>'}
+  `;
+
+  const bidTotal = bids.reduce((s, b) => s + (b.quantity || 0), 0);
+  const askTotal = asks.reduce((s, a) => s + (a.quantity || 0), 0);
+  $('bid-total').textContent = num(bidTotal, 0);
+  $('ask-total').textContent = num(askTotal, 0);
+
+  const buyQty  = v.buy_quantity  || v.total_buy_quantity  || bidTotal;
+  const sellQty = v.sell_quantity || v.total_sell_quantity || askTotal;
+  const total = buyQty + sellQty;
+  $('pbar-container').innerHTML = pressureBar(buyQty, sellQty);
+  $('pbar-label').textContent = total
+    ? `${((buyQty/total)*100).toFixed(1)}% bid vs ${((sellQty/total)*100).toFixed(1)}% ask`
+    : '—';
+}
+
+function renderVolumeCard(v) {
+  const buyQty  = v.buy_quantity  || v.total_buy_quantity  || 0;
+  const sellQty = v.sell_quantity || v.total_sell_quantity || 0;
+  const total = buyQty + sellQty;
+  const buyPct = total ? (buyQty / total) * 100 : 50;
+  const netDelta = total ? ((buyQty - sellQty) / total) * 100 : 0;
+
+  $('vol-today').textContent   = compactVol(v.volume_traded || v.volume);
+  $('vol-vwap').textContent    = v.average_traded_price ? inr(v.average_traded_price) : '—';
+  $('vol-lastqty').textContent = num(v.last_traded_quantity || 0, 0);
+  $('vol-bid').textContent     = num(buyQty, 0);
+  $('vol-ask').textContent     = num(sellQty, 0);
+  $('vol-pressure').textContent = `${buyPct.toFixed(1)}%`;
+  $('vol-pressure').className = 'v ' + klass(buyPct - 50);
+  $('vol-delta').textContent = sign(netDelta) + num(netDelta, 1) + '%';
+  $('vol-delta').className = 'v ' + klass(netDelta);
+}
+
+function renderPosition(positions) {
+  if (!positions || !positions.net) return;
+  const p = positions.net.find(x =>
+    currentContract && (x.tradingsymbol || '').toUpperCase() === currentContract.tradingsymbol && x.quantity !== 0
+  );
+  if (!p) {
+    $('position-pill').style.display = 'none';
+    return;
+  }
+  $('position-pill').style.display = '';
+  $('pos-qty').textContent = num(p.quantity, 0);
+  $('pos-lots').textContent = currentContract ? Math.round(p.quantity / currentContract.lot_size) + ' lot(s)' : '—';
+  $('pos-avg').textContent = inr(p.average_price);
+  $('pos-pnl').textContent = inr(p.pnl || p.m2m || 0);
+  $('pos-pnl').className = 'v ' + klass(p.pnl || p.m2m || 0);
+  $('pos-prod').textContent = p.product || '—';
+}
+
+function renderOpenOrders(orders) {
+  if (!Array.isArray(orders) || !currentContract) return;
+  const mine = orders.filter(o =>
+    (o.tradingsymbol || '').toUpperCase() === currentContract.tradingsymbol &&
+    ['OPEN','TRIGGER PENDING','OPEN PENDING','VALIDATION PENDING','PUT ORDER REQ RECEIVED'].includes((o.status||'').toUpperCase())
+  );
+  $('oo-count').textContent = mine.length;
+  const tbody = $('oo-tbody');
+  if (!mine.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="zd-empty">No open orders</td></tr>';
+    return;
+  }
+  tbody.innerHTML = mine.map(o => {
+    const side = (o.transaction_type || '').toUpperCase();
+    const cls = side === 'BUY' ? 'good' : 'bad';
+    const px = o.order_type === 'SL-M' || o.order_type === 'SL'
+      ? `trig ${num(o.trigger_price, 2)}`
+      : (o.price ? num(o.price, 2) : '—');
+    return `<tr>
+      <td class="${cls}">${side}</td>
+      <td class="mute">${o.order_type}</td>
+      <td class="num">${num(o.quantity, 0)}</td>
+      <td class="num">${px}</td>
+      <td class="mute">${o.status}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderExpiryChain() {
+  if (!expiryChain.length) return;
+  const list = $('chain-list');
+  list.innerHTML = `
+    <div class="chain-row head">
+      <span>Front?</span>
+      <span>Contract</span>
+      <span class="num">Days</span>
+      <span class="num">Lot</span>
+      <span class="num">Tick</span>
+      <span class="num">Token</span>
+    </div>
+    ${expiryChain.map((c, i) => `
+      <div class="chain-row" style="${i === 0 ? '' : 'cursor:default;'}">
+        ${i === 0 ? '<span class="badge">FRONT</span>' : '<span></span>'}
+        <span class="sym">${c.tradingsymbol}</span>
+        <span class="num">${daysToExpiry(c.expiry)}</span>
+        <span class="num">${c.lot_size}</span>
+        <span class="num">${c.tick_size.toFixed(2)}</span>
+        <span class="num mute">${c.instrument_token}</span>
+      </div>
+    `).join('')}
+  `;
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Sell-price planner — MCX brokerage approximation
+ * Zerodha MIS / NRML: ₹20 flat per executed order, CTT 0.01% on sell-side.
+ * ──────────────────────────────────────────────────────────────── */
+const BROKER_FLAT_PER_ORDER = 20.0;
+const CTT_PCT = 0.0001;   // 0.01% on sell (commodity)
+
+function computePlanner() {
+  if (!currentContract) return;
+  const buyPx = parseFloat($('pl-buy').value);
+  const lots  = parseInt($('pl-lots').value || '0', 10);
+  const tgtPct = parseFloat($('pl-pct').value);
+
+  if (!buyPx || !lots || isNaN(tgtPct)) {
+    $('pl-units').textContent  = '—';
+    $('pl-target').textContent = '—';
+    $('pl-cval').textContent   = '—';
+    $('pl-fees').textContent   = '—';
+    $('pl-profit').textContent = '—';
+    $('pl-sl').textContent     = '—';
+    return;
+  }
+
+  const units = lots * currentContract.lot_size;
+  const buyValue  = buyPx * units;
+  const buyFee    = BROKER_FLAT_PER_ORDER;
+  // We want NET profit % of buy value:
+  //   net = sellValue * (1 - CTT) - buyValue - 2 * FLAT
+  //   net / buyValue = tgtPct/100
+  // → sellValue = (buyValue * (1 + tgtPct/100) + buyFee + sellFlat) / (1 - CTT)
+  const sellValue = (buyValue * (1 + tgtPct/100) + buyFee + BROKER_FLAT_PER_ORDER) / (1 - CTT_PCT);
+  const sellPxNeeded = sellValue / units;
+  const ctt = sellValue * CTT_PCT;
+  const totalFees = buyFee + BROKER_FLAT_PER_ORDER + ctt;
+  const netProfit = sellValue - buyValue - totalFees;
+  const netProfitPct = (netProfit / buyValue) * 100;
+  const grossPct = ((sellPxNeeded - buyPx) / buyPx) * 100;
+
+  $('pl-units').textContent       = num(units, 0);
+  $('pl-target').textContent      = inr(sellPxNeeded);
+  $('pl-target-pct').textContent  = '+' + pct(grossPct);
+  $('pl-cval').textContent        = inr(buyValue);
+  $('pl-fees').textContent        = inr(totalFees);
+  $('pl-profit').textContent      = inr(netProfit);
+  $('pl-profit-pct').textContent  = '+' + pct(netProfitPct);
+
+  const slPx = buyPx * 0.99;
+  $('pl-sl').textContent = inr(slPx);
+}
+
+['pl-buy', 'pl-lots', 'pl-pct'].forEach(id => $(id).addEventListener('input', computePlanner));
+document.querySelectorAll('#pl-presets button').forEach(b => {
+  b.addEventListener('click', () => {
+    $('pl-pct').value = b.dataset.v;
+    computePlanner();
+  });
+});
+
+/* ──────────────────────────────────────────────────────────────────
+ * Underlying switching
+ * ──────────────────────────────────────────────────────────────── */
+function setUnderlying(u) {
+  currentUnderlying = (u || 'CRUDEOIL').toUpperCase();
+  $('underlying-select').value = currentUnderlying;
+  $('pl-buy').value = '';
+  history.replaceState({}, '', `?u=${encodeURIComponent(currentUnderlying)}`);
+  refreshChain().then(() => fetchAll());
+}
+
+$('underlying-select').addEventListener('change', e => setUnderlying(e.target.value));
+
+/* ──────────────────────────────────────────────────────────────────
+ * Boot
+ * ──────────────────────────────────────────────────────────────── */
+(function init() {
+  const q = new URLSearchParams(location.search);
+  const u = q.get('u');
+  setUnderlying(u || 'CRUDEOIL');
+  setInterval(fetchAll, POLL_MS);
+  setInterval(refreshChain, POLL_CHAIN_MS);
+})();
+</script>
+</body>
+</html>

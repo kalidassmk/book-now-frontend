@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+  public/zerodha-commodity-scanner.html
+  ──────────────────────────────────────────────────────────────────────────
+  Commodity Scanner (MCX) — "what should I buy?" page for futures.
+
+  Z-iter18 sibling of /zerodha-equity-scanner.html. This one tracks the
+  MCX commodity universe (CRUDEOIL, NATURALGAS, GOLD, SILVER, COPPER,
+  ZINC, ALUMINIUM, LEAD by default — see window.MCX_UNDERLYINGS) using
+  the front-month resolver:
+
+    For each underlying U:
+      1. GET /api/zerodha/v1/commodity/front-month/U   → resolves the
+         active contract (tradingsymbol + expiry + lot/tick + margin).
+      2. Batch-quote all resolved tradingsymbols:
+         GET /quote?syms=MCX:CRUDEOIL25JUNFUT,MCX:NATURALGAS25JUNFUT,…
+
+  Surfaced panels:
+    * Underlying tiles      — LTP, day %, range, lot, expiry chip per U
+    * Top picks             — blended (day %, range, volume, near hi)
+    * Gainers / losers      — sorted by day % across underlyings
+    * Volume surge          — by raw volume (lots traded)
+    * Chain explorer        — pick an underlying, see ALL contracts
+                              with LTP and days-to-expiry
+
+  Click any row → /zerodha-commodity-chart.html?u=UNDERLYING — opens
+  the MCX Workspace (chart + lot-aware BUY/SELL + order book + 🎯
+  Price Planner). Planner handles MCX-specific tick rules (CRUDEOIL
+  ₹1 ticks, NATURALGAS ₹0.10, etc. — resolved from the contract).
+
+  No backend changes — same /quote endpoint as equity.
+-->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Commodity Scanner — Zerodha · BookNow</title>
+<link rel="stylesheet" href="/css/zerodha.css" />
+<style>
+  .scan-row { display: grid; gap: 12px; }
+  .scan-row.two   { grid-template-columns: 1fr 1fr; }
+  .scan-row.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  @media (max-width: 1100px) { .scan-row.two, .scan-row.three { grid-template-columns: 1fr; } }
+
+  .scan-card {
+    background: var(--bn-panel); border: 1px solid var(--bn-line);
+    border-radius: 8px; overflow: hidden;
+  }
+  .scan-card .head {
+    background: var(--bn-panel-2);
+    padding: 9px 13px; border-bottom: 1px solid var(--bn-line);
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; font-weight: 700; color: var(--bn-text);
+    text-transform: uppercase; letter-spacing: .4px;
+  }
+  .scan-card .head .count {
+    margin-left: auto;
+    font-size: 10px; color: var(--bn-muted);
+  }
+
+  .scan-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .scan-table th, .scan-table td {
+    padding: 6px 10px; text-align: left;
+    border-bottom: 1px solid rgba(31, 41, 51, 0.4);
+    white-space: nowrap;
+  }
+  .scan-table th {
+    background: rgba(20, 27, 36, 0.5);
+    color: var(--bn-muted); font-weight: 700;
+    font-size: 10px; text-transform: uppercase; letter-spacing: .4px;
+  }
+  .scan-table tr.row { cursor: pointer; transition: background .12s; }
+  .scan-table tr.row:hover { background: rgba(41, 182, 246, 0.06); }
+  .scan-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .scan-table th.num { text-align: right; }
+  .scan-table td.sym { font-weight: 700; }
+  .scan-table td.sym .sec {
+    color: var(--bn-muted); font-size: 10px; margin-left: 6px; font-weight: 500;
+  }
+  .scan-table .good { color: var(--bn-good); }
+  .scan-table .bad  { color: var(--bn-bad); }
+  .scan-table .mute { color: var(--bn-muted); }
+
+  /* MCX-specific tiles — bigger than equity rows so each underlying
+     gets its own glance card with all the contract metadata. */
+  .mcx-tiles {
+    display: grid; gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    margin-bottom: 16px;
+  }
+  .mcx-tile {
+    background: var(--bn-panel); border: 1px solid var(--bn-line);
+    border-radius: 8px; padding: 11px 13px;
+    cursor: pointer; transition: border-color .12s, transform .12s;
+  }
+  .mcx-tile:hover { border-color: var(--bn-accent); transform: translateY(-1px); }
+  .mcx-tile .top {
+    display: flex; align-items: baseline; gap: 8px;
+    margin-bottom: 5px;
+  }
+  .mcx-tile .u   { font-weight: 800; font-size: 14px; color: var(--bn-text); }
+  .mcx-tile .exp { font-size: 10px; color: var(--bn-muted); font-weight: 600; }
+  .mcx-tile .ltp { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .mcx-tile .pct { font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; margin-left: auto; }
+  .mcx-tile .meta {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
+    font-size: 9px; color: var(--bn-muted);
+    text-transform: uppercase; letter-spacing: .3px; font-weight: 700;
+    margin-top: 7px; padding-top: 6px; border-top: 1px dashed rgba(31,41,51,.6);
+  }
+  .mcx-tile .meta strong {
+    display: block; color: var(--bn-text); font-weight: 800;
+    font-size: 10px; margin-top: 1px; letter-spacing: 0; text-transform: none;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .chip {
+    display: inline-flex; align-items: center;
+    padding: 1px 7px; border-radius: 4px;
+    background: var(--bn-panel-2);
+    font-size: 9px; font-weight: 800;
+    letter-spacing: .3px; text-transform: uppercase;
+    margin-right: 4px;
+    border: 1px solid var(--bn-line);
+  }
+  .chip.good   { background: rgba(46,204,113,.12); color: var(--bn-good);   border-color: rgba(46,204,113,.35); }
+  .chip.bad    { background: rgba(231,76,60,.12);  color: var(--bn-bad);    border-color: rgba(231,76,60,.35); }
+  .chip.warn   { background: rgba(241,196,15,.12); color: var(--bn-warn);   border-color: rgba(241,196,15,.35); }
+  .chip.accent { background: rgba(41,182,246,.12); color: var(--bn-accent); border-color: rgba(41,182,246,.35); }
+
+  .pick-row {
+    display: grid;
+    grid-template-columns: 32px 1fr 100px 80px 90px auto;
+    gap: 10px; align-items: center;
+    padding: 10px 13px;
+    border-bottom: 1px solid var(--bn-line);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background .12s;
+  }
+  .pick-row:last-child { border-bottom: 0; }
+  .pick-row:hover { background: rgba(41,182,246,.04); }
+  .pick-row .rank {
+    background: var(--bn-panel-2); border-radius: 4px;
+    text-align: center; font-weight: 800; padding: 4px 0;
+    color: var(--bn-accent); font-variant-numeric: tabular-nums;
+  }
+  .pick-row .name { display: flex; flex-direction: column; }
+  .pick-row .name .s { font-weight: 800; font-size: 13px; }
+  .pick-row .name .meta {
+    font-size: 10px; color: var(--bn-muted); margin-top: 2px;
+  }
+  .pick-row .price { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+  .pick-row .pct   { font-weight: 800; font-size: 13px; font-variant-numeric: tabular-nums; text-align: right; }
+  .pick-row .score {
+    background: var(--bn-panel-2); border-radius: 14px;
+    font-size: 10px; font-weight: 800; padding: 3px 9px;
+    color: var(--bn-warn);
+    text-align: center;
+    border: 1px solid rgba(241,196,15,.4);
+  }
+  .pick-row .chips { display: flex; gap: 3px; flex-wrap: wrap; justify-content: flex-end; }
+
+  /* Chain explorer */
+  .chain-toolbar {
+    display: flex; gap: 8px; align-items: center;
+    background: var(--bn-panel); border: 1px solid var(--bn-line);
+    border-radius: 7px; padding: 8px 11px;
+    margin-bottom: 10px;
+    font-size: 12px;
+  }
+  .chain-toolbar label { color: var(--bn-muted); font-weight: 700; text-transform: uppercase; font-size: 10px; letter-spacing: .3px; }
+  .chain-toolbar select {
+    background: var(--bn-panel-2); color: var(--bn-text);
+    border: 1px solid var(--bn-line); border-radius: 4px;
+    padding: 5px 9px; font-size: 12px; font-weight: 600;
+    outline: 0;
+  }
+
+  /* Session-closed banner */
+  .closed-banner {
+    background: rgba(241,196,15,.07);
+    border: 1px solid rgba(241,196,15,.3);
+    color: var(--bn-warn);
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    margin-bottom: 14px;
+    display: none;
+  }
+  .closed-banner.show { display: block; }
+</style>
+</head>
+<body class="zd">
+<div class="zd-wrap">
+
+  <h1 class="zd-title">🛢️ Commodity Scanner <span style="font-size:12px;font-weight:600;color:var(--bn-muted);margin-left:8px;">MCX — front months + chain</span></h1>
+  <div class="zd-sub">
+    Live rank of MCX commodities by intraday signals. Click any tile or
+    row to open the <a href="/zerodha-commodity-chart.html" style="color:var(--bn-accent)">Commodity Workspace</a> —
+    candle chart, lot-aware BUY/SELL ticket, order book, and the 🎯
+    Price Planner (sized for MCX tick rules). For NSE/BSE equities, see
+    <a href="/zerodha-equity-scanner.html" style="color:var(--bn-accent)">Equity Scanner</a>.
+  </div>
+
+  <!-- MCX session: 09:00–23:30 IST (winter) / 23:55 (summer). Show banner
+       outside session if no volume. -->
+  <div class="closed-banner" id="closed-banner">
+    ⏸ MCX session looks inactive — the scanner is showing the last
+    snapshot Kite served. Numbers will tick again at 09:00 IST.
+  </div>
+
+  <!-- Auth-missing banner (same shape as equity scanner) -->
+  <div class="closed-banner" id="auth-banner"
+       style="background: rgba(231,76,60,.07); border-color: rgba(231,76,60,.4); color: var(--bn-bad);">
+    <strong>⚠ Kite auth not configured.</strong>
+    Set <code style="background:rgba(0,0,0,.25); padding:1px 6px; border-radius:3px;">ZERODHA_TOTP_SECRET</code>
+    in <code style="background:rgba(0,0,0,.25); padding:1px 6px; border-radius:3px;">/opt/booknow/.env.zerodha</code>,
+    then restart the backend container. The scanner will populate within
+    ~30s of a successful auth refresh.
+    <div id="auth-banner-detail" style="font-size:10px; color:var(--bn-muted); margin-top:6px;"></div>
+  </div>
+
+  <!-- Status chips -->
+  <div class="zd-row" style="margin-bottom:12px;">
+    <div class="zd-chip" id="chip-engine"><span class="dot"></span><span>engine <strong id="engine-val">…</strong></span></div>
+    <div class="zd-chip" id="chip-universe"><span class="dot"></span><span>universe <strong id="universe-val">…</strong></span></div>
+    <div class="zd-chip" id="chip-breadth"><span class="dot"></span><span>breadth <strong id="breadth-val">…</strong></span></div>
+    <div class="zd-chip" id="chip-as-of">refresh <strong id="as-of-val">—</strong></div>
+  </div>
+
+  <!-- ─── Underlying tiles ─────────────────────────────────────── -->
+  <h2 class="zd-section-h">🎯 Front-month tiles — click to trade</h2>
+  <div class="mcx-tiles" id="mcx-tiles">
+    <div class="zd-empty" style="grid-column:1/-1;padding:24px;">Resolving MCX front months…</div>
+  </div>
+
+  <!-- ─── Top Picks (blended score) ─────────────────────────────── -->
+  <h2 class="zd-section-h" style="margin-top: 6px;">
+    🏆 Top Picks — blended score (gainers + range + volume)
+    <span class="count" id="picks-count">—</span>
+  </h2>
+  <div class="zd-card" style="padding: 0;">
+    <div id="picks-tbody">
+      <div class="zd-empty" style="padding:24px;">Loading scores…</div>
+    </div>
+  </div>
+
+  <!-- ─── Gainers / Losers + Volume / Range row ─────────────────── -->
+  <div class="scan-row two" style="margin-top: 16px;">
+    <div class="scan-card">
+      <div class="head"><span>🚀</span> Top gainers <span class="count" id="gainers-count">—</span></div>
+      <table class="scan-table">
+        <thead>
+          <tr>
+            <th>Underlying</th><th>Contract</th>
+            <th class="num">LTP</th><th class="num">Day %</th>
+            <th class="num">Vol</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="gainers-tbody"><tr><td colspan="6" class="zd-empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="scan-card">
+      <div class="head"><span>📉</span> Top losers <span class="count" id="losers-count">—</span></div>
+      <table class="scan-table">
+        <thead>
+          <tr>
+            <th>Underlying</th><th>Contract</th>
+            <th class="num">LTP</th><th class="num">Day %</th>
+            <th class="num">Vol</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="losers-tbody"><tr><td colspan="6" class="zd-empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="scan-row two" style="margin-top: 16px;">
+    <div class="scan-card">
+      <div class="head"><span>📊</span> Volume surge <span class="count" id="volsurge-count">—</span></div>
+      <table class="scan-table">
+        <thead>
+          <tr>
+            <th>Underlying</th><th>Contract</th>
+            <th class="num">Vol</th><th class="num">Day %</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="volsurge-tbody"><tr><td colspan="5" class="zd-empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="scan-card">
+      <div class="head"><span>📐</span> Range expansion <span class="count" id="range-count">—</span></div>
+      <table class="scan-table">
+        <thead>
+          <tr>
+            <th>Underlying</th><th>Contract</th>
+            <th class="num">Range %</th><th class="num">Day %</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="range-tbody"><tr><td colspan="5" class="zd-empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ─── Chain explorer ───────────────────────────────────────── -->
+  <h2 class="zd-section-h" style="margin-top: 22px;">
+    🔗 Contract chain explorer
+    <span class="count" id="chain-count">—</span>
+  </h2>
+  <div class="chain-toolbar">
+    <label>Underlying</label>
+    <select id="chain-u">
+      <!-- Populated from window.MCX_UNDERLYINGS at boot -->
+    </select>
+    <span style="color:var(--bn-muted);font-size:11px;margin-left:auto;" id="chain-meta">—</span>
+  </div>
+  <div class="scan-card" style="padding:0;">
+    <table class="scan-table">
+      <thead>
+        <tr>
+          <th>Contract</th>
+          <th>Expiry</th>
+          <th class="num">Days</th>
+          <th class="num">LTP</th>
+          <th class="num">Day %</th>
+          <th class="num">Vol</th>
+          <th class="num">Lot</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="chain-tbody">
+        <tr><td colspan="8" class="zd-empty">Pick an underlying to load the chain.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+<div class="zd-toast" id="toast"><div class="head"></div><div class="body"></div></div>
+
+<script src="/nav.js"></script>
+<script src="/js/nifty100.js"></script>
+<script>
+/* ──────────────────────────────────────────────────────────────────────
+ * Config
+ * ──────────────────────────────────────────────────────────────────── */
+const POLL_FRONT_MS  = 8000;    // front-month tile quotes
+const POLL_CHAIN_MS  = 20000;   // chain re-quote
+const POLL_CHAIN_RESOLVE_MS = 60000;  // re-resolve chain (catches rollovers)
+
+const W_DAY_PCT     = 1.0;
+const W_VOL_RANK    = 0.8;
+const W_RANGE_PCT   = 0.6;
+const W_NEAR_HI     = 0.4;
+
+const TOP_N_PICKS = 6;          // universe is small (≤8), so 6 picks max
+
+const $ = id => document.getElementById(id);
+
+/* ── Formatting helpers ───────────────────────────────────────────── */
+function inr(v, d = 2) {
+  if (v == null || isNaN(v)) return '₹—';
+  return '₹' + Number(v).toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function pct(v, d = 2) {
+  if (v == null || isNaN(v)) return '—';
+  return Number(v).toFixed(d) + '%';
+}
+function compactVol(v) {
+  if (v == null || isNaN(v)) return '—';
+  const n = Number(v);
+  if (n >= 1e7)  return (n/1e7).toFixed(1) + ' Cr';
+  if (n >= 1e5)  return (n/1e5).toFixed(1) + ' L';
+  if (n >= 1e3)  return (n/1e3).toFixed(1) + 'k';
+  return String(Math.round(n));
+}
+function sign(v) { return v > 0 ? '+' : ''; }
+function klass(v) { return v > 0 ? 'good' : v < 0 ? 'bad' : 'mute'; }
+function fmtExpiry(s) {
+  if (!s) return '—';
+  // s = "2026-06-19" → "19 Jun"
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (!m) return s;
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${parseInt(m[3],10)} ${months[parseInt(m[2],10)-1]}`;
+}
+function daysToExpiry(s) {
+  if (!s) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (!m) return null;
+  const exp = new Date(Date.UTC(+m[1], +m[2]-1, +m[3]));
+  const today = new Date();
+  const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  return Math.round((exp - todayUTC) / 86400000);
+}
+
+function toast(kind, head, body) {
+  const t = $('toast');
+  t.className = 'zd-toast ' + (kind === 'bad' ? 'bad' : 'good');
+  t.querySelector('.head').textContent = head;
+  t.querySelector('.body').textContent = body || '';
+  t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function setChip(id, klass, value) {
+  const el = $(id);
+  if (!el) return;
+  el.classList.remove('good', 'bad', 'warn', 'accent');
+  if (klass) el.classList.add(klass);
+  const v = el.querySelector('strong');
+  if (v) v.textContent = value;
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Front-month resolution + quotes
+ * ──────────────────────────────────────────────────────────────── */
+
+let contracts = [];      // [{underlying, tradingsymbol, expiry, lot_size, tick_size}, ...]
+let mcxRows   = [];      // enriched with quote fields (ltp, dayPct, …)
+let lastFetchOK = false;
+
+async function resolveFrontMonths() {
+  // Hit the backend front-month resolver for each underlying. Errors
+  // (e.g. expired contract before rollover) just yield null so the
+  // universe shrinks gracefully.
+  try {
+    const out = await Promise.all((window.MCX_UNDERLYINGS || []).map(async u => {
+      try {
+        const r = await fetch('/api/zerodha/v1/commodity/front-month/' + encodeURIComponent(u));
+        if (r.status === 503) {
+          const body = await r.json().catch(() => ({}));
+          const detail = body.detail || {};
+          if (detail.error === 'kite_auth_unavailable') {
+            $('auth-banner').classList.add('show');
+            $('auth-banner-detail').textContent = detail.message || '';
+            setChip('chip-engine', 'warn', 'auth missing');
+          }
+          return null;
+        }
+        if (!r.ok) return null;
+        return await r.json();
+      } catch { return null; }
+    }));
+    contracts = out.filter(Boolean);
+    return contracts;
+  } catch {
+    return [];
+  }
+}
+
+async function fetchFrontMonthQuotes() {
+  if (!contracts.length) return [];
+  const syms = contracts.map(c => 'MCX:' + c.tradingsymbol);
+  const url = '/api/zerodha/v1/quote?syms=' + encodeURIComponent(syms.join(','));
+  try {
+    const r = await fetch(url);
+    if (r.status === 503) {
+      const body = await r.json().catch(() => ({}));
+      const detail = body.detail || {};
+      if (detail.error === 'kite_auth_unavailable') {
+        $('auth-banner').classList.add('show');
+        $('auth-banner-detail').textContent = detail.message || '';
+        setChip('chip-engine', 'warn', 'auth missing');
+      }
+      return [];
+    }
+    if (!r.ok) throw new Error('status ' + r.status);
+    const raw = await r.json();
+    $('auth-banner').classList.remove('show');
+    lastFetchOK = true;
+    setChip('chip-engine', 'good', 'up');
+
+    return contracts.map(c => {
+      const v = raw['MCX:' + c.tradingsymbol] || {};
+      const ohlc = v.ohlc || {};
+      const ltp = v.last_price;
+      const prev = ohlc.close || ltp;
+      const dayHigh = ohlc.high || ltp;
+      const dayLow  = ohlc.low  || ltp;
+      const dayPct  = prev ? ((ltp - prev) / prev) * 100 : 0;
+      const rangePct = prev ? ((dayHigh - dayLow) / prev) * 100 : 0;
+      const vsHi = dayHigh ? ((ltp - dayHigh) / dayHigh) * 100 : 0;
+      return {
+        ...c,
+        ltp, prevClose: prev,
+        dayPct, dayHigh, dayLow, rangePct, vsHi,
+        volume: v.volume || v.volume_traded || 0,
+      };
+    }).filter(r => r.ltp != null);
+  } catch (e) {
+    setChip('chip-engine', 'bad', 'down');
+    if (!lastFetchOK) toast('bad', 'Fetch failed', String(e.message || e));
+    return [];
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Render — tiles, picks, tables
+ * ──────────────────────────────────────────────────────────────── */
+function tradeUrl(u) {
+  return `/zerodha-commodity-chart.html?u=${encodeURIComponent(u)}`;
+}
+
+function renderTiles(rows) {
+  const tilesEl = $('mcx-tiles');
+  if (!rows.length) {
+    tilesEl.innerHTML = '<div class="zd-empty" style="grid-column:1/-1;padding:24px;">No MCX quotes yet — market may be closed.</div>';
+    return;
+  }
+  tilesEl.innerHTML = rows.map(r => {
+    const expDays = daysToExpiry(r.expiry);
+    const expLabel = expDays != null ? `${fmtExpiry(r.expiry)} · ${expDays}d` : fmtExpiry(r.expiry);
+    const range = (r.dayHigh && r.dayLow)
+      ? ((r.dayHigh - r.dayLow) / r.dayLow * 100).toFixed(2) + '%'
+      : '—';
+    return `
+      <div class="mcx-tile" onclick="location.href='${tradeUrl(r.underlying)}'">
+        <div class="top">
+          <span class="u">${r.underlying}</span>
+          <span class="exp">${expLabel}</span>
+        </div>
+        <div style="display:flex;align-items:baseline;gap:8px;">
+          <span class="ltp">${inr(r.ltp)}</span>
+          <span class="pct ${klass(r.dayPct)}">${sign(r.dayPct)}${pct(r.dayPct)}</span>
+        </div>
+        <div class="meta">
+          <span>Lot<strong>${r.lot_size}</strong></span>
+          <span>Range<strong>${range}</strong></span>
+          <span>Vol<strong>${compactVol(r.volume)}</strong></span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function rankPercentile(rows, getter) {
+  const sorted = rows.map(r => ({ r, v: getter(r) || 0 })).sort((a,b) => a.v - b.v);
+  const m = new Map();
+  sorted.forEach((x, i) => m.set(x.r.tradingsymbol, sorted.length > 1 ? i / (sorted.length - 1) : 0));
+  return m;
+}
+
+function renderAll(rows) {
+  // Top picks — blended score (only positive movers)
+  const volRanks = rankPercentile(rows, r => r.volume);
+  const picks = rows.map(r => ({
+    ...r,
+    score: (
+      W_DAY_PCT   * r.dayPct +
+      W_VOL_RANK  * (volRanks.get(r.tradingsymbol) || 0) * 5 +
+      W_RANGE_PCT * r.rangePct +
+      W_NEAR_HI   * (r.vsHi > -1 && r.dayPct > 0 ? 2 : 0)
+    ),
+  }))
+  .filter(p => p.dayPct > 0)
+  .sort((a,b) => b.score - a.score)
+  .slice(0, TOP_N_PICKS);
+
+  $('picks-count').textContent = picks.length;
+  const picksTbody = $('picks-tbody');
+  if (!picks.length) {
+    picksTbody.innerHTML = '<div class="zd-empty" style="padding:24px;">No bullish picks — universe is red today.</div>';
+  } else {
+    picksTbody.innerHTML = picks.map((r, i) => {
+      const chips = [];
+      if (r.dayPct  >= 1)   chips.push(`<span class="chip good">+${r.dayPct.toFixed(1)}%</span>`);
+      if (r.vsHi    > -0.3) chips.push(`<span class="chip accent">NEAR HI</span>`);
+      if (r.rangePct >= 2)  chips.push(`<span class="chip warn">RANGE ${r.rangePct.toFixed(1)}%</span>`);
+      return `<div class="pick-row" onclick="location.href='${tradeUrl(r.underlying)}'">
+        <div class="rank">${i+1}</div>
+        <div class="name">
+          <div class="s">${r.underlying}</div>
+          <div class="meta">${r.tradingsymbol} · ${fmtExpiry(r.expiry)} · vol ${compactVol(r.volume)}</div>
+        </div>
+        <div class="price">${inr(r.ltp)}</div>
+        <div class="pct ${klass(r.dayPct)}">${sign(r.dayPct)}${pct(r.dayPct)}</div>
+        <div class="score">${r.score.toFixed(1)}</div>
+        <div class="chips">${chips.join('')}</div>
+      </div>`;
+    }).join('');
+  }
+
+  // Gainers / Losers / Volume / Range
+  const sortedByDay = [...rows].sort((a,b) => b.dayPct - a.dayPct);
+  renderUnderlyingTable('gainers-tbody', sortedByDay.filter(r => r.dayPct > 0), 'gainers');
+  renderUnderlyingTable('losers-tbody', [...sortedByDay].reverse().filter(r => r.dayPct < 0), 'losers');
+  $('gainers-count').textContent = sortedByDay.filter(r => r.dayPct > 0).length;
+  $('losers-count').textContent  = sortedByDay.filter(r => r.dayPct < 0).length;
+
+  const byVol = [...rows].sort((a,b) => b.volume - a.volume);
+  $('volsurge-count').textContent = byVol.length;
+  $('volsurge-tbody').innerHTML = byVol.map(r => `
+    <tr class="row" onclick="location.href='${tradeUrl(r.underlying)}'">
+      <td class="sym">${r.underlying}</td>
+      <td class="mute">${r.tradingsymbol}</td>
+      <td class="num">${compactVol(r.volume)}</td>
+      <td class="num ${klass(r.dayPct)}">${sign(r.dayPct)}${pct(r.dayPct)}</td>
+      <td><span style="color:var(--bn-accent); font-size:11px;">→</span></td>
+    </tr>`).join('');
+
+  const byRange = [...rows].sort((a,b) => b.rangePct - a.rangePct);
+  $('range-count').textContent = byRange.length;
+  $('range-tbody').innerHTML = byRange.map(r => `
+    <tr class="row" onclick="location.href='${tradeUrl(r.underlying)}'">
+      <td class="sym">${r.underlying}</td>
+      <td class="mute">${r.tradingsymbol}</td>
+      <td class="num warn">${pct(r.rangePct)}</td>
+      <td class="num ${klass(r.dayPct)}">${sign(r.dayPct)}${pct(r.dayPct)}</td>
+      <td><span style="color:var(--bn-accent); font-size:11px;">→</span></td>
+    </tr>`).join('');
+
+  // Status chips + closed banner
+  const up = rows.filter(r => r.dayPct > 0).length;
+  const down = rows.filter(r => r.dayPct < 0).length;
+  setChip('chip-universe', '', `${rows.length} contracts`);
+  setChip('chip-breadth', up > down ? 'good' : down > up ? 'bad' : '', `↑${up} ↓${down}`);
+
+  const anyVol = rows.some(r => r.volume > 0);
+  $('closed-banner').classList.toggle('show', !anyVol && rows.length > 0);
+}
+
+function renderUnderlyingTable(tbodyId, rows, kind) {
+  const tbody = $(tbodyId);
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="zd-empty">No ${kind} yet.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(r => `
+    <tr class="row" onclick="location.href='${tradeUrl(r.underlying)}'">
+      <td class="sym">${r.underlying}</td>
+      <td class="mute">${r.tradingsymbol}</td>
+      <td class="num">${inr(r.ltp)}</td>
+      <td class="num ${klass(r.dayPct)}">${sign(r.dayPct)}${pct(r.dayPct)}</td>
+      <td class="num mute">${compactVol(r.volume)}</td>
+      <td><span style="color:var(--bn-accent); font-size:11px;">→</span></td>
+    </tr>`).join('');
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Chain explorer — load all contracts for a chosen underlying
+ * ──────────────────────────────────────────────────────────────── */
+let chainContracts = [];
+let chainQuotes = {};
+let currentChainU = null;
+
+async function loadChain(u) {
+  currentChainU = u;
+  $('chain-meta').textContent = 'loading…';
+  $('chain-tbody').innerHTML = '<tr><td colspan="8" class="zd-empty">Resolving chain…</td></tr>';
+  try {
+    const r = await fetch('/api/zerodha/v1/commodity/contracts/' + encodeURIComponent(u));
+    if (!r.ok) {
+      $('chain-tbody').innerHTML = '<tr><td colspan="8" class="zd-empty">Chain unavailable (auth or backend offline).</td></tr>';
+      return;
+    }
+    const data = await r.json();
+    chainContracts = (data.contracts || data || []).slice(0, 12);
+    $('chain-count').textContent = chainContracts.length;
+    $('chain-meta').textContent =
+      `${chainContracts.length} contracts · lot ${chainContracts[0]?.lot_size || '?'} · tick ${
+        chainContracts[0]?.tick_size != null ? '₹' + chainContracts[0].tick_size.toFixed(2) : '?'
+      }`;
+    await refreshChainQuotes();
+  } catch (e) {
+    $('chain-tbody').innerHTML = '<tr><td colspan="8" class="zd-empty">Error loading chain.</td></tr>';
+  }
+}
+
+async function refreshChainQuotes() {
+  if (!chainContracts.length) return;
+  const syms = chainContracts.map(c => 'MCX:' + c.tradingsymbol);
+  try {
+    const r = await fetch('/api/zerodha/v1/quote?syms=' + encodeURIComponent(syms.join(',')));
+    if (!r.ok) return;
+    chainQuotes = await r.json();
+    renderChain();
+  } catch (_) {}
+}
+
+function renderChain() {
+  if (!chainContracts.length) return;
+  $('chain-tbody').innerHTML = chainContracts.map(c => {
+    const v = chainQuotes['MCX:' + c.tradingsymbol] || {};
+    const ohlc = v.ohlc || {};
+    const ltp = v.last_price;
+    const prev = ohlc.close || ltp;
+    const dayPct = prev ? ((ltp - prev) / prev) * 100 : 0;
+    const days = daysToExpiry(c.expiry);
+    return `
+      <tr class="row" onclick="location.href='${tradeUrl(c.underlying || currentChainU)}'">
+        <td class="sym">${c.tradingsymbol}</td>
+        <td class="mute">${fmtExpiry(c.expiry)}</td>
+        <td class="num ${days != null && days < 5 ? 'bad' : 'mute'}">${days != null ? days + 'd' : '—'}</td>
+        <td class="num">${ltp != null ? inr(ltp) : '—'}</td>
+        <td class="num ${klass(dayPct)}">${ltp != null ? sign(dayPct) + pct(dayPct) : '—'}</td>
+        <td class="num mute">${compactVol(v.volume || v.volume_traded || 0)}</td>
+        <td class="num mute">${c.lot_size || '—'}</td>
+        <td><span style="color:var(--bn-accent); font-size:11px;">→</span></td>
+      </tr>`;
+  }).join('');
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Boot
+ * ──────────────────────────────────────────────────────────────── */
+
+// Populate the chain underlying picker from MCX_UNDERLYINGS
+const chainSelect = $('chain-u');
+chainSelect.innerHTML = (window.MCX_UNDERLYINGS || []).map(u =>
+  `<option value="${u}">${u}</option>`).join('');
+chainSelect.addEventListener('change', e => loadChain(e.target.value));
+
+async function tickFront() {
+  if (!contracts.length) await resolveFrontMonths();
+  if (!contracts.length) {
+    $('mcx-tiles').innerHTML = '<div class="zd-empty" style="grid-column:1/-1;padding:24px;">No MCX contracts resolved — check Kite auth.</div>';
+    return;
+  }
+  mcxRows = await fetchFrontMonthQuotes();
+  renderTiles(mcxRows);
+  renderAll(mcxRows);
+  $('as-of-val').textContent = new Date().toLocaleTimeString('en-IN', { hour12: false });
+}
+
+async function bootChain() {
+  const first = (window.MCX_UNDERLYINGS || [])[0];
+  if (first) await loadChain(first);
+}
+
+tickFront();
+bootChain();
+
+setInterval(tickFront, POLL_FRONT_MS);
+setInterval(refreshChainQuotes, POLL_CHAIN_MS);
+setInterval(() => { if (currentChainU) loadChain(currentChainU); }, POLL_CHAIN_RESOLVE_MS);
+// Re-resolve all front months every 5 minutes — catches expiry rollovers
+setInterval(resolveFrontMonths, 300000);
+
+</script>
+</body>
+</html>

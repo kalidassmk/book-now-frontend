@@ -40,11 +40,40 @@ window.bnBinanceUrl = function (sym) {
 // iter 83 — Small inline Binance link button.  Returns the HTML for
 // a tiny clickable icon next to a symbol.  e.g.:
 //   <a class="bn-binance-link" href="..." target="_blank" ...>🟡</a>
+//
+// iter 127 — Every Binance icon now also emits a sibling 🚀 Quick Trade
+// icon so the operator has one-tap access to the in-house trading panel
+// from any table that lists symbols (coin detail alerts, early-pump,
+// vsp, lmc, ccp, order-flow…).  No per-page changes required — the
+// helper is the single source of truth.
 window.bnBinanceLinkHtml = function (sym, opts) {
   const url = window.bnBinanceUrl(sym);
   const compact = (opts || {}).compact;
   const label = compact ? '🟡' : '🟡 Binance';
-  return `<a class="bn-binance-link" href="${url}" target="_blank" rel="noopener noreferrer" title="Open ${sym} on Binance" onclick="event.stopPropagation()">${label}</a>`;
+  const binanceLink = `<a class="bn-binance-link" href="${url}" target="_blank" rel="noopener noreferrer" title="Open ${sym} on Binance" onclick="event.stopPropagation()">${label}</a>`;
+  const quickLink = window.bnQuickTradeLinkHtml ? window.bnQuickTradeLinkHtml(sym, opts) : '';
+  return binanceLink + quickLink;
+};
+
+// iter 127 — Internal Quick Trade page link, sibling to the Binance icon.
+// Independent helper so pages that want ONLY a Quick Trade icon (no
+// Binance) can call it directly.
+window.bnQuickTradeUrl = function (sym) {
+  sym = String(sym || '').toUpperCase().trim();
+  if (!sym) return '/quick-trade.html';
+  return `/quick-trade.html?sym=${encodeURIComponent(sym)}`;
+};
+window.bnQuickTradeLinkHtml = function (sym, opts) {
+  const url = window.bnQuickTradeUrl(sym);
+  const compact = (opts || {}).compact;
+  // iter128 — typographic 'B' mark (BookNow Bogo AI branding) instead
+  // of the 🚀 emoji.  Emojis have inconsistent baselines vs the 🟡
+  // Binance pill, which the operator noticed as drift.  The B-mark
+  // is a span so its width is fixed regardless of label length, and
+  // it sits on the same baseline as text.
+  const mark = '<span class="b-mark">B</span>';
+  const label = compact ? mark : `${mark} Trade`;
+  return `<a class="bn-quick-link" href="${url}" title="Open ${sym} in BookNow Quick Trade" onclick="event.stopPropagation()">${label}</a>`;
 };
 
 (function () {
@@ -81,6 +110,20 @@ window.bnBinanceLinkHtml = function (sym, opts) {
         { href: '/bounce-watch.html',      label: 'Bounce Watch',     icon: '⤴️', desc: 'Oversold reversal candidates' },
       ],
     },
+    // iter122 — '💱 Spot Order' top-level menu.  Previously the manual
+    // Trade History + Round Trips + NET P&L dashboard (/premium.html)
+    // lived under 'Bots' as 'Premium', which mis-tagged it — those
+    // entries are your own manual spot trades, not bot trades.
+    {
+      key: 'spot',
+      label: 'Spot Order',
+      icon: '💱',
+      items: [
+        // iter125 — Quick Trade lands first so it's one click away during pumps.
+        { href: '/quick-trade.html',       label: 'Quick Trade',      icon: '🚀', desc: 'Binance WS order book + 2-tap BUY/SELL for explosive pumps', highlight: true },
+        { href: '/premium.html',           label: 'Trades & P&L',     icon: '🧾', desc: 'Manual spot trades — history, round trips, NET P&L' },
+      ],
+    },
     {
       key: 'analysis',
       label: 'Analysis',
@@ -105,8 +148,31 @@ window.bnBinanceLinkHtml = function (sym, opts) {
       icon: '🤖',
       items: [
         { href: '/pattern-bot.html',       label: 'Pattern Bot',      icon: '🤖', desc: 'Pattern-based auto-trader' },
-        { href: '/premium.html',           label: 'Premium',          icon: '⭐', desc: 'Premium tier' },
+        // iter122 — 'Premium' (really the manual spot Trade History page)
+        // moved to its own '💱 Spot Order' top-level menu above.
         { href: '/pro.html',               label: 'Pro',              icon: '🎖️', desc: 'Pro tier' },
+      ],
+    },
+    // Z-iter4 — Zerodha (Kite Connect) dashboard.  Separate top-level
+    // menu so it never gets confused with Binance pages.  Backend lives
+    // in book-now-zerodha-backend (port 8084).
+    {
+      key: 'zerodha',
+      label: 'Zerodha',
+      icon: '🇮🇳',
+      items: [
+        { href: '/zerodha-equity-scanner.html',    label: 'Equity Scanner',    icon: '🔍', desc: 'NIFTY 100 — top picks, gainers, volume surge, near day high', highlight: true },
+        { href: '/zerodha-commodity-scanner.html', label: 'Commodity Scanner', icon: '🛢️', desc: 'MCX front-months — tiles, gainers, chain explorer, Price Planner', highlight: true },
+        { href: '/zerodha-stock-chart.html',       label: 'Stock Workspace',   icon: '📊', desc: 'NSE/BSE workspace — chart + BUY/SELL + order book + 🎯 Price Planner' },
+        { href: '/zerodha-commodity-chart.html',   label: 'Commodity Workspace', icon: '📊', desc: 'MCX workspace — chart + lot-aware BUY/SELL + order book + 🎯 Price Planner' },
+        { href: '/zerodha-stock-detail.html',      label: 'Stock Detail',      icon: '📈', desc: 'Per-NSE/BSE-symbol deep dive — depth, VWAP, sell-price planner, GTTs' },
+        { href: '/zerodha-commodity-detail.html',  label: 'Commodity Detail',  icon: '🛢️', desc: 'Per-MCX-contract deep dive — depth, lot/margin, expiry chain, planner' },
+        { href: '/zerodha-orderflow-spot.html',    label: 'Spot Order Flow',   icon: '🌊', desc: 'NSE/BSE — buy/sell pressure, VWAP gap, day-range positioning' },
+        { href: '/zerodha-orderflow-mcx.html',     label: 'MCX Order Flow',    icon: '🛢️', desc: 'CRUDE/GOLD/NATGAS — pressure + VWAP gap per front-month' },
+        { href: '/zerodha.html',                   label: 'Overview',          icon: '📊', desc: 'Session + funds + holdings + positions at a glance' },
+        { href: '/zerodha-spot.html',              label: 'Spot Equity',       icon: '🧾', desc: 'NSE/BSE — CNC delivery buy/sell + OCO GTT for SL/TP' },
+        { href: '/zerodha-mcx.html',               label: 'MCX Commodity',     icon: '🛢️', desc: 'CRUDE/GOLD/NATGAS — front-month resolver + lot-aware orders' },
+        { href: '/zerodha-portfolio.html',         label: 'Portfolio',         icon: '💼', desc: 'Holdings + positions + orders + trades + GTT triggers' },
       ],
     },
     {
@@ -159,6 +225,52 @@ window.bnBinanceLinkHtml = function (sym, opts) {
     }
     .bn-binance-link.large {
       padding: 8px 16px; font-size: 13px; border-radius: 7px;
+    }
+    /* iter 127 — Quick Trade quick-link button.  Sits next to the Binance
+       icon and shares the same baseline so the row stays balanced.
+       iter 128 — typographic 'B' brand mark replaces the 🚀 emoji; the
+       outer pill is tighter and vertical-align middle keeps it on the
+       same baseline as the 🟡 chip even when fonts differ. */
+    .bn-quick-link {
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: 4px;
+      padding: 1px 5px;
+      margin-left: 4px;
+      border-radius: 4px;
+      background: rgba(75, 159, 255, 0.10);
+      border: 1px solid rgba(75, 159, 255, 0.35);
+      color: #4b9fff !important;
+      text-decoration: none !important;
+      font-size: 10px; font-weight: 700;
+      letter-spacing: 0.2px;
+      line-height: 1.3;
+      vertical-align: middle;
+      transition: background .12s, transform .12s, border-color .12s;
+    }
+    .bn-quick-link:hover {
+      background: rgba(75, 159, 255, 0.22);
+      border-color: #4b9fff;
+      transform: translateY(-1px);
+    }
+    .bn-quick-link .b-mark {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 13px; height: 13px;
+      border-radius: 3px;
+      background: #4b9fff;
+      color: #fff;
+      font-size: 9px;
+      font-weight: 900;
+      line-height: 1;
+      font-family: -apple-system, "Segoe UI", Roboto, Inter, sans-serif;
+    }
+    .bn-quick-link.large {
+      padding: 8px 14px; font-size: 13px; border-radius: 7px;
+      margin-left: 8px; gap: 6px;
+    }
+    .bn-quick-link.large .b-mark {
+      width: 18px; height: 18px;
+      border-radius: 4px;
+      font-size: 12px;
     }
     .bn-nav {
       position: fixed; top: 0; left: 0; right: 0; z-index: 1000;

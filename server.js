@@ -6,6 +6,19 @@ const path = require('path');
 const { spawn } = require('child_process');
 // Node v20+ has native fetch built-in — no extra package needed
 
+// ── Defensive process-level error guards (Z-iter16) ─────────────────────────
+// Without these, an unhandled error from any background WS (notably the
+// Binance miniTicker stream, which can intermittently 5xx for non-US IPs)
+// kills the entire Node process — including the Zerodha WS proxy that
+// only needs the local `ws` library, not Binance. We log loudly so the
+// underlying issue is still visible.
+process.on('uncaughtException', (err) => {
+    console.error('[fatal-caught] uncaughtException:', err && err.message, err && err.stack);
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('[fatal-caught] unhandledRejection:', reason);
+});
+
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -24,6 +37,33 @@ const ENGINE_DIR = path.resolve(__dirname, '../python-engine');
 // New code should use ENGINE_BASE; this can be removed once the dashboard
 // frontend bundle is rebuilt.
 const SPRING_BASE = ENGINE_BASE;
+
+// ── Zerodha (Kite Connect) backend ──────────────────────────────────────────
+// Distinct process from the Binance engine — runs on its own Docker
+// container (zerodha-backend) and exposes the /api/zerodha/v1/* surface
+// defined in book-now-zerodha-backend/booknow/api/routes_kite.py.
+//
+// Default points at the compose service name (`zerodha-backend:8084`),
+// NOT localhost — when this Node process runs inside the frontend
+// container, `localhost` resolves to its OWN netns, not the host, so
+// localhost:8084 returns ECONNREFUSED and the proxy 502s.
+//
+// For laptop dev (running Node directly on the host without compose),
+// override with `ZERODHA_ENGINE_BASE=http://localhost:8084`.
+//
+// Both this default + the compose service-name target REQUIRE that
+// zerodha-backend is reachable on the SAME docker network as the
+// frontend container. See deploy/docker-compose.zerodha.yml in the
+// book-now-zerodha-backend repo — it now declares `networks: [booknow]`
+// on all three Zerodha services so they share the network with the
+// frontend instead of landing on a separate `booknow_default`.
+//
+// The proxy is wildcard-based — any /api/zerodha/* the dashboard hits
+// gets forwarded as-is so we don't have to maintain per-endpoint route
+// declarations. See `app.use('/api/zerodha', …)` farther down.
+const ZERODHA_ENGINE_PORT = parseInt(process.env.ZERODHA_ENGINE_PORT || '8084', 10);
+const ZERODHA_ENGINE_BASE = process.env.ZERODHA_ENGINE_BASE
+    || `http://zerodha-backend:${ZERODHA_ENGINE_PORT}`;
 
 // ─── Engine process handle ──────────────────────────────────────────────────
 let engineProc = null;   // ChildProcess when we own the python-engine process
@@ -94,6 +134,127 @@ app.use(express.static(path.join(__dirname, 'public'), {
     }
   },
 }));
+
+// ── Zerodha WebSocket proxy (Z-iter16) ───────────────────────────────────────
+// The browser opens wss://<dashboard>/api/zerodha/v1/ws/ticks for live ticks.
+// We forward the upgrade to ws://zerodha-backend:8084/api/zerodha/v1/ws/ticks.
+// The backend's TickHub fans Kite WebSocket ticks out to all subscribers.
+//
+// Implementation: native http 'upgrade' event + the `ws` package (already a
+// transitive dep of socket.io). We open a 1:1 backend WS per browser WS and
+// forward frames in both directions. The browser doesn't see the engine
+// hostname / port — same-origin via the dashboard.
+const WebSocket = require('ws');
+const wsProxyServer = new WebSocket.Server({ noServer: true });
+server.on('upgrade', (req, clientSocket, head) => {
+    // Only intercept the Zerodha WS path. Other upgrades (e.g. socket.io's)
+    // fall through to the existing handlers.
+    if (!req.url || !req.url.startsWith('/api/zerodha/v1/ws/')) return;
+
+    // Build the upstream URL: http→ws scheme swap, preserve the path.
+    const target = ZERODHA_ENGINE_BASE.replace(/^http/, 'ws') + req.url;
+    const upstream = new WebSocket(target, { perMessageDeflate: false });
+
+    // Register upstream error/close handlers IMMEDIATELY so a fast-failing
+    // upstream (DNS / connect refused / 5xx upgrade) doesn't crash the
+    // process before handleUpgrade resolves.
+    let browserWs = null;
+    const queue = [];  // browser-side messages held until upstream opens
+    const closeBoth = (code, reason) => {
+        try { if (browserWs) browserWs.close(code || 1000, String(reason || '')); } catch (_) {}
+        try { upstream.close(code || 1000, String(reason || '')); } catch (_) {}
+    };
+    upstream.on('error', (e) => {
+        console.error('[zerodha-ws] upstream error:', e && e.message);
+        // If browser hasn't completed handshake yet, abort the raw socket
+        if (!browserWs) { try { clientSocket.destroy(); } catch (_) {} }
+        else closeBoth(1011, 'upstream err');
+    });
+    upstream.on('open', () => {
+        // Drain queued browser messages now that upstream is ready.
+        for (const data of queue) {
+            try { upstream.send(data); } catch (_) {}
+        }
+        queue.length = 0;
+    });
+
+    wsProxyServer.handleUpgrade(req, clientSocket, head, (clientWs) => {
+        browserWs = clientWs;
+        // IMPORTANT: forward each direction with the correct frame type.
+        // The `ws` library emits Buffers regardless of original frame, so
+        // we'd ship browser->upstream as BINARY by default — but our
+        // Python backend reads via `ws.receive_text()` which expects
+        // TEXT frames and crashes with `KeyError: 'text'` on binary.
+        // The `isBinary` arg on the message event distinguishes them;
+        // pass it through to `.send()` so frame type is preserved.
+        browserWs.on('message', (data, isBinary) => {
+            const payload = isBinary ? data : data.toString();
+            if (upstream.readyState === WebSocket.OPEN) {
+                upstream.send(payload);
+            } else if (upstream.readyState === WebSocket.CONNECTING) {
+                // Hold until upstream is open (typically <100ms inside the
+                // compose net). Cap the queue so a misbehaving client can't
+                // exhaust memory while upstream stays stuck.
+                if (queue.length < 100) queue.push(payload);
+            }
+            // CLOSED/CLOSING → drop silently
+        });
+        upstream.on('message', (data, isBinary) => {
+            const payload = isBinary ? data : data.toString();
+            if (browserWs.readyState === WebSocket.OPEN) browserWs.send(payload);
+        });
+        browserWs.on('close', (code, reason) => closeBoth(code, reason));
+        upstream.on('close',  (code, reason) => closeBoth(code, reason));
+        browserWs.on('error', (e) => {
+            console.error('[zerodha-ws] browser error:', e && e.message);
+            closeBoth(1011, 'browser err');
+        });
+    });
+});
+
+// ── Zerodha backend proxy (Z-iter4) ──────────────────────────────────────────
+// One catch-all forwarder for /api/zerodha/* → zerodha-backend on port 8084.
+// Path, method, query string, JSON body, and response status all pass
+// through unchanged.
+//
+// This sits BEFORE the dashboard's own /api/* routes (which are Binance-
+// specific) so the path prefix is what disambiguates.
+//
+// We use the standard library `fetch` (Node 20+) — no extra proxy package
+// needed. Streaming-large-response is not a concern here: every Zerodha
+// endpoint returns small JSON.
+app.use('/api/zerodha', async (req, res) => {
+    // req.url is the path under /api/zerodha (e.g. "/v1/holdings?syms=…")
+    const targetUrl = `${ZERODHA_ENGINE_BASE}/api/zerodha${req.url}`;
+    try {
+        const init = {
+            method: req.method,
+            headers: { 'Accept': 'application/json' },
+        };
+        // Forward JSON bodies for POST/PUT/DELETE-with-body. We don't
+        // proxy multipart — none of the Zerodha endpoints take it.
+        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.body && Object.keys(req.body).length) {
+            init.headers['Content-Type'] = 'application/json';
+            init.body = JSON.stringify(req.body);
+        }
+        const r = await fetch(targetUrl, init);
+        const ct = r.headers.get('content-type') || '';
+        res.status(r.status);
+        if (ct.includes('application/json')) {
+            const j = await r.json();
+            res.json(j);
+        } else {
+            const t = await r.text();
+            res.type(ct || 'text/plain').send(t);
+        }
+    } catch (err) {
+        res.status(502).json({
+            error: 'Zerodha backend unreachable',
+            target: targetUrl,
+            detail: String(err),
+        });
+    }
+});
 
 // ── Order-Flow Scalper (proxy to Python engine) ──────────────────────────────
 // The engine exposes /api/v1/scalper/* (snapshots, status, signals). Proxy them
@@ -964,6 +1125,170 @@ app.get('/api/trade/order-history', async (req, res) => {
         res.json(data);
     } catch (e) {
         res.status(500).json({ error: e.message });
+    }
+});
+
+// ─── iter125 — Quick Trade proxy routes ───────────────────────────────────
+// /quick-trade.html drives explosive-pump entries — the browser pulls
+// market data directly from Binance's WebSocket (fastest possible) and
+// hits these endpoints only for the actual order placement / cancel.
+//
+// Wraps the existing python-engine manual buy/sell endpoints so the
+// frontend doesn't need to know the engine port.
+//
+// NOTE: The engine endpoints use HTTP GET even for state-changing
+// actions (legacy from the Spring-era contract).  We preserve that here
+// rather than fighting the engine's API.
+//
+// The two-tap confirm pattern lives client-side; the server simply does
+// what it's told.
+async function _engineGetJson(url) {
+    const r = await fetch(url);
+    const text = await r.text();
+    let body = text;
+    try { body = JSON.parse(text); } catch (_) { /* keep as text */ }
+    if (!r.ok) {
+        const err = new Error(typeof body === 'string' ? body : (body.detail || `engine ${r.status}`));
+        err.status = r.status;
+        err.body = body;
+        throw err;
+    }
+    return body;
+}
+
+// Market BUY at top of book — qty is in base-asset units.
+app.get('/api/trade/quick-buy/:symbol', async (req, res) => {
+    const symbol = String(req.params.symbol || '').toUpperCase();
+    const qty = parseFloat(req.query.qty);
+    if (!symbol || !Number.isFinite(qty) || qty <= 0) {
+        return res.status(400).json({ ok: false, error: 'symbol + positive qty required' });
+    }
+    try {
+        const out = await _engineGetJson(`${SPRING_BASE}/order/buy/${encodeURIComponent(symbol)}?qty=${qty}`);
+        console.log(`[QuickTrade] MARKET BUY ${symbol} qty=${qty} -> OK`);
+        return res.json({ ok: true, mode: 'market_buy', symbol, qty, engine: out });
+    } catch (e) {
+        console.warn(`[QuickTrade] MARKET BUY ${symbol} qty=${qty} -> ${e.message}`);
+        return res.status(e.status || 500).json({ ok: false, error: e.message, body: e.body });
+    }
+});
+
+// Limit BUY — qty in base-asset units, offsetPct = % off the engine's
+// current price (computed client-side from the picked price), profitPct
+// is sent through to the engine's auto-TP logic.  Pass profitPct=0 to
+// disable the auto take-profit if you just want a bare limit order.
+app.get('/api/trade/quick-limit-buy/:symbol', async (req, res) => {
+    const symbol = String(req.params.symbol || '').toUpperCase();
+    const qty = parseFloat(req.query.qty);
+    const offsetPct = parseFloat(req.query.offsetPct);
+    const profitPct = parseFloat(req.query.profitPct ?? '0');
+    if (!symbol || !Number.isFinite(qty) || qty <= 0) {
+        return res.status(400).json({ ok: false, error: 'symbol + positive qty required' });
+    }
+    if (!Number.isFinite(offsetPct)) {
+        return res.status(400).json({ ok: false, error: 'offsetPct required' });
+    }
+    try {
+        const url = `${SPRING_BASE}/order/limit-buy/${encodeURIComponent(symbol)}`
+            + `?qty=${qty}&offsetPct=${offsetPct}&profitPct=${Number.isFinite(profitPct) ? profitPct : 0}`;
+        const out = await _engineGetJson(url);
+        console.log(`[QuickTrade] LIMIT BUY ${symbol} qty=${qty} off=${offsetPct}% tp=${profitPct}% -> OK`);
+        return res.json({ ok: true, mode: 'limit_buy', symbol, qty, offsetPct, profitPct, engine: out });
+    } catch (e) {
+        console.warn(`[QuickTrade] LIMIT BUY ${symbol} qty=${qty} -> ${e.message}`);
+        return res.status(e.status || 500).json({ ok: false, error: e.message, body: e.body });
+    }
+});
+
+// Manual MARKET SELL — Quick Trade goes through /order/market-sell which
+// bypasses HARD_DISABLE_AUTOSELL (iter94).  Legacy /api/v1/sell/ stays
+// gated so the older bot-sell button on the dashboard still respects
+// the operator's kill switch.
+app.get('/api/trade/quick-sell/:symbol', async (req, res) => {
+    const symbol = String(req.params.symbol || '').toUpperCase();
+    const qtyRaw = req.query.qty;
+    const qty = qtyRaw != null && qtyRaw !== '' ? parseFloat(qtyRaw) : null;
+    if (!symbol) {
+        return res.status(400).json({ ok: false, error: 'symbol required' });
+    }
+    if (qty != null && (!Number.isFinite(qty) || qty <= 0)) {
+        return res.status(400).json({ ok: false, error: 'qty must be a positive number' });
+    }
+    try {
+        const url = qty != null
+            ? `${SPRING_BASE}/order/market-sell/${encodeURIComponent(symbol)}?qty=${qty}`
+            : `${SPRING_BASE}/order/market-sell/${encodeURIComponent(symbol)}`;
+        const out = await _engineGetJson(url);
+        console.log(`[QuickTrade] MARKET SELL ${symbol} qty=${qty ?? 'ALL'} -> OK`);
+        return res.json({ ok: true, mode: 'market_sell', symbol, qty, engine: out });
+    } catch (e) {
+        console.warn(`[QuickTrade] MARKET SELL ${symbol} qty=${qty ?? 'ALL'} -> ${e.message}`);
+        return res.status(e.status || 500).json({ ok: false, error: e.message, body: e.body });
+    }
+});
+
+// Manual LIMIT SELL — GTC at the EXACT price the operator picked
+// (no offset math; the picker either tapped an order-book row or a
+// chart candle, so they know the price they want).
+app.get('/api/trade/quick-limit-sell/:symbol', async (req, res) => {
+    const symbol = String(req.params.symbol || '').toUpperCase();
+    const qty = parseFloat(req.query.qty);
+    const price = parseFloat(req.query.price);
+    if (!symbol || !Number.isFinite(qty) || qty <= 0) {
+        return res.status(400).json({ ok: false, error: 'symbol + positive qty required' });
+    }
+    if (!Number.isFinite(price) || price <= 0) {
+        return res.status(400).json({ ok: false, error: 'positive price required' });
+    }
+    try {
+        const url = `${SPRING_BASE}/order/limit-sell/${encodeURIComponent(symbol)}?qty=${qty}&price=${price}`;
+        const out = await _engineGetJson(url);
+        console.log(`[QuickTrade] LIMIT SELL ${symbol} qty=${qty} @ ${price} -> OK`);
+        return res.json({ ok: true, mode: 'limit_sell', symbol, qty, price, engine: out });
+    } catch (e) {
+        console.warn(`[QuickTrade] LIMIT SELL ${symbol} qty=${qty} @ ${price} -> ${e.message}`);
+        return res.status(e.status || 500).json({ ok: false, error: e.message, body: e.body });
+    }
+});
+
+// iter131 — Wallet snapshot for the Quick Trade sizing buttons.
+// Reads the same `BINANCE:BALANCES:ALL` Redis key the existing socket
+// broadcast uses, so it's instant and zero-load on the engine.  Each
+// entry: { asset, free, locked }.
+app.get('/api/wallet/balances', async (req, res) => {
+    try {
+        const raw = await redis.get('BINANCE:BALANCES:ALL');
+        const balances = raw ? JSON.parse(raw) : [];
+        return res.json({ ok: true, balances });
+    } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message, balances: [] });
+    }
+});
+
+// Open orders snapshot — engine reads from Binance.
+app.get('/api/trade/quick-open-orders', async (req, res) => {
+    try {
+        const out = await _engineGetJson(`${SPRING_BASE}/orders/open`);
+        return res.json({ ok: true, orders: Array.isArray(out) ? out : (out.orders || []) });
+    } catch (e) {
+        return res.status(e.status || 500).json({ ok: false, error: e.message });
+    }
+});
+
+// Cancel a specific open order.
+app.get('/api/trade/quick-cancel/:symbol/:orderId', async (req, res) => {
+    const symbol = String(req.params.symbol || '').toUpperCase();
+    const orderId = String(req.params.orderId || '');
+    if (!symbol || !orderId) {
+        return res.status(400).json({ ok: false, error: 'symbol + orderId required' });
+    }
+    try {
+        const r = await fetch(`${SPRING_BASE}/order/cancel/${encodeURIComponent(symbol)}/${encodeURIComponent(orderId)}`);
+        const text = await r.text();
+        if (!r.ok) return res.status(r.status).json({ ok: false, error: text });
+        return res.json({ ok: true, symbol, orderId, message: text });
+    } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message });
     }
 });
 

@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+  public/zerodha-spot.html
+  ──────────────────────────────────────────────────────────────────────────
+  Zerodha Spot Equity — NSE / BSE buy/sell + OCO GTT for SL+TP.
+
+  Layout:
+    LEFT      symbol picker + live LTP + Buy form + Sell form
+    RIGHT     holdings table + open equity orders + GTT triggers
+
+  Why GTT (and not a server-side trailing stop): Zerodha disables CO/BO
+  on CNC delivery. The only broker-attached SL/TP path for a holding is
+  GTT (Good-Till-Triggered). The form below builds an OCO GTT in one
+  shot — the user enters SL% + TP% relative to fill price and we POST
+  /api/zerodha/v1/gtt/oco. Whichever leg fires first cancels the other.
+
+  Order-type behaviour:
+    * MARKET   — uses market_protection=5% by default to cap slippage.
+    * LIMIT    — price input enabled.
+    * Off-hours — backend automatically flips to variety=amo when the
+                  cash session is closed (auto_amo=true is the default).
+                  AMO requires a limit price, so the form forces order_type
+                  to LIMIT when it detects the market is closed.
+
+  Backend deps:
+    GET  /api/zerodha/v1/quote?syms=NSE:RELIANCE
+    POST /api/zerodha/v1/equity/buy
+    POST /api/zerodha/v1/equity/sell
+    POST /api/zerodha/v1/gtt/oco
+    GET  /api/zerodha/v1/equity/available-to-sell/{symbol}
+    GET  /api/zerodha/v1/holdings
+    GET  /api/zerodha/v1/orders
+    GET  /api/zerodha/v1/gtt
+    DELETE /api/zerodha/v1/gtt/{trigger_id}
+-->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Zerodha Spot Equity — BookNow</title>
+<link rel="stylesheet" href="/css/zerodha.css" />
+<style>
+  /* Spot-only fine-tuning — main layout is two-column grid */
+  .spot-grid { display: grid; grid-template-columns: 380px 1fr; gap: 14px; align-items: start; }
+  @media (max-width: 1100px) { .spot-grid { grid-template-columns: 1fr; } }
+  .ltp-block {
+    background: var(--bn-panel-2);
+    border-radius: 6px; padding: 12px;
+    margin-bottom: 12px;
+    display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center;
+  }
+  .ltp-block .price { font-size: 28px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .ltp-block .meta  { color: var(--bn-muted); font-size: 11px; }
+  .ltp-block .change.good { color: var(--bn-good); }
+  .ltp-block .change.bad  { color: var(--bn-bad); }
+  .form-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--bn-line); }
+  .form-section:first-of-type { margin-top: 0; padding-top: 0; border: 0; }
+  .form-section h4 {
+    margin: 0 0 8px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .5px;
+    color: var(--bn-muted);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .form-section h4 .pill {
+    padding: 1px 7px; border-radius: 4px;
+    font-size: 9px; font-weight: 800;
+    background: var(--bn-panel-2);
+    color: var(--bn-text);
+  }
+  .gtt-hint {
+    font-size: 11px; color: var(--bn-muted); line-height: 1.5;
+    background: rgba(241,196,15,.05);
+    border: 1px solid rgba(241,196,15,.2);
+    padding: 7px 10px; border-radius: 5px;
+    margin-bottom: 8px;
+  }
+  .gtt-preview {
+    background: var(--bn-panel-2);
+    border-radius: 5px; padding: 8px 10px; margin-top: 6px;
+    font-size: 11px; font-variant-numeric: tabular-nums;
+    display: grid; grid-template-columns: auto 1fr auto; gap: 4px 12px; align-items: baseline;
+  }
+  .gtt-preview .k { color: var(--bn-muted); }
+  .gtt-preview .v { color: var(--bn-text); font-weight: 700; }
+  .gtt-preview .v.good { color: var(--bn-good); }
+  .gtt-preview .v.bad  { color: var(--bn-bad); }
+</style>
+</head>
+<body class="zd">
+<div class="zd-wrap">
+
+  <h1 class="zd-title">🧾 Zerodha Spot Equity</h1>
+  <div class="zd-sub">
+    NSE/BSE cash market — CNC delivery by default. After-market orders
+    auto-queue as AMO outside session hours. Stop-loss + take-profit
+    via OCO GTT (the only path Kite allows on CNC).
+  </div>
+
+  <!-- ── Top status (compact) ──────────────────────────────────── -->
+  <div class="zd-row" style="margin-bottom:18px;">
+    <div class="zd-chip"            id="chip-session"><span class="dot"></span><span>session <strong id="session-val">…</strong></span></div>
+    <div class="zd-chip"            id="chip-eq"><span class="dot"></span><span>equity funds <strong id="eq-funds-val">₹—</strong></span></div>
+    <div class="zd-chip" id="chip-as-of">refresh <strong id="as-of-val">—</strong></div>
+  </div>
+
+  <div class="spot-grid">
+
+    <!-- ═══ LEFT: ticket ════════════════════════════════════════ -->
+    <div>
+
+      <!-- Symbol picker -->
+      <div class="zd-card">
+        <h3><span class="ic">🔎</span> Symbol</h3>
+        <div class="zd-form">
+          <div class="row">
+            <div class="field">
+              <label>Exchange</label>
+              <select id="exchange-input">
+                <option value="NSE">NSE</option>
+                <option value="BSE">BSE</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Tradingsymbol</label>
+              <input id="symbol-input" type="text" placeholder="e.g. RELIANCE" autocomplete="off" autocapitalize="characters" />
+            </div>
+          </div>
+        </div>
+
+        <!-- LTP block -->
+        <div class="ltp-block" id="ltp-block" style="margin-top:12px;">
+          <div>
+            <div class="price" id="ltp-price">—</div>
+            <div class="meta" id="ltp-meta">No symbol selected</div>
+          </div>
+          <div class="meta" id="ltp-change">—</div>
+        </div>
+
+        <!-- BUY -->
+        <div class="form-section">
+          <h4>BUY <span class="pill" style="background:rgba(46,204,113,.18);color:var(--bn-good);">CNC</span></h4>
+          <div class="zd-form">
+            <div class="row cols-3">
+              <div class="field">
+                <label>Product</label>
+                <select id="buy-product">
+                  <option value="CNC">CNC (delivery)</option>
+                  <option value="MIS">MIS (intraday)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Order type</label>
+                <select id="buy-order-type">
+                  <option value="MARKET">MARKET</option>
+                  <option value="LIMIT">LIMIT</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Quantity (shares)</label>
+                <input id="buy-qty" type="number" min="1" step="1" placeholder="1" />
+              </div>
+            </div>
+            <div class="row">
+              <div class="field" id="buy-price-wrap" style="display:none;">
+                <label>Limit price (₹)</label>
+                <input id="buy-price" type="number" min="0" step="0.05" placeholder="auto-snap to tick" />
+              </div>
+              <div class="field">
+                <label>Tag (≤20 chars)</label>
+                <input id="buy-tag" type="text" maxlength="20" value="MANUAL_DASHBOARD" />
+              </div>
+            </div>
+            <div class="actions">
+              <button class="zd-btn buy" id="btn-buy" style="flex:1;">🛒 Buy</button>
+              <button class="zd-btn ghost sm" id="btn-est-buy" title="Estimate margin">₹?</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- SELL -->
+        <div class="form-section">
+          <h4>SELL <span class="pill" id="sell-product-pill" style="background:rgba(231,76,60,.18);color:var(--bn-bad);">CNC</span></h4>
+          <div class="zd-form">
+            <div class="row cols-3">
+              <div class="field">
+                <label>Product</label>
+                <select id="sell-product">
+                  <option value="CNC">CNC (holdings)</option>
+                  <option value="MIS">MIS (intraday)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Order type</label>
+                <select id="sell-order-type">
+                  <option value="MARKET">MARKET</option>
+                  <option value="LIMIT">LIMIT</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Quantity</label>
+                <input id="sell-qty" type="number" min="1" step="1" placeholder="auto-fill from holding" />
+              </div>
+            </div>
+            <div class="row">
+              <div class="field" id="sell-price-wrap" style="display:none;">
+                <label>Limit price (₹)</label>
+                <input id="sell-price" type="number" min="0" step="0.05" />
+              </div>
+              <div class="field">
+                <label>Sellable today</label>
+                <input id="sell-available" type="text" disabled value="—" />
+              </div>
+            </div>
+            <div class="actions">
+              <button class="zd-btn sell" id="btn-sell" style="flex:1;">📤 Sell</button>
+              <button class="zd-btn ghost sm" id="btn-fill-sell" title="Fill from holding">↑ holding</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- OCO GTT -->
+        <div class="form-section">
+          <h4>Protect (OCO GTT) <span class="pill" style="background:rgba(41,182,246,.18);color:var(--bn-accent);">CNC only</span></h4>
+          <div class="gtt-hint">
+            Places a single trigger that arms BOTH a stop-loss SELL and a
+            take-profit SELL. Whichever fires first cancels the other.
+            Validity is 1 year — survives engine restarts. Spot CNC only.
+          </div>
+          <div class="zd-form">
+            <div class="row cols-3">
+              <div class="field">
+                <label>Quantity</label>
+                <input id="gtt-qty" type="number" min="1" step="1" />
+              </div>
+              <div class="field">
+                <label>Stop-loss (%)</label>
+                <input id="gtt-sl" type="number" min="0.25" step="0.25" value="2.0" />
+              </div>
+              <div class="field">
+                <label>Take-profit (%)</label>
+                <input id="gtt-tp" type="number" min="0.25" step="0.25" value="5.0" />
+              </div>
+            </div>
+            <div class="gtt-preview" id="gtt-preview">
+              <span class="k">last_price</span> <span class="v" id="gtt-lp">—</span> <span></span>
+              <span class="k">SL trigger</span> <span class="v bad"  id="gtt-sl-px">—</span> <span class="k" id="gtt-sl-amt"></span>
+              <span class="k">TP trigger</span> <span class="v good" id="gtt-tp-px">—</span> <span class="k" id="gtt-tp-amt"></span>
+            </div>
+            <div class="actions">
+              <button class="zd-btn" id="btn-gtt" style="flex:1; background:rgba(41,182,246,.15); color:var(--bn-accent); border-color:rgba(41,182,246,.35);">🎯 Place OCO GTT</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ═══ RIGHT: holdings + orders + GTTs ═════════════════════ -->
+    <div>
+
+      <!-- Holdings -->
+      <h2 class="zd-section-h">
+        Holdings (CNC, T+1 settled)
+        <span class="count" id="holdings-count">0</span>
+      </h2>
+      <div class="zd-table-wrap" style="margin-bottom: 16px;">
+        <table class="zd-table" id="holdings-table">
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Exch</th>
+              <th class="num">Qty</th>
+              <th class="num">Avg buy</th>
+              <th class="num">LTP</th>
+              <th class="num">Day %</th>
+              <th class="num">P&L</th>
+              <th class="num">Sellable</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="holdings-tbody">
+            <tr><td colspan="9" class="zd-empty">No holdings</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Open orders (filtered to equity) -->
+      <h2 class="zd-section-h">
+        Open equity orders
+        <span class="count" id="open-orders-count">0</span>
+      </h2>
+      <div class="zd-table-wrap" style="margin-bottom: 16px;">
+        <table class="zd-table" id="open-orders-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Side</th>
+              <th>Symbol</th>
+              <th>Exch</th>
+              <th>Type</th>
+              <th>Product</th>
+              <th class="num">Qty</th>
+              <th class="num">Price</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="open-orders-tbody">
+            <tr><td colspan="10" class="zd-empty">No open orders</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- GTT triggers -->
+      <h2 class="zd-section-h">
+        GTT triggers
+        <span class="count" id="gtt-count">0</span>
+      </h2>
+      <div class="zd-table-wrap">
+        <table class="zd-table" id="gtt-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Type</th>
+              <th>Symbol</th>
+              <th>Exch</th>
+              <th class="num">SL</th>
+              <th class="num">TP</th>
+              <th class="num">Qty</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="gtt-tbody">
+            <tr><td colspan="10" class="zd-empty">No active GTTs</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="zd-toast" id="toast"><div class="head"></div><div class="body"></div></div>
+
+<script src="/nav.js"></script>
+<script>
+/* ──────────────────────────────────────────────────────────────────────
+ * State
+ * ──────────────────────────────────────────────────────────────────── */
+let currentSymbol  = '';
+let currentExchange = 'NSE';
+let lastLtp = null;
+let marketIsOpen = true;   // backend decides via auto_amo; we use this
+                            // only to nudge order_type defaults
+
+/* ── DOM grabs (compact) ───────────────────────────────────────────── */
+const $ = id => document.getElementById(id);
+
+/* ── Currency / time helpers (same conventions as zerodha.html) ────── */
+function inr(v, d=2) {
+  if (v == null || isNaN(v)) return '₹—';
+  return '₹' + Number(v).toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function num(v, d=2) {
+  if (v == null || isNaN(v)) return '—';
+  return Number(v).toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function pct(v, d=2) {
+  if (v == null || isNaN(v)) return '—';
+  return Number(v).toFixed(d) + '%';
+}
+function shortTime(iso) {
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleTimeString('en-IN', { hour12:false }); }
+  catch { return iso; }
+}
+
+/* ── Toast ─────────────────────────────────────────────────────────── */
+function toast(kind, head, body) {
+  const t = $('toast');
+  t.className = 'zd-toast ' + (kind === 'bad' ? 'bad' : 'good');
+  t.querySelector('.head').textContent = head;
+  t.querySelector('.body').textContent = body || '';
+  t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), 4500);
+}
+
+/* ── Symbol input + LTP polling ─────────────────────────────────────── */
+let ltpTimer = null;
+function setSymbol(sym, exch) {
+  currentSymbol = (sym || '').toUpperCase().trim();
+  currentExchange = (exch || 'NSE').toUpperCase();
+  $('symbol-input').value = currentSymbol;
+  $('exchange-input').value = currentExchange;
+  $('ltp-meta').textContent = currentSymbol
+    ? `${currentExchange}:${currentSymbol}`
+    : 'No symbol selected';
+  pollLtp();
+  pollAvailableToSell();
+  updateGttPreview();
+}
+
+async function pollLtp() {
+  if (!currentSymbol) { $('ltp-price').textContent = '—'; return; }
+  const key = `${currentExchange}:${currentSymbol}`;
+  try {
+    const r = await fetch(`/api/zerodha/v1/quote?syms=${encodeURIComponent(key)}`);
+    if (!r.ok) throw new Error();
+    const data = await r.json();
+    const row = data[key] || data[Object.keys(data)[0]];
+    if (!row) { $('ltp-price').textContent = '—'; return; }
+    const ltp = row.last_price ?? row.ltp;
+    const close = (row.ohlc && row.ohlc.close) || row.previous_close;
+    lastLtp = ltp;
+    $('ltp-price').textContent = inr(ltp);
+    if (close && ltp) {
+      const ch = ltp - close;
+      const chp = (ch / close) * 100;
+      const klass = ch >= 0 ? 'good' : 'bad';
+      $('ltp-change').innerHTML = `<span class="change ${klass}">${ch >= 0 ? '+' : ''}${num(ch,2)}<br>${ch>=0?'+':''}${pct(chp,2)}</span>`;
+    }
+    const session = $('chip-session');
+    if (row.depth) {
+      session.className = 'zd-chip good';
+      session.querySelector('strong').textContent = 'open';
+      marketIsOpen = true;
+    }
+    updateGttPreview();
+  } catch (_) {
+    $('ltp-price').textContent = '—';
+  }
+}
+
+async function pollAvailableToSell() {
+  if (!currentSymbol) { $('sell-available').value = '—'; return; }
+  try {
+    const r = await fetch(`/api/zerodha/v1/equity/available-to-sell/${encodeURIComponent(currentSymbol)}`);
+    if (!r.ok) return;
+    const data = await r.json();
+    $('sell-available').value = String(data.available ?? '0');
+  } catch (_) { $('sell-available').value = '—'; }
+}
+
+/* ── GTT live preview ─────────────────────────────────────────────── */
+function updateGttPreview() {
+  const lp  = lastLtp;
+  const sl  = parseFloat($('gtt-sl').value);
+  const tp  = parseFloat($('gtt-tp').value);
+  const qty = parseInt($('gtt-qty').value || '0', 10);
+  $('gtt-lp').textContent = lp ? inr(lp) : '—';
+  if (!lp || isNaN(sl) || isNaN(tp)) {
+    $('gtt-sl-px').textContent = '—';
+    $('gtt-tp-px').textContent = '—';
+    $('gtt-sl-amt').textContent = '';
+    $('gtt-tp-amt').textContent = '';
+    return;
+  }
+  const slPx = lp * (1 - sl/100);
+  const tpPx = lp * (1 + tp/100);
+  $('gtt-sl-px').textContent = inr(slPx);
+  $('gtt-tp-px').textContent = inr(tpPx);
+  if (qty > 0) {
+    $('gtt-sl-amt').textContent = '-' + inr((lp - slPx) * qty);
+    $('gtt-tp-amt').textContent = '+' + inr((tpPx - lp) * qty);
+  } else {
+    $('gtt-sl-amt').textContent = '';
+    $('gtt-tp-amt').textContent = '';
+  }
+}
+
+/* ── Wiring ───────────────────────────────────────────────────────── */
+$('symbol-input').addEventListener('change', e => setSymbol(e.target.value, $('exchange-input').value));
+$('symbol-input').addEventListener('keydown', e => { if (e.key === 'Enter') setSymbol(e.target.value, $('exchange-input').value); });
+$('exchange-input').addEventListener('change', e => setSymbol($('symbol-input').value, e.target.value));
+
+$('buy-order-type').addEventListener('change', e => {
+  $('buy-price-wrap').style.display = e.target.value === 'LIMIT' ? '' : 'none';
+});
+$('sell-order-type').addEventListener('change', e => {
+  $('sell-price-wrap').style.display = e.target.value === 'LIMIT' ? '' : 'none';
+});
+$('sell-product').addEventListener('change', e => {
+  $('sell-product-pill').textContent = e.target.value;
+});
+
+['gtt-sl', 'gtt-tp', 'gtt-qty'].forEach(id =>
+  $(id).addEventListener('input', updateGttPreview)
+);
+
+$('btn-fill-sell').addEventListener('click', async () => {
+  await pollAvailableToSell();
+  const avail = parseInt($('sell-available').value, 10);
+  if (avail > 0) $('sell-qty').value = avail;
+});
+
+/* ── Buy / sell / GTT placement ───────────────────────────────────── */
+async function placeBuy() {
+  if (!currentSymbol) return toast('bad', 'No symbol', 'Pick a tradingsymbol first.');
+  const qty = parseInt($('buy-qty').value, 10);
+  if (!qty || qty <= 0) return toast('bad', 'Bad quantity', 'Quantity must be > 0.');
+  const orderType = $('buy-order-type').value;
+  const body = {
+    tradingsymbol: currentSymbol,
+    exchange:      currentExchange,
+    quantity:      qty,
+    order_type:    orderType,
+    product:       $('buy-product').value,
+    tag:           $('buy-tag').value || 'MANUAL_DASHBOARD',
+    auto_amo:      true,
+  };
+  if (orderType === 'LIMIT') {
+    const px = parseFloat($('buy-price').value);
+    if (!px || px <= 0) return toast('bad', 'Bad price', 'Limit price required.');
+    body.price = px;
+  }
+  $('btn-buy').disabled = true;
+  try {
+    const r = await fetch('/api/zerodha/v1/equity/buy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || j.error || `status ${r.status}`);
+    toast('good', 'Buy placed', `${currentSymbol} qty=${qty} → order_id ${j.order_id}`);
+    refreshAll();
+  } catch (e) {
+    toast('bad', 'Buy failed', String(e.message || e));
+  } finally {
+    $('btn-buy').disabled = false;
+  }
+}
+
+async function placeSell() {
+  if (!currentSymbol) return toast('bad', 'No symbol', 'Pick a tradingsymbol first.');
+  const qty = parseInt($('sell-qty').value, 10);
+  if (!qty || qty <= 0) return toast('bad', 'Bad quantity', 'Quantity must be > 0.');
+  const orderType = $('sell-order-type').value;
+  const body = {
+    tradingsymbol: currentSymbol,
+    exchange:      currentExchange,
+    quantity:      qty,
+    order_type:    orderType,
+    product:       $('sell-product').value,
+    tag:           'MANUAL_DASHBOARD',
+    auto_amo:      true,
+  };
+  if (orderType === 'LIMIT') {
+    const px = parseFloat($('sell-price').value);
+    if (!px || px <= 0) return toast('bad', 'Bad price', 'Limit price required.');
+    body.price = px;
+  }
+  if (!confirm(`Confirm SELL ${qty} ${currentSymbol} @ ${orderType}${body.price ? ' ₹' + body.price : ''} ?`)) return;
+  $('btn-sell').disabled = true;
+  try {
+    const r = await fetch('/api/zerodha/v1/equity/sell', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || j.error || `status ${r.status}`);
+    toast('good', 'Sell placed', `${currentSymbol} qty=${qty} → order_id ${j.order_id}`);
+    refreshAll();
+  } catch (e) {
+    toast('bad', 'Sell failed', String(e.message || e));
+  } finally {
+    $('btn-sell').disabled = false;
+  }
+}
+
+async function placeGtt() {
+  if (!currentSymbol) return toast('bad', 'No symbol', 'Pick a tradingsymbol first.');
+  if (!lastLtp)       return toast('bad', 'No price', 'Wait for LTP before placing GTT.');
+  const qty = parseInt($('gtt-qty').value, 10);
+  const sl  = parseFloat($('gtt-sl').value);
+  const tp  = parseFloat($('gtt-tp').value);
+  if (!qty || qty <= 0)    return toast('bad', 'Bad quantity', 'Quantity must be > 0.');
+  if (!sl || !tp || sl<=0 || tp<=0) return toast('bad', 'Bad SL/TP', 'Both percentages must be positive.');
+  const slPx = lastLtp * (1 - sl/100);
+  const tpPx = lastLtp * (1 + tp/100);
+  const body = {
+    tradingsymbol:       currentSymbol,
+    exchange:            currentExchange,
+    quantity:            qty,
+    last_price:          lastLtp,
+    stop_loss_trigger:   slPx,
+    take_profit_trigger: tpPx,
+    product:             'CNC',
+  };
+  if (!confirm(`Place OCO GTT for ${currentSymbol} qty=${qty}\n  SL ${inr(slPx)} ( -${sl}% )\n  TP ${inr(tpPx)} ( +${tp}% )`)) return;
+  $('btn-gtt').disabled = true;
+  try {
+    const r = await fetch('/api/zerodha/v1/gtt/oco', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || `status ${r.status}`);
+    toast('good', 'GTT armed', `trigger_id ${j.trigger_id}`);
+    pollGtts();
+  } catch (e) {
+    toast('bad', 'GTT failed', String(e.message || e));
+  } finally {
+    $('btn-gtt').disabled = false;
+  }
+}
+
+async function cancelGtt(trigger_id) {
+  if (!confirm('Cancel GTT ' + trigger_id + '?')) return;
+  try {
+    const r = await fetch(`/api/zerodha/v1/gtt/${trigger_id}`, { method: 'DELETE' });
+    if (!r.ok) {
+      const j = await r.json().catch(()=>({}));
+      throw new Error(j.detail || `status ${r.status}`);
+    }
+    toast('good', 'GTT cancelled', `trigger_id ${trigger_id}`);
+    pollGtts();
+  } catch (e) {
+    toast('bad', 'Cancel failed', String(e.message || e));
+  }
+}
+window.cancelGtt = cancelGtt;   // for inline onclick handlers in table rows
+
+async function cancelOrder(order_id) {
+  if (!confirm('Cancel order ' + order_id + '?')) return;
+  try {
+    const r = await fetch(`/api/zerodha/v1/order/cancel/${order_id}`, { method: 'POST' });
+    if (!r.ok) {
+      const j = await r.json().catch(()=>({}));
+      throw new Error(j.detail || `status ${r.status}`);
+    }
+    toast('good', 'Order cancelled', `order_id ${order_id}`);
+    pollOpenOrders();
+  } catch (e) {
+    toast('bad', 'Cancel failed', String(e.message || e));
+  }
+}
+window.cancelOrder = cancelOrder;
+
+$('btn-buy').addEventListener('click', placeBuy);
+$('btn-sell').addEventListener('click', placeSell);
+$('btn-gtt').addEventListener('click', placeGtt);
+
+/* ── Right-column pollers ─────────────────────────────────────────── */
+async function pollHoldings() {
+  try {
+    const r = await fetch('/api/zerodha/v1/holdings');
+    if (!r.ok) return;
+    const rows = await r.json();
+    if (!Array.isArray(rows)) return;
+    $('holdings-count').textContent = rows.length;
+    const tbody = $('holdings-tbody');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="9" class="zd-empty">No holdings</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(h => {
+      const ltp = h.last_price ?? h.average_price;
+      const pnl = (ltp - h.average_price) * h.quantity;
+      const dayPct = h.day_change_percentage;
+      const sellable = Math.max(0, (h.quantity || 0) - (h.t1_quantity || 0));
+      return `<tr onclick="(function(){
+          document.getElementById('symbol-input').value = '${h.tradingsymbol}';
+          document.getElementById('exchange-input').value = '${h.exchange}';
+          setSymbol('${h.tradingsymbol}','${h.exchange}');
+          document.getElementById('gtt-qty').value = ${sellable};
+        })()" style="cursor:pointer;">
+        <td class="sym">${h.tradingsymbol}</td>
+        <td class="mute">${h.exchange||''}</td>
+        <td class="num">${h.quantity||0}</td>
+        <td class="num">${num(h.average_price,2)}</td>
+        <td class="num">${num(ltp,2)}</td>
+        <td class="num ${dayPct>0?'good':dayPct<0?'bad':'mute'}">${pct(dayPct,2)}</td>
+        <td class="num ${pnl>0?'good':pnl<0?'bad':'mute'}">${num(pnl,2)}</td>
+        <td class="num">${sellable}</td>
+        <td>${h.t1_quantity>0 ? `<span class="zd-tag warn" title="T+1 unsettled">T1=${h.t1_quantity}</span>` : ''}</td>
+      </tr>`;
+    }).join('');
+  } catch (_) {}
+}
+window.setSymbol = setSymbol;
+
+async function pollOpenOrders() {
+  try {
+    const r = await fetch('/api/zerodha/v1/orders');
+    if (!r.ok) return;
+    const rows = await r.json();
+    if (!Array.isArray(rows)) return;
+    const open = rows.filter(o =>
+      ['OPEN','TRIGGER PENDING','OPEN PENDING','VALIDATION PENDING'].includes((o.status||'').toUpperCase()) &&
+      ['NSE','BSE'].includes((o.exchange||'').toUpperCase())
+    );
+    $('open-orders-count').textContent = open.length;
+    const tbody = $('open-orders-tbody');
+    if (!open.length) {
+      tbody.innerHTML = '<tr><td colspan="10" class="zd-empty">No open equity orders</td></tr>';
+      return;
+    }
+    tbody.innerHTML = open.map(o => {
+      const sideTag = `<span class="zd-tag ${(o.transaction_type||'').toLowerCase()==='buy'?'buy':'sell'}">${o.transaction_type}</span>`;
+      const statusTag = `<span class="zd-tag open">${o.status}</span>`;
+      return `<tr>
+        <td class="mute">${shortTime(o.order_timestamp)}</td>
+        <td>${sideTag}</td>
+        <td class="sym">${o.tradingsymbol}</td>
+        <td class="mute">${o.exchange}</td>
+        <td class="mute">${o.order_type}</td>
+        <td class="mute">${o.product}</td>
+        <td class="num">${o.quantity}</td>
+        <td class="num">${o.price ? num(o.price,2) : '—'}</td>
+        <td>${statusTag}</td>
+        <td><button class="zd-btn sm ghost" onclick="cancelOrder('${o.order_id}')">✕</button></td>
+      </tr>`;
+    }).join('');
+  } catch (_) {}
+}
+
+async function pollGtts() {
+  try {
+    const r = await fetch('/api/zerodha/v1/gtt');
+    if (!r.ok) return;
+    const rows = await r.json();
+    if (!Array.isArray(rows)) return;
+    const active = rows.filter(g => ['active', 'triggered'].includes(g.status));
+    $('gtt-count').textContent = active.length;
+    const tbody = $('gtt-tbody');
+    if (!active.length) {
+      tbody.innerHTML = '<tr><td colspan="10" class="zd-empty">No active GTTs</td></tr>';
+      return;
+    }
+    tbody.innerHTML = active.map(g => {
+      const cond = g.condition || {};
+      const sym = cond.tradingsymbol || '';
+      const exch = cond.exchange || '';
+      const orders = g.orders || [];
+      const qty = (orders[0] && orders[0].quantity) || 0;
+      const tv = cond.trigger_values || [];
+      const sl = tv[0]; const tp = tv[1];
+      return `<tr>
+        <td class="mute">${g.id || ''}</td>
+        <td><span class="zd-tag ${g.type==='two-leg'?'open':''}">${g.type==='two-leg'?'OCO':'SINGLE'}</span></td>
+        <td class="sym">${sym}</td>
+        <td class="mute">${exch}</td>
+        <td class="num bad">${sl!=null?num(sl,2):'—'}</td>
+        <td class="num good">${tp!=null?num(tp,2):'—'}</td>
+        <td class="num">${qty}</td>
+        <td><span class="zd-tag ${g.status==='active'?'open':'complete'}">${g.status}</span></td>
+        <td class="mute">${shortTime(g.created_at)}</td>
+        <td><button class="zd-btn sm ghost" onclick="cancelGtt(${g.id})">✕</button></td>
+      </tr>`;
+    }).join('');
+  } catch (_) {}
+}
+
+async function pollFunds() {
+  try {
+    const r = await fetch('/api/zerodha/v1/funds?segment=equity');
+    if (!r.ok) return;
+    const data = await r.json();
+    const avail = (data.available && data.available.cash) || data.live_balance || data.cash;
+    $('eq-funds-val').textContent = inr(avail);
+    $('chip-eq').classList.add('good');
+  } catch (_) {}
+}
+
+function updateAsOf() {
+  $('as-of-val').textContent = new Date().toLocaleTimeString('en-IN', { hour12:false });
+}
+
+function refreshAll() {
+  pollHoldings(); pollOpenOrders(); pollGtts(); pollFunds(); updateAsOf();
+}
+
+/* ── Boot ─────────────────────────────────────────────────────────── */
+// Pre-fill from query string ?sym=RELIANCE&exch=NSE
+(function init() {
+  const q = new URLSearchParams(location.search);
+  const sym = q.get('sym') || '';
+  const exch = (q.get('exch') || 'NSE').toUpperCase();
+  if (sym) setSymbol(sym, exch);
+  refreshAll();
+  setInterval(pollLtp, 2000);
+  setInterval(refreshAll, 5000);
+  setInterval(pollAvailableToSell, 8000);
+})();
+</script>
+</body>
+</html>

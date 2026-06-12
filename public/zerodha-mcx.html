@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+  public/zerodha-mcx.html
+  ──────────────────────────────────────────────────────────────────────────
+  Zerodha MCX Commodity — front-month futures buy/sell with lot sizing.
+
+  What's different from spot equity:
+    * MCX is futures-only at Zerodha (no spot commodity segment for retail).
+      We trade the front-month future and roll at expiry+1.
+    * Quantity is in UNITS (lots × lot_size), not shares. The UI keeps
+      everything in LOTS for readability and the backend resolver does
+      the conversion. e.g. CRUDEOIL lot_size=100 → 1 lot = 100 barrels.
+    * Lot sizes + tick sizes vary by underlying (NATGAS lot=1250 mmBtu,
+      GOLD lot=100g, SILVER lot=30kg…) — we fetch fresh from the
+      instruments dump rather than hardcode.
+    * Product is NRML (carry-forward) by default; MIS for intraday.
+    * NO GTT on MCX. Protective orders are real SL-M + LIMIT TP orders
+      placed in the live book; the engine attaches them automatically
+      after the buy fills (or operator can place via the form here).
+    * Session hours: non-agri 09:00–23:30 IST (CRUDE/GOLD/SILVER/NATGAS/
+      base metals); agri 09:00–21:00 IST (CARDAMOM/COTTON/MENTHAOIL/…).
+
+  Backend deps:
+    GET  /api/zerodha/v1/commodity/contracts/{underlying}?max_months=3
+    GET  /api/zerodha/v1/commodity/front-month/{underlying}
+    GET  /api/zerodha/v1/quote?syms=MCX:CRUDEOIL26JUNFUT
+    POST /api/zerodha/v1/commodity/buy
+    POST /api/zerodha/v1/commodity/sell
+    POST /api/zerodha/v1/commodity/estimate-margin
+    POST /api/zerodha/v1/order/place       (for SL-M + TP child orders)
+    GET  /api/zerodha/v1/positions
+    GET  /api/zerodha/v1/orders
+    GET  /api/zerodha/v1/funds?segment=commodity
+-->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Zerodha MCX — BookNow</title>
+<link rel="stylesheet" href="/css/zerodha.css" />
+<style>
+  .mcx-grid { display: grid; grid-template-columns: 420px 1fr; gap: 14px; align-items: start; }
+  @media (max-width: 1100px) { .mcx-grid { grid-template-columns: 1fr; } }
+  .contract-info {
+    background: var(--bn-panel-2);
+    border-radius: 6px; padding: 10px 12px; margin-top: 8px;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 14px;
+    font-size: 11px;
+  }
+  .contract-info .k { color: var(--bn-muted); }
+  .contract-info .v { color: var(--bn-text); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .ltp-block {
+    background: var(--bn-panel-2);
+    border-radius: 6px; padding: 12px; margin-top: 10px;
+    display: grid; grid-template-columns: 1fr auto; gap: 4px; align-items: center;
+  }
+  .ltp-block .price { font-size: 28px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .ltp-block .meta  { color: var(--bn-muted); font-size: 11px; }
+  .ltp-block .change.good { color: var(--bn-good); }
+  .ltp-block .change.bad  { color: var(--bn-bad); }
+  .form-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--bn-line); }
+  .form-section:first-of-type { margin-top: 0; padding-top: 0; border: 0; }
+  .form-section h4 {
+    margin: 0 0 8px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: .5px;
+    color: var(--bn-muted);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .form-section h4 .pill {
+    padding: 1px 7px; border-radius: 4px;
+    font-size: 9px; font-weight: 800;
+    background: var(--bn-panel-2); color: var(--bn-text);
+  }
+  .lot-hint {
+    font-size: 11px; color: var(--bn-muted); line-height: 1.5;
+    background: rgba(41,182,246,.05);
+    border: 1px solid rgba(41,182,246,.2);
+    padding: 7px 10px; border-radius: 5px;
+  }
+  .margin-preview {
+    background: var(--bn-panel-2);
+    border-radius: 5px; padding: 8px 10px; margin-top: 6px;
+    font-size: 11px; font-variant-numeric: tabular-nums;
+    display: grid; grid-template-columns: auto 1fr; gap: 4px 14px;
+  }
+  .margin-preview .k { color: var(--bn-muted); }
+  .margin-preview .v { color: var(--bn-text); font-weight: 700; text-align: right; }
+  .margin-preview .v.warn { color: var(--bn-warn); }
+  .protect-preview {
+    background: var(--bn-panel-2);
+    border-radius: 5px; padding: 8px 10px; margin-top: 6px;
+    font-size: 11px; font-variant-numeric: tabular-nums;
+    display: grid; grid-template-columns: auto 1fr auto; gap: 4px 12px; align-items: baseline;
+  }
+  .protect-preview .k { color: var(--bn-muted); }
+  .protect-preview .v.good { color: var(--bn-good); font-weight: 700; }
+  .protect-preview .v.bad  { color: var(--bn-bad);  font-weight: 700; }
+</style>
+</head>
+<body class="zd">
+<div class="zd-wrap">
+
+  <h1 class="zd-title">🛢️ Zerodha MCX Commodity</h1>
+  <div class="zd-sub">
+    Front-month MCX futures (CRUDE / GOLD / SILVER / NATGAS / base metals).
+    Lot-sized — quantities entered in lots, backend converts to units.
+    Protective SL / TP are real orders (no GTT on MCX).
+  </div>
+
+  <div class="zd-row" style="margin-bottom:18px;">
+    <div class="zd-chip" id="chip-session"><span class="dot"></span><span>session <strong id="session-val">…</strong></span></div>
+    <div class="zd-chip" id="chip-cm"><span class="dot"></span><span>commodity funds <strong id="cm-funds-val">₹—</strong></span></div>
+    <div class="zd-chip" id="chip-as-of">refresh <strong id="as-of-val">—</strong></div>
+  </div>
+
+  <div class="mcx-grid">
+
+    <!-- ═══ LEFT: ticket ═════════════════════════════════════════ -->
+    <div>
+
+      <!-- Underlying + contract -->
+      <div class="zd-card">
+        <h3><span class="ic">🔎</span> Contract</h3>
+        <div class="zd-form">
+          <div class="row">
+            <div class="field">
+              <label>Underlying</label>
+              <select id="underlying-input">
+                <!-- Populated from /commodity/* — keep the most-traded ones
+                     at the top so the operator's typical workflow is one
+                     click away. The full list comes from the instruments
+                     dump, but these defaults match DEFAULT_MCX_UNDERLYINGS
+                     in commodity.py. -->
+                <option value="CRUDEOIL">CRUDEOIL</option>
+                <option value="NATURALGAS">NATURALGAS</option>
+                <option value="GOLD">GOLD</option>
+                <option value="GOLDM">GOLDM (mini)</option>
+                <option value="SILVER">SILVER</option>
+                <option value="SILVERM">SILVERM (mini)</option>
+                <option value="COPPER">COPPER</option>
+                <option value="ZINC">ZINC</option>
+                <option value="ALUMINIUM">ALUMINIUM</option>
+                <option value="LEAD">LEAD</option>
+                <option value="NICKEL">NICKEL</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Expiry</label>
+              <select id="expiry-input"><option>front month</option></select>
+            </div>
+          </div>
+        </div>
+
+        <div class="contract-info" id="contract-info">
+          <span class="k">tradingsymbol</span> <span class="v" id="ci-sym">—</span> <span></span>
+          <span class="k">lot size</span> <span class="v" id="ci-lot">—</span> <span class="k" id="ci-lot-unit">units</span>
+          <span class="k">tick size</span> <span class="v" id="ci-tick">—</span> <span class="k">₹</span>
+          <span class="k">expiry</span>   <span class="v" id="ci-exp">—</span> <span class="k" id="ci-exp-days"></span>
+        </div>
+
+        <div class="ltp-block" id="ltp-block">
+          <div>
+            <div class="price" id="ltp-price">—</div>
+            <div class="meta" id="ltp-meta">—</div>
+          </div>
+          <div class="meta" id="ltp-change">—</div>
+        </div>
+      </div>
+
+      <!-- BUY card -->
+      <div class="zd-card" style="margin-top:12px;">
+        <h3><span class="ic">🛒</span> Buy <span class="pill" style="margin-left:auto;background:rgba(46,204,113,.18);color:var(--bn-good);font-size:10px;padding:1px 7px;border-radius:4px;font-weight:800;">NRML</span></h3>
+        <div class="zd-form">
+          <div class="row cols-3">
+            <div class="field">
+              <label>Product</label>
+              <select id="buy-product">
+                <option value="NRML">NRML (carry)</option>
+                <option value="MIS">MIS (intraday)</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Order type</label>
+              <select id="buy-order-type">
+                <option value="MARKET">MARKET</option>
+                <option value="LIMIT">LIMIT</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Lots</label>
+              <input id="buy-lots" type="number" min="1" step="1" value="1" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="field" id="buy-price-wrap" style="display:none;">
+              <label>Limit price (₹)</label>
+              <input id="buy-price" type="number" min="0" step="0.05" placeholder="auto-snap to tick" />
+            </div>
+            <div class="field">
+              <label>Units (auto)</label>
+              <input id="buy-units" type="text" disabled value="—" />
+            </div>
+          </div>
+          <div class="margin-preview" id="margin-preview" style="display:none;">
+            <span class="k">SPAN</span>      <span class="v" id="mp-span">—</span>
+            <span class="k">Exposure</span>  <span class="v" id="mp-exposure">—</span>
+            <span class="k">Total req.</span> <span class="v" id="mp-total">—</span>
+            <span class="k">Available</span>  <span class="v" id="mp-avail">—</span>
+          </div>
+          <div class="actions">
+            <button class="zd-btn buy" id="btn-buy" style="flex:1;">🛢️ Buy</button>
+            <button class="zd-btn ghost sm" id="btn-est">₹?</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- SELL card -->
+      <div class="zd-card" style="margin-top:12px;">
+        <h3><span class="ic">📤</span> Sell / square off</h3>
+        <div class="zd-form">
+          <div class="row cols-3">
+            <div class="field">
+              <label>Product</label>
+              <select id="sell-product">
+                <option value="NRML">NRML</option>
+                <option value="MIS">MIS</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Order type</label>
+              <select id="sell-order-type">
+                <option value="MARKET">MARKET</option>
+                <option value="LIMIT">LIMIT</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Lots</label>
+              <input id="sell-lots" type="number" min="1" step="1" value="1" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="field" id="sell-price-wrap" style="display:none;">
+              <label>Limit price (₹)</label>
+              <input id="sell-price" type="number" min="0" step="0.05" />
+            </div>
+            <div class="field">
+              <label>Current position</label>
+              <input id="sell-pos" type="text" disabled value="—" />
+            </div>
+          </div>
+          <div class="actions">
+            <button class="zd-btn sell" id="btn-sell" style="flex:1;">📤 Sell</button>
+            <button class="zd-btn ghost sm" id="btn-fill-sell" title="Fill from open position">↑ pos</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Protect card (SL-M + LIMIT TP — not GTT) -->
+      <div class="zd-card" style="margin-top:12px;">
+        <h3><span class="ic">🎯</span> Protect (SL-M + LIMIT TP) <span class="pill" style="margin-left:auto;background:rgba(241,196,15,.18);color:var(--bn-warn);font-size:10px;padding:1px 7px;border-radius:4px;font-weight:800;">no GTT on MCX</span></h3>
+        <div class="lot-hint" style="margin-bottom:8px;">
+          MCX doesn't support GTT — protection orders go straight into
+          the live book as SL-M (stop) + LIMIT (target). Cancel them
+          before manually squaring off, or the square-off will leave
+          one leg open.
+        </div>
+        <div class="zd-form">
+          <div class="row cols-3">
+            <div class="field">
+              <label>Lots to protect</label>
+              <input id="pr-lots" type="number" min="1" step="1" value="1" />
+            </div>
+            <div class="field">
+              <label>SL %</label>
+              <input id="pr-sl" type="number" min="0.1" step="0.1" value="1.5" />
+            </div>
+            <div class="field">
+              <label>TP %</label>
+              <input id="pr-tp" type="number" min="0.1" step="0.1" value="3.0" />
+            </div>
+          </div>
+          <div class="protect-preview">
+            <span class="k">LTP</span>         <span class="v" id="pr-lp">—</span><span></span>
+            <span class="k">SL trigger</span>  <span class="v bad" id="pr-sl-px">—</span> <span class="k" id="pr-sl-amt"></span>
+            <span class="k">TP limit</span>    <span class="v good" id="pr-tp-px">—</span> <span class="k" id="pr-tp-amt"></span>
+          </div>
+          <div class="actions">
+            <button class="zd-btn sell sm" id="btn-place-sl">Place SL-M only</button>
+            <button class="zd-btn buy sm"  id="btn-place-tp">Place TP only</button>
+            <button class="zd-btn"         id="btn-place-both" style="flex:1; background:rgba(41,182,246,.15); color:var(--bn-accent); border-color:rgba(41,182,246,.35);">Place both</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ═══ RIGHT: positions + orders + expiry chain ═══════════ -->
+    <div>
+
+      <!-- MCX positions -->
+      <h2 class="zd-section-h">
+        MCX positions <span class="count" id="pos-count">0</span>
+      </h2>
+      <div class="zd-table-wrap" style="margin-bottom: 16px;">
+        <table class="zd-table" id="pos-table">
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Product</th>
+              <th class="num">Net qty</th>
+              <th class="num">Lots</th>
+              <th class="num">Avg buy</th>
+              <th class="num">LTP</th>
+              <th class="num">M2M P&L</th>
+              <th class="num">Day P&L</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="pos-tbody">
+            <tr><td colspan="9" class="zd-empty">No MCX positions</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Open MCX orders -->
+      <h2 class="zd-section-h">
+        Open MCX orders <span class="count" id="oo-count">0</span>
+      </h2>
+      <div class="zd-table-wrap" style="margin-bottom: 16px;">
+        <table class="zd-table" id="oo-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Side</th>
+              <th>Symbol</th>
+              <th>Type</th>
+              <th>Product</th>
+              <th class="num">Qty</th>
+              <th class="num">Price / trig</th>
+              <th>Status</th>
+              <th>Tag</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="oo-tbody">
+            <tr><td colspan="10" class="zd-empty">No open MCX orders</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Expiry chain -->
+      <h2 class="zd-section-h">
+        Expiry chain (for roll planning)
+        <span class="count" id="chain-count">—</span>
+      </h2>
+      <div class="zd-table-wrap">
+        <table class="zd-table" id="chain-table">
+          <thead>
+            <tr>
+              <th>Front?</th>
+              <th>Tradingsymbol</th>
+              <th>Expiry</th>
+              <th class="num">Days to expiry</th>
+              <th class="num">Lot size</th>
+              <th class="num">Tick size</th>
+              <th>Token</th>
+            </tr>
+          </thead>
+          <tbody id="chain-tbody">
+            <tr><td colspan="7" class="zd-empty">No expiries</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="zd-toast" id="toast"><div class="head"></div><div class="body"></div></div>
+
+<script src="/nav.js"></script>
+<script>
+/* ──────────────────────────────────────────────────────────────────────
+ * State
+ * ──────────────────────────────────────────────────────────────────── */
+let underlying     = 'CRUDEOIL';
+let contract       = null;   // resolved {tradingsymbol, lot_size, tick_size, expiry, ...}
+let expiryChain    = [];     // [{tradingsymbol, expiry, lot_size, …}, …]
+let selectedSymbol = '';     // tradingsymbol the form is acting on
+let lastLtp        = null;
+let availableFunds = null;
+
+const $ = id => document.getElementById(id);
+
+function inr(v, d=2) {
+  if (v == null || isNaN(v)) return '₹—';
+  return '₹' + Number(v).toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function num(v, d=2) {
+  if (v == null || isNaN(v)) return '—';
+  return Number(v).toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function pct(v, d=2) {
+  if (v == null || isNaN(v)) return '—';
+  return Number(v).toFixed(d) + '%';
+}
+function shortTime(iso) {
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleTimeString('en-IN', { hour12:false }); }
+  catch { return iso; }
+}
+function daysToExpiry(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  const now = new Date();
+  return Math.max(0, Math.ceil((d - now) / (1000*60*60*24)));
+}
+function toast(kind, head, body) {
+  const t = $('toast');
+  t.className = 'zd-toast ' + (kind === 'bad' ? 'bad' : 'good');
+  t.querySelector('.head').textContent = head;
+  t.querySelector('.body').textContent = body || '';
+  t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), 4500);
+}
+
+/* ── Resolve underlying → contract chain ────────────────────────── */
+async function loadChain() {
+  $('chain-tbody').innerHTML = '<tr><td colspan="7" class="zd-empty">Loading…</td></tr>';
+  try {
+    const r = await fetch(`/api/zerodha/v1/commodity/contracts/${encodeURIComponent(underlying)}?max_months=4`);
+    if (!r.ok) throw new Error('status ' + r.status);
+    const rows = await r.json();
+    expiryChain = rows;
+    $('chain-count').textContent = rows.length;
+    if (!rows.length) {
+      $('chain-tbody').innerHTML = '<tr><td colspan="7" class="zd-empty">No expiries</td></tr>';
+      contract = null;
+      renderContract();
+      return;
+    }
+    // Default to the front month.
+    contract = rows[0];
+    selectedSymbol = contract.tradingsymbol;
+    renderExpiryDropdown();
+    renderContract();
+    $('chain-tbody').innerHTML = rows.map((c, i) => `<tr style="cursor:pointer;" onclick="pickExpiry('${c.tradingsymbol}')">
+      <td>${i===0 ? '<span class="zd-tag complete">FRONT</span>' : ''}</td>
+      <td class="sym">${c.tradingsymbol}</td>
+      <td>${c.expiry}</td>
+      <td class="num">${daysToExpiry(c.expiry)}</td>
+      <td class="num">${c.lot_size}</td>
+      <td class="num">${c.tick_size.toFixed(2)}</td>
+      <td class="mute">${c.instrument_token}</td>
+    </tr>`).join('');
+    pollLtp();
+    pollMcxPosition();
+  } catch (e) {
+    toast('bad', 'Contract load failed', String(e.message || e));
+    $('chain-tbody').innerHTML = `<tr><td colspan="7" class="zd-empty">Failed: ${e.message}</td></tr>`;
+  }
+}
+window.pickExpiry = function (sym) {
+  const found = expiryChain.find(c => c.tradingsymbol === sym);
+  if (!found) return;
+  contract = found;
+  selectedSymbol = sym;
+  $('expiry-input').value = sym;
+  renderContract();
+  pollLtp();
+  pollMcxPosition();
+};
+
+function renderExpiryDropdown() {
+  const sel = $('expiry-input');
+  sel.innerHTML = expiryChain.map(c =>
+    `<option value="${c.tradingsymbol}">${c.tradingsymbol} (${c.expiry})</option>`
+  ).join('');
+  sel.value = (contract && contract.tradingsymbol) || '';
+}
+
+function renderContract() {
+  if (!contract) {
+    $('ci-sym').textContent = '—';
+    $('ci-lot').textContent = '—';
+    $('ci-tick').textContent = '—';
+    $('ci-exp').textContent = '—';
+    $('ci-exp-days').textContent = '';
+    $('ltp-meta').textContent = '—';
+    $('buy-units').value = '—';
+    return;
+  }
+  $('ci-sym').textContent = contract.tradingsymbol;
+  $('ci-lot').textContent = contract.lot_size;
+  $('ci-tick').textContent = contract.tick_size.toFixed(2);
+  $('ci-exp').textContent = contract.expiry;
+  const d = daysToExpiry(contract.expiry);
+  $('ci-exp-days').textContent = d != null ? `(${d}d)` : '';
+  $('ltp-meta').textContent = `MCX:${contract.tradingsymbol}`;
+  updateBuyUnits();
+  updateProtectPreview();
+}
+
+function updateBuyUnits() {
+  const lots = parseInt($('buy-lots').value || '0', 10);
+  if (!contract || !lots) { $('buy-units').value = '—'; return; }
+  $('buy-units').value = (lots * contract.lot_size) + ' units';
+}
+
+/* ── LTP polling ─────────────────────────────────────────────────── */
+async function pollLtp() {
+  if (!contract) return;
+  const key = `MCX:${contract.tradingsymbol}`;
+  try {
+    const r = await fetch(`/api/zerodha/v1/quote?syms=${encodeURIComponent(key)}`);
+    if (!r.ok) return;
+    const data = await r.json();
+    const row = data[key] || data[Object.keys(data)[0]];
+    if (!row) return;
+    const ltp = row.last_price ?? row.ltp;
+    const close = (row.ohlc && row.ohlc.close) || row.previous_close;
+    lastLtp = ltp;
+    $('ltp-price').textContent = inr(ltp);
+    if (close) {
+      const ch = ltp - close;
+      const chp = (ch / close) * 100;
+      const klass = ch >= 0 ? 'good' : 'bad';
+      $('ltp-change').innerHTML = `<span class="change ${klass}">${ch >= 0 ? '+':''}${num(ch,2)}<br>${ch>=0?'+':''}${pct(chp,2)}</span>`;
+    }
+    updateProtectPreview();
+  } catch (_) {}
+}
+
+/* ── Margin estimate ─────────────────────────────────────────────── */
+async function estimateMargin() {
+  if (!contract) return toast('bad', 'No contract', 'Pick an underlying first.');
+  const lots = parseInt($('buy-lots').value || '0', 10);
+  if (!lots) return toast('bad', 'Bad lots', 'Lots must be > 0.');
+  const orderType = $('buy-order-type').value;
+  const body = {
+    underlying:       underlying,
+    lots:             lots,
+    transaction_type: 'BUY',
+    product:          $('buy-product').value,
+  };
+  if (orderType === 'LIMIT') {
+    const px = parseFloat($('buy-price').value);
+    if (px) body.price = px;
+  }
+  try {
+    const r = await fetch('/api/zerodha/v1/commodity/estimate-margin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error('status ' + r.status);
+    const data = await r.json();
+    $('margin-preview').style.display = '';
+    $('mp-span').textContent     = inr(data.span);
+    $('mp-exposure').textContent = inr(data.exposure);
+    const totalEl = $('mp-total');
+    totalEl.textContent = inr(data.total);
+    const availEl = $('mp-avail');
+    availEl.textContent = availableFunds != null ? inr(availableFunds) : '—';
+    const ok = availableFunds != null && data.total <= availableFunds;
+    totalEl.classList.toggle('warn', !ok);
+    availEl.classList.toggle('warn', !ok);
+  } catch (e) {
+    toast('bad', 'Margin estimate failed', String(e.message || e));
+  }
+}
+
+/* ── Protective-order preview ────────────────────────────────────── */
+function updateProtectPreview() {
+  const lp = lastLtp;
+  const sl = parseFloat($('pr-sl').value);
+  const tp = parseFloat($('pr-tp').value);
+  const lots = parseInt($('pr-lots').value || '0', 10);
+  $('pr-lp').textContent = lp ? inr(lp) : '—';
+  if (!lp || isNaN(sl) || isNaN(tp) || !contract) {
+    $('pr-sl-px').textContent = '—';
+    $('pr-tp-px').textContent = '—';
+    return;
+  }
+  const slPx = lp * (1 - sl/100);
+  const tpPx = lp * (1 + tp/100);
+  $('pr-sl-px').textContent = inr(slPx);
+  $('pr-tp-px').textContent = inr(tpPx);
+  if (lots && contract.lot_size) {
+    const units = lots * contract.lot_size;
+    $('pr-sl-amt').textContent = '-' + inr((lp - slPx) * units);
+    $('pr-tp-amt').textContent = '+' + inr((tpPx - lp) * units);
+  } else {
+    $('pr-sl-amt').textContent = '';
+    $('pr-tp-amt').textContent = '';
+  }
+}
+
+/* ── Buy / sell / protect placement ──────────────────────────────── */
+async function placeBuy() {
+  if (!contract) return toast('bad', 'No contract', 'Pick an underlying first.');
+  const lots = parseInt($('buy-lots').value || '0', 10);
+  if (!lots) return toast('bad', 'Bad lots', 'Lots must be > 0.');
+  const orderType = $('buy-order-type').value;
+  const body = {
+    underlying: underlying,
+    lots:       lots,
+    order_type: orderType,
+    product:    $('buy-product').value,
+    tag:        'MANUAL_DASHBOARD',
+  };
+  if (orderType === 'LIMIT') {
+    const px = parseFloat($('buy-price').value);
+    if (!px || px <= 0) return toast('bad', 'Bad price', 'Limit price required.');
+    body.price = px;
+  }
+  if (!confirm(`Buy ${lots} lot(s) of ${contract.tradingsymbol}\n  = ${lots * contract.lot_size} units @ ${orderType}${body.price ? ' ₹'+body.price : ''}`)) return;
+  $('btn-buy').disabled = true;
+  try {
+    const r = await fetch('/api/zerodha/v1/commodity/buy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || j.error || `status ${r.status}`);
+    toast('good', 'Buy placed', `${j.tradingsymbol} ${j.lots} lot(s) → ${j.order_id}`);
+    refreshAll();
+  } catch (e) {
+    toast('bad', 'Buy failed', String(e.message || e));
+  } finally {
+    $('btn-buy').disabled = false;
+  }
+}
+
+async function placeSell() {
+  if (!contract) return toast('bad', 'No contract', 'Pick an underlying first.');
+  const lots = parseInt($('sell-lots').value || '0', 10);
+  if (!lots) return toast('bad', 'Bad lots', 'Lots must be > 0.');
+  const orderType = $('sell-order-type').value;
+  const body = {
+    tradingsymbol: contract.tradingsymbol,
+    lots:          lots,
+    order_type:    orderType,
+    product:       $('sell-product').value,
+    tag:           'MANUAL_DASHBOARD',
+  };
+  if (orderType === 'LIMIT') {
+    const px = parseFloat($('sell-price').value);
+    if (!px || px <= 0) return toast('bad', 'Bad price', 'Limit price required.');
+    body.price = px;
+  }
+  if (!confirm(`Sell ${lots} lot(s) of ${contract.tradingsymbol}\n  = ${lots * contract.lot_size} units @ ${orderType}${body.price ? ' ₹'+body.price : ''}`)) return;
+  $('btn-sell').disabled = true;
+  try {
+    const r = await fetch('/api/zerodha/v1/commodity/sell', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || j.error || `status ${r.status}`);
+    toast('good', 'Sell placed', `${j.tradingsymbol} ${lots} lot(s) → ${j.order_id}`);
+    refreshAll();
+  } catch (e) {
+    toast('bad', 'Sell failed', String(e.message || e));
+  } finally {
+    $('btn-sell').disabled = false;
+  }
+}
+
+/* Protective orders use the raw /order/place endpoint so we can set
+ * order_type=SL-M and trigger_price.  This mirrors what
+ * CommodityService.place_stop_loss does server-side. */
+async function placeProtect(side) {
+  if (!contract || !lastLtp) return toast('bad', 'No price', 'Wait for LTP.');
+  const lots = parseInt($('pr-lots').value || '0', 10);
+  if (!lots) return toast('bad', 'Bad lots', 'Lots must be > 0.');
+  const sl = parseFloat($('pr-sl').value);
+  const tp = parseFloat($('pr-tp').value);
+  const units = lots * contract.lot_size;
+  const slPx = roundTick(lastLtp * (1 - sl/100));
+  const tpPx = roundTick(lastLtp * (1 + tp/100));
+
+  const slBody = {
+    variety:          'regular',
+    exchange:         'MCX',
+    tradingsymbol:    contract.tradingsymbol,
+    transaction_type: 'SELL',
+    quantity:         units,
+    product:          $('sell-product').value || 'NRML',
+    order_type:       'SL-M',
+    trigger_price:    slPx,
+    tag:              'MCX_SL',
+  };
+  const tpBody = {
+    variety:          'regular',
+    exchange:         'MCX',
+    tradingsymbol:    contract.tradingsymbol,
+    transaction_type: 'SELL',
+    quantity:         units,
+    product:          $('sell-product').value || 'NRML',
+    order_type:       'LIMIT',
+    price:            tpPx,
+    tag:              'MCX_TP',
+  };
+
+  if (side === 'both') {
+    if (!confirm(`Place protection on ${contract.tradingsymbol} ${lots} lot(s):\n  SL-M @ ${inr(slPx)}\n  LIMIT TP @ ${inr(tpPx)}`)) return;
+  }
+  try {
+    if (side === 'sl' || side === 'both') {
+      const r = await fetch('/api/zerodha/v1/order/place', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(slBody) });
+      const j = await r.json();
+      if (!r.ok) throw new Error('SL failed: ' + (j.detail || r.status));
+      toast('good', 'SL placed', `SL-M @ ${inr(slPx)} → ${j.order_id}`);
+    }
+    if (side === 'tp' || side === 'both') {
+      const r = await fetch('/api/zerodha/v1/order/place', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(tpBody) });
+      const j = await r.json();
+      if (!r.ok) throw new Error('TP failed: ' + (j.detail || r.status));
+      toast('good', 'TP placed', `LIMIT @ ${inr(tpPx)} → ${j.order_id}`);
+    }
+    pollOpenOrders();
+  } catch (e) {
+    toast('bad', 'Protect failed', String(e.message || e));
+  }
+}
+
+function roundTick(px) {
+  if (!contract || !contract.tick_size) return px;
+  return Math.round(px / contract.tick_size) * contract.tick_size;
+}
+
+async function cancelOrder(order_id) {
+  if (!confirm('Cancel order ' + order_id + '?')) return;
+  try {
+    const r = await fetch(`/api/zerodha/v1/order/cancel/${order_id}`, { method: 'POST' });
+    if (!r.ok) throw new Error('status ' + r.status);
+    toast('good', 'Order cancelled', order_id);
+    pollOpenOrders();
+  } catch (e) {
+    toast('bad', 'Cancel failed', String(e.message || e));
+  }
+}
+window.cancelOrder = cancelOrder;
+
+/* ── Right column ────────────────────────────────────────────────── */
+async function pollMcxPosition() {
+  try {
+    const r = await fetch('/api/zerodha/v1/positions');
+    if (!r.ok) return;
+    const data = await r.json();
+    const net = (data && data.net) || [];
+    const mcx = net.filter(p => (p.exchange || '').toUpperCase() === 'MCX');
+    $('pos-count').textContent = mcx.length;
+
+    // Show current position for selected contract in the SELL card.
+    if (contract) {
+      const here = mcx.find(p => p.tradingsymbol === contract.tradingsymbol);
+      $('sell-pos').value = here ? `${here.quantity} units (${Math.round(here.quantity / (contract.lot_size||1))} lots)` : '0';
+    }
+
+    const tbody = $('pos-tbody');
+    if (!mcx.length) {
+      tbody.innerHTML = '<tr><td colspan="9" class="zd-empty">No MCX positions</td></tr>';
+      return;
+    }
+    tbody.innerHTML = mcx.map(p => {
+      const ls = (expiryChain.find(c => c.tradingsymbol === p.tradingsymbol) || {}).lot_size
+                  || (contract && contract.lot_size) || 0;
+      const lots = ls ? Math.round(p.quantity / ls) : '—';
+      const pnl = p.pnl ?? p.m2m ?? 0;
+      const day = p.day_buy_value && p.day_sell_value ? (p.day_sell_value - p.day_buy_value) : null;
+      return `<tr style="cursor:pointer;" onclick="pickExpiry('${p.tradingsymbol}')">
+        <td class="sym">${p.tradingsymbol}</td>
+        <td class="mute">${p.product||''}</td>
+        <td class="num ${p.quantity>0?'good':p.quantity<0?'bad':'mute'}">${p.quantity}</td>
+        <td class="num">${lots}</td>
+        <td class="num">${num(p.average_price,2)}</td>
+        <td class="num">${num(p.last_price,2)}</td>
+        <td class="num ${pnl>0?'good':pnl<0?'bad':'mute'}">${num(pnl,2)}</td>
+        <td class="num">${day!=null ? num(day,2) : '—'}</td>
+        <td></td>
+      </tr>`;
+    }).join('');
+  } catch (_) {}
+}
+
+async function pollOpenOrders() {
+  try {
+    const r = await fetch('/api/zerodha/v1/orders');
+    if (!r.ok) return;
+    const rows = await r.json();
+    if (!Array.isArray(rows)) return;
+    const open = rows.filter(o =>
+      ['OPEN','TRIGGER PENDING','OPEN PENDING','VALIDATION PENDING'].includes((o.status||'').toUpperCase()) &&
+      (o.exchange || '').toUpperCase() === 'MCX'
+    );
+    $('oo-count').textContent = open.length;
+    const tbody = $('oo-tbody');
+    if (!open.length) {
+      tbody.innerHTML = '<tr><td colspan="10" class="zd-empty">No open MCX orders</td></tr>';
+      return;
+    }
+    tbody.innerHTML = open.map(o => {
+      const sideTag = `<span class="zd-tag ${(o.transaction_type||'').toLowerCase()==='buy'?'buy':'sell'}">${o.transaction_type}</span>`;
+      const statusTag = `<span class="zd-tag open">${o.status}</span>`;
+      const px = o.order_type === 'SL-M' || o.order_type === 'SL'
+        ? `trig ${num(o.trigger_price,2)}`
+        : (o.price ? num(o.price,2) : '—');
+      return `<tr>
+        <td class="mute">${shortTime(o.order_timestamp)}</td>
+        <td>${sideTag}</td>
+        <td class="sym">${o.tradingsymbol}</td>
+        <td class="mute">${o.order_type}</td>
+        <td class="mute">${o.product}</td>
+        <td class="num">${o.quantity}</td>
+        <td class="num">${px}</td>
+        <td>${statusTag}</td>
+        <td class="mute">${o.tag||''}</td>
+        <td><button class="zd-btn sm ghost" onclick="cancelOrder('${o.order_id}')">✕</button></td>
+      </tr>`;
+    }).join('');
+  } catch (_) {}
+}
+
+async function pollFunds() {
+  try {
+    const r = await fetch('/api/zerodha/v1/funds?segment=commodity');
+    if (!r.ok) return;
+    const data = await r.json();
+    const avail = (data.available && data.available.cash) || data.live_balance || data.cash;
+    availableFunds = avail;
+    $('cm-funds-val').textContent = inr(avail);
+    $('chip-cm').classList.add('good');
+  } catch (_) {}
+}
+
+function updateAsOf() {
+  $('as-of-val').textContent = new Date().toLocaleTimeString('en-IN', { hour12:false });
+}
+
+function refreshAll() {
+  pollMcxPosition(); pollOpenOrders(); pollFunds(); updateAsOf();
+}
+
+/* ── Form wiring ─────────────────────────────────────────────────── */
+$('underlying-input').addEventListener('change', () => {
+  underlying = $('underlying-input').value;
+  loadChain();
+});
+$('expiry-input').addEventListener('change', e => pickExpiry(e.target.value));
+$('buy-order-type').addEventListener('change', e =>
+  $('buy-price-wrap').style.display = e.target.value === 'LIMIT' ? '' : 'none'
+);
+$('sell-order-type').addEventListener('change', e =>
+  $('sell-price-wrap').style.display = e.target.value === 'LIMIT' ? '' : 'none'
+);
+$('buy-lots').addEventListener('input', updateBuyUnits);
+['pr-lots','pr-sl','pr-tp'].forEach(id => $(id).addEventListener('input', updateProtectPreview));
+
+$('btn-buy').addEventListener('click', placeBuy);
+$('btn-sell').addEventListener('click', placeSell);
+$('btn-est').addEventListener('click', estimateMargin);
+$('btn-place-sl').addEventListener('click', () => placeProtect('sl'));
+$('btn-place-tp').addEventListener('click', () => placeProtect('tp'));
+$('btn-place-both').addEventListener('click', () => placeProtect('both'));
+$('btn-fill-sell').addEventListener('click', async () => {
+  await pollMcxPosition();
+  // sell-pos has format "N units (L lots)" — extract lots.
+  const m = String($('sell-pos').value).match(/\((\d+)\s*lots\)/);
+  if (m) $('sell-lots').value = m[1];
+});
+
+/* ── Boot ─────────────────────────────────────────────────────────── */
+(function init() {
+  const q = new URLSearchParams(location.search);
+  const u = q.get('u');
+  if (u) {
+    underlying = u.toUpperCase();
+    $('underlying-input').value = underlying;
+  }
+  loadChain();
+  pollFunds();
+  setInterval(pollLtp, 2000);
+  setInterval(refreshAll, 5000);
+  setInterval(loadChain, 60000);   // refresh chain every minute (rolls)
+})();
+</script>
+</body>
+</html>

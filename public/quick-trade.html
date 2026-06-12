@@ -1,0 +1,2116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Quick Trade · BookNow</title>
+<style>
+  :root {
+    --bg:#0b0e14; --panel:#141925; --panel2:#1b2130; --border:#232b3d;
+    --text:#e6e9f0; --muted:#8a93a6; --green:#16c784; --red:#ea3943;
+    --amber:#f0b90b; --blue:#4b9fff; --orange:#ff8c42;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  main { padding:18px; max-width:1600px; margin:0 auto; }
+
+  /* ── Header strip — symbol + live price + 24h + Binance link ── */
+  .ribbon {
+    display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+    padding:14px 18px; background:var(--panel); border:1px solid var(--border);
+    border-radius:12px; margin-bottom:14px;
+  }
+  .symfield {
+    display:flex; align-items:center; gap:8px;
+    background:var(--panel2); border:1px solid var(--border);
+    border-radius:8px; padding:6px 10px; min-width:240px;
+  }
+  .symfield input {
+    background:transparent; border:0; color:var(--text);
+    font-size:14px; font-weight:700; letter-spacing:.4px;
+    outline:none; flex:1; min-width:0; text-transform:uppercase;
+  }
+  .symfield input::placeholder { color:var(--muted); font-weight:400; letter-spacing:0; text-transform:none; }
+  .price-big { font-size:30px; font-weight:800; font-variant-numeric:tabular-nums; line-height:1; }
+  .price-big.up { color:var(--green); }
+  .price-big.down { color:var(--red); }
+  .pct { font-size:14px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .pct.up { color:var(--green); }
+  .pct.down { color:var(--red); }
+  .stat-mini { display:flex; flex-direction:column; gap:2px; min-width:90px; }
+  .stat-mini .k { font-size:10px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
+  .stat-mini .v { font-size:13px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .conn-pill {
+    margin-left:auto; display:inline-flex; gap:6px; align-items:center;
+    padding:5px 10px; border:1px solid var(--border); border-radius:14px;
+    background:var(--panel2); font-size:11px; color:var(--muted);
+  }
+  .conn-pill .dot { width:7px; height:7px; border-radius:50%; background:var(--muted); }
+  .conn-pill.live { color:var(--green); border-color:rgba(22,199,132,.4); }
+  .conn-pill.live .dot { background:var(--green); box-shadow:0 0 6px var(--green); animation:pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% {opacity:1;} 50% {opacity:.4;} }
+  .bn-link {
+    display:inline-flex; gap:5px; padding:5px 11px;
+    background:rgba(240,185,11,.12); border:1px solid rgba(240,185,11,.45);
+    color:var(--amber) !important; text-decoration:none;
+    border-radius:7px; font-size:12px; font-weight:700;
+  }
+  .bn-link:hover { background:rgba(240,185,11,.22); }
+
+  /* ── Chart panel (iter126) ── */
+  .chart-wrap { background:var(--panel); border:1px solid var(--border); border-radius:12px; margin-bottom:14px; overflow:hidden; }
+  .chart-head {
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    padding:8px 14px; border-bottom:1px solid var(--border);
+    font-size:11px; color:var(--muted);
+  }
+  .tf-tabs { display:flex; gap:2px; }
+  .tf-tabs button {
+    padding:4px 10px; background:transparent; border:0; cursor:pointer;
+    color:var(--muted); font-weight:600; font-size:11px; border-radius:5px;
+    font-variant-numeric:tabular-nums;
+  }
+  .tf-tabs button:hover { color:var(--text); background:rgba(255,255,255,.04); }
+  .tf-tabs button.active { background:var(--panel2); color:var(--amber); }
+  .ohlc-strip {
+    display:flex; gap:14px; flex-wrap:wrap; font-size:11px;
+    font-variant-numeric:tabular-nums; font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  }
+  .ohlc-strip span { color:var(--muted); }
+  .ohlc-strip .lbl { color:var(--muted); }
+  .ohlc-strip .v { color:var(--text); font-weight:600; }
+  .ohlc-strip .v.up { color:var(--green); }
+  .ohlc-strip .v.down { color:var(--red); }
+  .chart-meta { margin-left:auto; font-size:10px; color:var(--muted); }
+  .chart-canvas { position:relative; width:100%; height:380px; background:var(--panel); }
+  .ma-legend { display:flex; gap:10px; font-size:11px; }
+  .ma-legend .ma { display:inline-flex; align-items:center; gap:4px; color:var(--muted); }
+  .ma-legend .ma .swatch { width:10px; height:3px; border-radius:2px; }
+  .chart-hint {
+    font-size:10px; color:var(--muted); text-align:center;
+    padding:4px 14px; border-top:1px solid var(--border); background:var(--panel2);
+  }
+
+  /* ── Main grid ── */
+  .grid {
+    display:grid;
+    grid-template-columns: 320px 1fr 320px;
+    gap:14px;
+  }
+  @media (max-width: 1100px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
+  .panel-head {
+    padding:10px 14px; border-bottom:1px solid var(--border);
+    font-size:12px; font-weight:700; letter-spacing:.4px; text-transform:uppercase; color:var(--muted);
+    display:flex; justify-content:space-between; align-items:center;
+  }
+  .panel-head .sub { font-size:10px; font-weight:500; letter-spacing:0; color:var(--muted); text-transform:none; }
+
+  /* ── Order book ── */
+  .ob {
+    font-variant-numeric:tabular-nums; font-size:12px;
+    font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  }
+  .ob-row {
+    display:grid; grid-template-columns: 1fr 1fr 1fr;
+    padding:3px 14px; cursor:pointer; position:relative; overflow:hidden;
+    transition:background .08s;
+  }
+  .ob-row:hover { background:rgba(255,255,255,.03); }
+  .ob-row .bar { position:absolute; right:0; top:0; bottom:0; opacity:.18; pointer-events:none; }
+  .ob-row.ask .bar { background:var(--red); }
+  .ob-row.bid .bar { background:var(--green); }
+  .ob-row .price { font-weight:700; }
+  .ob-row.ask .price { color:var(--red); }
+  .ob-row.bid .price { color:var(--green); }
+  .ob-row .qty,
+  .ob-row .total { color:var(--muted); text-align:right; }
+  .ob-head {
+    display:grid; grid-template-columns: 1fr 1fr 1fr;
+    padding:6px 14px; font-size:10px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted);
+  }
+  .ob-head .qty, .ob-head .total { text-align:right; }
+  .ob-mid {
+    padding:8px 14px; text-align:center; border-top:1px solid var(--border); border-bottom:1px solid var(--border);
+    background:var(--panel2);
+  }
+  .ob-mid .last { font-size:16px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .ob-mid .last.up { color:var(--green); }
+  .ob-mid .last.down { color:var(--red); }
+  .ob-mid .spread { font-size:10px; color:var(--muted); margin-top:2px; }
+
+  /* ── Order form ── */
+  .side-toggle { display:flex; }
+  .side-toggle button {
+    flex:1; padding:10px; border:0; cursor:pointer; font-weight:800; font-size:13px;
+    background:var(--panel2); color:var(--muted); transition:all .15s;
+    border-bottom:2px solid transparent;
+  }
+  .side-toggle button.active.buy  { color:var(--green); border-bottom-color:var(--green); background:rgba(22,199,132,.08); }
+  .side-toggle button.active.sell { color:var(--red);   border-bottom-color:var(--red);   background:rgba(234,57,67,.08); }
+  .type-toggle {
+    display:inline-flex; gap:0; margin:12px 14px 0; padding:3px;
+    background:var(--panel2); border:1px solid var(--border); border-radius:8px;
+  }
+  .type-toggle button {
+    padding:5px 14px; background:transparent; border:0; cursor:pointer;
+    color:var(--muted); font-weight:600; font-size:11px; border-radius:5px;
+  }
+  .type-toggle button.active { background:var(--bg); color:var(--text); }
+  .form-body { padding:12px 14px 14px; }
+  .field { margin-top:10px; }
+  .field-label {
+    font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px;
+    margin-bottom:4px; display:flex; justify-content:space-between;
+  }
+  .field-input {
+    display:flex; align-items:center; gap:6px;
+    background:var(--panel2); border:1px solid var(--border); border-radius:8px;
+    padding:0 10px; height:38px;
+  }
+  .field-input input {
+    flex:1; background:transparent; border:0; outline:none; color:var(--text);
+    font-size:14px; font-weight:600; font-variant-numeric:tabular-nums; min-width:0;
+  }
+  .field-input .unit { font-size:11px; color:var(--muted); }
+  .pct-buttons { display:flex; gap:4px; margin-top:8px; }
+  .pct-buttons button {
+    flex:1; padding:5px; background:var(--panel2); border:1px solid var(--border);
+    color:var(--muted); border-radius:6px; cursor:pointer; font-size:11px; font-weight:600;
+    font-variant-numeric:tabular-nums;
+  }
+  .pct-buttons button:hover { color:var(--text); border-color:var(--muted); }
+  /* iter131 — Wallet hint sits between the two button rows */
+  .wallet-hint {
+    margin-top:6px; font-size:10px; color:var(--muted);
+    display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap;
+  }
+  .wallet-hint .hint-val {
+    color:var(--text); font-weight:700; font-variant-numeric:tabular-nums;
+    font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  }
+  .wallet-hint .hint-val.held { color:var(--amber); }
+  .wallet-hint .hint-val.free { color:var(--green); }
+  /* iter131 — Position panel above the form when SELL is selected */
+  .position-panel {
+    margin:0 14px 0; padding:10px 12px;
+    background:var(--panel2); border:1px solid var(--border); border-radius:8px;
+    font-size:11px;
+  }
+  .position-panel.empty { color:var(--muted); text-align:center; padding:14px; }
+  .position-panel .pp-row {
+    display:flex; justify-content:space-between; align-items:center;
+    padding:2px 0; font-variant-numeric:tabular-nums;
+  }
+  .position-panel .pp-row .k { color:var(--muted); }
+  .position-panel .pp-row .v {
+    font-family:"JetBrains Mono",ui-monospace,Menlo,monospace; font-weight:600; color:var(--text);
+  }
+  .position-panel .pp-row.big {
+    border-top:1px solid var(--border); margin-top:6px; padding-top:8px;
+  }
+  .position-panel .pp-row.big .k { color:var(--text); font-weight:700; }
+  .position-panel .pp-row.big .v { font-size:13px; }
+  .position-panel .pp-row .v.up { color:var(--green); }
+  .position-panel .pp-row .v.down { color:var(--red); }
+  .position-panel .pp-actions {
+    display:flex; gap:6px; margin-top:8px;
+  }
+  .position-panel .pp-actions button {
+    flex:1; padding:4px; background:var(--panel); border:1px solid var(--border);
+    color:var(--muted); border-radius:5px; cursor:pointer; font-size:10px; font-weight:600;
+    transition:all .12s;
+  }
+  .position-panel .pp-actions button:hover { color:var(--text); border-color:var(--amber); }
+  /* iter131 — Wallet strip in the top ribbon */
+  .wallet-strip {
+    display:inline-flex; gap:12px; align-items:center;
+    padding:5px 11px;
+    background:var(--panel2); border:1px solid var(--border); border-radius:14px;
+    font-size:11px;
+  }
+  .wallet-strip span { color:var(--muted); }
+  .wallet-strip .v {
+    color:var(--text); font-weight:700; font-variant-numeric:tabular-nums;
+    font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  }
+  .wallet-strip .v.free { color:var(--green); }
+  .wallet-strip .v.held { color:var(--amber); }
+  .submit-btn {
+    width:100%; margin-top:14px; padding:13px; border:0; border-radius:9px;
+    font-size:14px; font-weight:800; letter-spacing:.3px; cursor:pointer;
+    transition:all .15s;
+  }
+  .submit-btn.buy  { background:var(--green); color:#0b0e14; }
+  .submit-btn.buy:hover  { filter:brightness(1.1); }
+  .submit-btn.sell { background:var(--red);   color:#0b0e14; }
+  .submit-btn.sell:hover { filter:brightness(1.1); }
+  /* iter134 — armed/disarmed UI removed when single-click became default. */
+  .submit-btn:disabled { opacity:.55; cursor:not-allowed; }
+  .form-help {
+    margin-top:10px; font-size:10px; color:var(--muted); line-height:1.45;
+  }
+  .form-toggles {
+    display:flex; gap:14px; align-items:center; margin-top:10px;
+    font-size:11px; color:var(--muted);
+  }
+  .form-toggles label { display:inline-flex; gap:5px; cursor:pointer; user-select:none; }
+  .form-toggles input { accent-color:var(--amber); }
+
+  /* ── Trades feed ── */
+  .trades { font-variant-numeric:tabular-nums; font-family:"JetBrains Mono",ui-monospace,Menlo,monospace; font-size:11px; }
+  .trades-row {
+    display:grid; grid-template-columns: 1fr 1fr 0.8fr;
+    padding:3px 14px;
+  }
+  .trades-row:nth-child(odd) { background:rgba(255,255,255,.02); }
+  .trades-row .price { font-weight:700; }
+  .trades-row.buy  .price { color:var(--green); }
+  .trades-row.sell .price { color:var(--red); }
+  .trades-row .qty,
+  .trades-row .time { color:var(--muted); text-align:right; }
+
+  /* ── Open orders ── */
+  .open-orders { font-size:12px; }
+  .oo-row {
+    display:grid; grid-template-columns: 1fr 1fr 1fr 1fr auto;
+    padding:7px 14px; border-bottom:1px solid var(--border); align-items:center;
+  }
+  .oo-row .sym { font-weight:700; }
+  .oo-row .side.BUY { color:var(--green); }
+  .oo-row .side.SELL { color:var(--red); }
+  .oo-row .px, .oo-row .qty { font-variant-numeric:tabular-nums; color:var(--muted); }
+  .oo-row .cancel {
+    background:transparent; border:1px solid var(--border); border-radius:6px;
+    color:var(--muted); padding:3px 9px; cursor:pointer; font-size:11px;
+  }
+  .oo-row .cancel:hover { color:var(--red); border-color:var(--red); }
+  .empty { padding:24px 14px; text-align:center; color:var(--muted); font-size:12px; }
+
+  /* iter137 — Open Orders summary chip + per-symbol cards */
+  .oo-chip {
+    display:inline-flex; gap:10px; align-items:center;
+    font-size:10px; font-weight:600; letter-spacing:.2px;
+    font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  }
+  .oo-chip .oo-chip-grp { color:var(--muted); }
+  .oo-chip .oo-chip-grp.up { color:var(--green); }
+  .oo-chip .oo-chip-grp.down { color:var(--red); }
+  .oo-summary {
+    display:flex; flex-direction:column; gap:6px;
+    padding:10px 14px;
+    background:var(--panel2);
+    border-bottom:1px solid var(--border);
+  }
+  .oos-card {
+    padding:8px 10px;
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-radius:8px;
+  }
+  .oos-head {
+    font-size:12px; font-weight:700; margin-bottom:6px; letter-spacing:.3px;
+  }
+  .oos-side {
+    display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+    padding:3px 0; font-size:11px;
+    font-variant-numeric:tabular-nums;
+  }
+  .oos-side.buy  .oos-tag { color:var(--green); }
+  .oos-side.sell .oos-tag { color:var(--red); }
+  /* iter138 — HELD row uses amber to distinguish from open-BUY (green) */
+  .oos-side.held .oos-tag { color:var(--amber); }
+  .oos-side.held.muted    { color:var(--muted); }
+  .oos-side.held.muted .oos-tag { color:var(--muted); }
+  .oos-tag { font-weight:800; min-width:38px; font-size:10px; letter-spacing:.4px; }
+  .oos-stat { display:inline-flex; gap:4px; align-items:baseline; }
+  .oos-stat .k {
+    color:var(--muted); text-transform:uppercase; letter-spacing:.4px; font-size:9px;
+  }
+  .oos-stat .v {
+    font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;
+    color:var(--text); font-weight:600;
+  }
+  .oos-round {
+    font-size:11px; padding-top:6px; border-top:1px solid var(--border); margin-top:5px;
+    display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;
+  }
+  .oos-round.muted { color:var(--muted); }
+  .oos-round .k { color:var(--muted); text-transform:uppercase; letter-spacing:.3px; font-size:9px; }
+  .oos-round .v {
+    font-family:"JetBrains Mono",ui-monospace,Menlo,monospace; font-weight:700; color:var(--text);
+  }
+  .oos-round .v.up   { color:var(--green); }
+  .oos-round .v.down { color:var(--red); }
+
+  /* ── iter132 — Edit-open-order modal + pencil button ── */
+  .oo-row .edit {
+    background:transparent; border:1px solid var(--border);
+    color:var(--muted); padding:3px 7px; cursor:pointer; font-size:11px;
+    border-radius:6px; margin-right:4px;
+    transition:color .12s, border-color .12s;
+  }
+  .oo-row .edit:hover { color:var(--amber); border-color:var(--amber); }
+  .modal {
+    position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+    z-index:2000;
+  }
+  .modal.show { display:flex; }
+  .modal-back {
+    position:absolute; inset:0; background:rgba(0,0,0,.65);
+    backdrop-filter:blur(2px); -webkit-backdrop-filter:blur(2px);
+  }
+  .modal-box {
+    position:relative; background:var(--panel); border:1px solid var(--border);
+    border-radius:12px; padding:18px 20px; min-width:360px; max-width:90vw;
+    box-shadow:0 16px 40px rgba(0,0,0,.5);
+    animation:bnModalIn .15s ease-out;
+  }
+  @keyframes bnModalIn { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }
+  .modal-title { font-size:14px; font-weight:700; margin-bottom:4px; }
+  .modal-meta {
+    font-size:11px; color:var(--muted); margin-bottom:14px;
+    font-variant-numeric:tabular-nums;
+    display:flex; gap:8px; flex-wrap:wrap;
+  }
+  .modal-meta .side-BUY  { color:var(--green); font-weight:700; }
+  .modal-meta .side-SELL { color:var(--red);   font-weight:700; }
+  .modal-field { margin-bottom:10px; }
+  .modal-field label {
+    font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px;
+    display:block; margin-bottom:4px;
+  }
+  .modal-field input {
+    width:100%; padding:9px 12px; background:var(--panel2); border:1px solid var(--border);
+    border-radius:8px; color:var(--text); font-size:14px; font-weight:600;
+    font-variant-numeric:tabular-nums; outline:none;
+  }
+  .modal-field input:focus { border-color:var(--blue); }
+  .modal-field input:read-only { color:var(--muted); cursor:default; }
+  .modal-warn {
+    font-size:11px; color:var(--amber); background:rgba(240,185,11,.08);
+    border:1px solid rgba(240,185,11,.3); border-radius:6px;
+    padding:8px 10px; margin:10px 0; line-height:1.4;
+  }
+  .modal-actions { display:flex; gap:8px; margin-top:14px; }
+  .modal-actions button {
+    flex:1; padding:10px; border:0; border-radius:8px; cursor:pointer;
+    font-size:13px; font-weight:700; transition:filter .12s;
+  }
+  .modal-actions button.cancel {
+    background:var(--panel2); color:var(--text); border:1px solid var(--border);
+  }
+  .modal-actions button.confirm { background:var(--amber); color:#0b0e14; }
+  .modal-actions button.confirm:hover { filter:brightness(1.1); }
+  .modal-actions button:disabled { opacity:.55; cursor:not-allowed; }
+
+  /* ── Toasts ── */
+  .toasts { position:fixed; right:18px; top:80px; z-index:1000; display:flex; flex-direction:column; gap:8px; }
+  .toast {
+    background:var(--panel); border:1px solid var(--border); border-radius:9px;
+    padding:10px 14px; font-size:12px; min-width:240px; max-width:360px;
+    box-shadow:0 6px 22px rgba(0,0,0,.4);
+    animation:slide-in .2s ease-out;
+  }
+  .toast.ok    { border-color:rgba(22,199,132,.55); }
+  .toast.warn  { border-color:rgba(240,185,11,.55); }
+  .toast.error { border-color:rgba(234,57,67,.55); }
+  .toast .title { font-weight:700; margin-bottom:3px; }
+  .toast.ok .title    { color:var(--green); }
+  .toast.warn .title  { color:var(--amber); }
+  .toast.error .title { color:var(--red); }
+  @keyframes slide-in { from {transform:translateX(20px); opacity:0;} to {transform:translateX(0); opacity:1;} }
+</style>
+</head>
+<body>
+<main>
+  <!-- Top ribbon — symbol picker, price, 24h stats, conn pill -->
+  <div class="ribbon">
+    <div class="symfield">
+      <span style="color:var(--muted)">🔍</span>
+      <input id="sym-input" type="text" autocomplete="off"
+             placeholder="Type a coin — SOL, SOL/USDT, EDENUSDT…" />
+    </div>
+    <div class="price-big" id="price-big">—</div>
+    <div class="pct" id="pct-24h">—</div>
+    <div class="stat-mini"><div class="k">24h High</div><div class="v" id="s-high">—</div></div>
+    <div class="stat-mini"><div class="k">24h Low</div><div class="v" id="s-low">—</div></div>
+    <div class="stat-mini"><div class="k">24h Vol</div><div class="v" id="s-vol">—</div></div>
+    <a id="bn-link" class="bn-link" target="_blank" rel="noopener" href="https://www.binance.com">🟡 Binance</a>
+    <!-- iter131 — Wallet strip: USDT free + base-asset held, polled every 10s -->
+    <div class="wallet-strip" title="Your free spot balances">
+      <span>💰</span>
+      <span>USDT</span><span class="v free" id="ws-usdt">—</span>
+      <span>·</span>
+      <span id="ws-base-asset">—</span><span class="v held" id="ws-base">—</span>
+    </div>
+    <div id="conn-pill" class="conn-pill"><span class="dot"></span><span id="conn-text">Connecting…</span></div>
+  </div>
+
+  <!-- iter126 — Live candlestick chart panel.  Historical klines via REST,
+       live updates via <sym>@kline_<tf> WebSocket on a separate connection so
+       flipping the timeframe doesn't disrupt the order book. -->
+  <div class="chart-wrap">
+    <div class="chart-head">
+      <span class="lbl">Time</span>
+      <div class="tf-tabs" id="tf-tabs">
+        <button data-tf="1s"  >1s</button>
+        <button data-tf="1m" class="active">1m</button>
+        <button data-tf="5m"  >5m</button>
+        <button data-tf="15m" >15m</button>
+        <button data-tf="1h"  >1h</button>
+        <button data-tf="4h"  >4h</button>
+        <button data-tf="1d"  >1d</button>
+        <button data-tf="1w"  >1w</button>
+        <button data-tf="1M"  >1M</button>
+      </div>
+      <div class="ohlc-strip" id="ohlc-strip">
+        <span><span class="lbl" id="ohlc-time">—</span></span>
+        <span><span class="lbl">Open</span> <span class="v" id="ohlc-o">—</span></span>
+        <span><span class="lbl">High</span> <span class="v" id="ohlc-h">—</span></span>
+        <span><span class="lbl">Low</span> <span class="v" id="ohlc-l">—</span></span>
+        <span><span class="lbl">Close</span> <span class="v" id="ohlc-c">—</span></span>
+        <span><span class="lbl">Change</span> <span class="v" id="ohlc-chg">—</span></span>
+        <span><span class="lbl">Range</span> <span class="v" id="ohlc-rng">—</span></span>
+      </div>
+      <div class="ma-legend">
+        <span class="ma"><span class="swatch" style="background:#f0b90b"></span>MA(7) <span class="v" id="ma7-val">—</span></span>
+        <span class="ma"><span class="swatch" style="background:#e91e63"></span>MA(25) <span class="v" id="ma25-val">—</span></span>
+      </div>
+      <span class="chart-meta" id="chart-meta">—</span>
+    </div>
+    <div id="chart-canvas" class="chart-canvas"></div>
+    <div class="chart-hint">💡 Click any candle to copy its CLOSE price into the order form · scroll to zoom · drag to pan</div>
+  </div>
+
+  <!-- 3-column trading grid -->
+  <div class="grid">
+    <!-- LEFT — order book -->
+    <div class="panel">
+      <div class="panel-head">Order Book <span class="sub" id="ob-sub">click row to fill price</span></div>
+      <div class="ob-head"><span class="price">Price</span><span class="qty">Qty</span><span class="total">Total</span></div>
+      <div id="asks" class="ob"></div>
+      <div class="ob-mid">
+        <div class="last" id="ob-last">—</div>
+        <div class="spread" id="ob-spread">spread —</div>
+      </div>
+      <div id="bids" class="ob"></div>
+    </div>
+
+    <!-- CENTER — BUY + SELL forms side by side -->
+    <div>
+      <div class="panel" style="margin-bottom:14px">
+        <div class="side-toggle">
+          <button id="tab-buy"  class="active buy"  data-side="BUY">⬆️ Buy</button>
+          <button id="tab-sell" class="sell"        data-side="SELL">⬇️ Sell</button>
+        </div>
+        <div class="type-toggle">
+          <button id="tt-limit"  class="active" data-type="LIMIT">Limit</button>
+          <button id="tt-market"             data-type="MARKET">Market</button>
+        </div>
+        <!-- iter131 — Position panel: appears only when SELL is selected,
+             auto-populated from /api/trade/order-history (LIFO matching). -->
+        <div class="position-panel" id="position-panel" style="display:none;margin-top:12px"></div>
+        <div class="form-body">
+          <div class="field" id="price-field">
+            <div class="field-label"><span>Price</span><span id="best-bid-hint" style="cursor:pointer">best bid → tap</span></div>
+            <div class="field-input">
+              <input id="f-price" type="number" step="any" placeholder="0.0000" inputmode="decimal" />
+              <span class="unit" id="f-price-unit">USDT</span>
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label"><span>Quantity</span><span class="unit" id="f-qty-unit">EDEN</span></div>
+            <div class="field-input">
+              <input id="f-qty" type="number" step="any" placeholder="0" inputmode="decimal" />
+              <span class="unit" id="f-qty-unit2">EDEN</span>
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label"><span>Total</span><span class="unit">USDT</span></div>
+            <div class="field-input">
+              <input id="f-total" type="number" step="any" placeholder="0" inputmode="decimal" />
+              <span class="unit">USDT</span>
+            </div>
+          </div>
+          <!-- iter131 — TOP row: fixed USDT amounts for scaling-in batches
+               (operator typically splits a single coin into 4–5 small entries) -->
+          <div class="pct-buttons buy-amts" id="row-amts">
+            <button data-amt="5">$5</button>
+            <button data-amt="10">$10</button>
+            <button data-amt="20">$20</button>
+            <button data-amt="50">$50</button>
+            <button data-amt="100">$100</button>
+          </div>
+          <!-- iter131 — BOTTOM row: % of wallet (USDT free on BUY, base
+               held on SELL).  Live numbers from /api/wallet/balances. -->
+          <div class="pct-buttons wallet-pct" id="row-wpct">
+            <button data-wpct="10">10%</button>
+            <button data-wpct="25">25%</button>
+            <button data-wpct="50">50%</button>
+            <button data-wpct="75">75%</button>
+            <button data-wpct="100">100%</button>
+          </div>
+          <div class="wallet-hint">
+            <span id="wallet-hint-text">Loading wallet…</span>
+            <span id="wallet-hint-pct"></span>
+          </div>
+          <div class="field">
+            <div class="field-label"><span>Take-Profit % (limit-buy only)</span><span class="unit">passed to engine TP logic</span></div>
+            <div class="field-input">
+              <input id="f-tp" type="number" step="0.1" placeholder="0 (disabled)" inputmode="decimal" />
+              <span class="unit">%</span>
+            </div>
+          </div>
+          <button id="submit-btn" class="submit-btn buy">🚀 BUY @ Limit</button>
+          <!-- iter134 — single-click mode is now the only mode; the
+               2-tap arm pattern has been removed. -->
+          <div class="form-toggles" style="font-size:10px;color:var(--muted);justify-content:center">
+            ⚡ Single-click mode — order fires the moment you tap
+          </div>
+          <div class="form-help" id="form-help">
+            🟢 LIMIT BUY routes through the engine's <code>/api/v1/order/limit-buy</code>; the engine sizes the order against your USDT balance and (if TP &gt; 0) places the take-profit leg.<br />
+            🟠 MARKET BUY routes through <code>/api/v1/order/buy</code> with the qty you set here — fastest entry path.<br />
+            🔴 SELL goes through <code>/api/v1/sell</code> and respects partial-qty.
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <span>Open Orders <span class="sub" id="oo-sub">auto-refresh 5s</span></span>
+          <!-- iter137 — compact totals chip filled in by renderOpenOrdersSummary -->
+          <span id="oo-summary-chip" class="oo-chip" style="display:none"></span>
+        </div>
+        <!-- iter137 — per-symbol summary cards (BUY avg / SELL avg / round-trip projection) -->
+        <div id="oo-summary" class="oo-summary" style="display:none"></div>
+        <div id="open-orders" class="open-orders">
+          <div class="empty">No open orders</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT — live trades feed -->
+    <div class="panel">
+      <div class="panel-head">Market Trades <span class="sub">Binance @ &lt;200ms</span></div>
+      <div class="ob-head"><span class="price">Price</span><span class="qty">Qty</span><span class="total">Time</span></div>
+      <div id="trades" class="trades"></div>
+    </div>
+  </div>
+</main>
+
+<!-- iter132 — Edit-open-order cancel-and-replace modal. -->
+<div id="edit-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="em-title">
+  <div class="modal-back" onclick="closeEditModal()"></div>
+  <div class="modal-box">
+    <div class="modal-title" id="em-title">✏️ Edit Order</div>
+    <div class="modal-meta">
+      <span id="em-sym">—</span>
+      <span>·</span>
+      <span id="em-side">—</span>
+      <span>·</span>
+      <span id="em-id">#—</span>
+    </div>
+    <div class="modal-field">
+      <label>Price (USDT)</label>
+      <input id="em-price" type="number" step="any" inputmode="decimal" />
+    </div>
+    <div class="modal-field">
+      <label>Amount</label>
+      <input id="em-qty" type="number" step="any" inputmode="decimal" />
+    </div>
+    <div class="modal-field">
+      <label>Total (USDT)</label>
+      <input id="em-total" type="number" step="any" readonly />
+    </div>
+    <div class="modal-warn">
+      ⚠️ Confirm will <strong>cancel the current order</strong> then place a NEW one with the values above.
+      If your balance is insufficient or the price hits a Binance filter limit, the new order may not be re-placed.
+    </div>
+    <div class="modal-actions">
+      <button class="cancel" type="button" onclick="closeEditModal()">Cancel</button>
+      <!-- iter133 — belt-and-suspenders: inline onclick + addEventListener
+           so even if one wire fails to attach the other still fires. -->
+      <button class="confirm" id="em-confirm" type="button" onclick="confirmEditOrder()">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div id="toasts" class="toasts"></div>
+
+<!-- iter126 — TradingView lightweight-charts (~40KB gz, Apache 2.0).
+     Loaded from jsdelivr CDN; falls back to unpkg if jsdelivr is down. -->
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"
+        onerror="this.onerror=null;this.src='https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js'"></script>
+<script>
+/* ─── iter125 — Quick Trade ─────────────────────────────────────────────
+   Browser ↔ Binance WS gives us depth20@100ms + ticker + aggTrade —
+   the fastest possible market-data path.  The /api/trade/quick-*
+   proxy endpoints on our server handle the actual order placement.
+*/
+
+const $ = (id) => document.getElementById(id);
+
+// State
+const S = {
+  symbol: 'EDENUSDT',
+  side: 'BUY',
+  type: 'LIMIT',
+  lastPrice: 0,
+  prevPrice: 0,
+  bestBid: 0,
+  bestAsk: 0,
+  bids: [], asks: [],
+  ws: null,
+  // iter134 — armed/armedTimer removed; single-click is the only mode.
+  ticker: { high: 0, low: 0, vol: 0, pctChg: 0 },
+};
+
+// ── Helpers ─────────────────────────────────────────────────────────
+function normalizeSym(raw){
+  return String(raw||'').toUpperCase().replace(/[\s_\-\/\\.]+/g, '');
+}
+function fmtPrice(p){
+  if (p == null || !Number.isFinite(+p)) return '—';
+  const n = +p;
+  if (n === 0) return '0';
+  const abs = Math.abs(n);
+  const dec = abs >= 100 ? 2 : abs >= 1 ? 4 : abs >= 0.01 ? 5 : 6;
+  return n.toLocaleString(undefined, { minimumFractionDigits: dec, maximumFractionDigits: dec });
+}
+function fmtQty(q){
+  if (q == null || !Number.isFinite(+q)) return '—';
+  const n = +q;
+  if (n === 0) return '0';
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000) return (n/1_000_000).toFixed(2) + 'M';
+  if (abs >= 10_000)    return (n/1000).toFixed(1) + 'K';
+  if (abs >= 100)       return n.toFixed(0);
+  return n.toFixed(2);
+}
+function fmtVol(v){
+  if (!v) return '—';
+  if (v >= 1e9) return (v/1e9).toFixed(2)+'B';
+  if (v >= 1e6) return (v/1e6).toFixed(2)+'M';
+  if (v >= 1e3) return (v/1e3).toFixed(1)+'K';
+  return String(Math.round(v));
+}
+function fmtTime(ts){
+  if (!ts) return '—';
+  const d = new Date(ts);
+  return d.toLocaleTimeString(undefined, { hour12: false });
+}
+function toast(kind, title, msg){
+  const t = document.createElement('div');
+  t.className = 'toast ' + kind;
+  t.innerHTML = `<div class="title">${title}</div><div>${msg||''}</div>`;
+  $('toasts').appendChild(t);
+  setTimeout(() => { t.style.opacity = 0; t.style.transition = 'opacity .25s'; }, 4500);
+  setTimeout(() => { t.remove(); }, 5000);
+}
+
+// ── Binance WebSocket plumbing ──────────────────────────────────────
+function wsUrl(sym){
+  const s = String(sym).toLowerCase();
+  // Combined streams: depth20@100ms (top-20 orderbook) + bookTicker (best bid/ask, real-time)
+  // + aggTrade (aggregated trades) + ticker (24h stats)
+  return `wss://stream.binance.com:9443/stream?streams=${s}@depth20@100ms/${s}@bookTicker/${s}@aggTrade/${s}@ticker`;
+}
+function connectWs(){
+  if (S.ws) {
+    try { S.ws.close(); } catch(_){}
+    S.ws = null;
+  }
+  const pill = $('conn-pill');
+  const text = $('conn-text');
+  pill.className = 'conn-pill';
+  text.textContent = 'Connecting…';
+  let ws;
+  try {
+    ws = new WebSocket(wsUrl(S.symbol));
+  } catch (e) {
+    text.textContent = 'WS error';
+    return;
+  }
+  S.ws = ws;
+  ws.onopen = () => {
+    pill.className = 'conn-pill live';
+    text.textContent = 'Live ' + S.symbol;
+  };
+  ws.onclose = () => {
+    pill.className = 'conn-pill';
+    text.textContent = 'Disconnected';
+    // Auto-reconnect after 1.5s
+    setTimeout(() => { if (S.ws === ws) connectWs(); }, 1500);
+  };
+  ws.onerror = () => {
+    text.textContent = 'WS error';
+  };
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch(_) { return; }
+    const stream = msg.stream || '';
+    const data = msg.data;
+    if (!data) return;
+    if (stream.endsWith('@depth20@100ms')) handleDepth(data);
+    else if (stream.endsWith('@bookTicker')) handleBookTicker(data);
+    else if (stream.endsWith('@aggTrade'))   handleAggTrade(data);
+    else if (stream.endsWith('@ticker'))     handleTicker(data);
+  };
+}
+
+function handleDepth(d){
+  // d.bids = [[price, qty], ...]   d.asks = [...]
+  S.bids = (d.bids || []).map(r => [parseFloat(r[0]), parseFloat(r[1])]);
+  S.asks = (d.asks || []).map(r => [parseFloat(r[0]), parseFloat(r[1])]);
+  renderOrderBook();
+}
+
+function handleBookTicker(d){
+  S.bestBid = parseFloat(d.b);
+  S.bestAsk = parseFloat(d.a);
+  $('best-bid-hint').textContent =
+    S.side === 'BUY' ? `best ask ${fmtPrice(S.bestAsk)} → tap` : `best bid ${fmtPrice(S.bestBid)} → tap`;
+}
+
+function handleAggTrade(d){
+  const px = parseFloat(d.p);
+  const qty = parseFloat(d.q);
+  const ts = +d.T;
+  const isBuyerMaker = !!d.m;   // m=true means SELLER aggressed -> "sell" trade
+  S.prevPrice = S.lastPrice;
+  S.lastPrice = px;
+  renderPriceTick();
+  prependTradeRow(px, qty, ts, !isBuyerMaker);
+}
+
+function handleTicker(d){
+  S.ticker.high = parseFloat(d.h);
+  S.ticker.low  = parseFloat(d.l);
+  S.ticker.vol  = parseFloat(d.q);  // quote-asset 24h volume (USDT)
+  S.ticker.pctChg = parseFloat(d.P);
+  $('s-high').textContent = fmtPrice(S.ticker.high);
+  $('s-low').textContent  = fmtPrice(S.ticker.low);
+  $('s-vol').textContent  = '$' + fmtVol(S.ticker.vol);
+  const pctEl = $('pct-24h');
+  const sign = S.ticker.pctChg >= 0 ? '+' : '';
+  pctEl.textContent = `${sign}${S.ticker.pctChg.toFixed(2)}%`;
+  pctEl.className = 'pct ' + (S.ticker.pctChg >= 0 ? 'up' : 'down');
+}
+
+// ── Render: order book ──────────────────────────────────────────────
+function renderOrderBook(){
+  const asksEl = $('asks');
+  const bidsEl = $('bids');
+  const ROWS = 12;   // 12 per side fits nicely
+  const asks = S.asks.slice(0, ROWS).reverse(); // print highest at top, descending toward spread
+  const bids = S.bids.slice(0, ROWS);
+
+  // Compute max-qty in either side to scale the depth bar.
+  const maxQ = Math.max(
+    ...asks.map(r => r[1]),
+    ...bids.map(r => r[1]),
+    1e-9
+  );
+
+  const row = (cls, p, q) => {
+    const barW = ((q / maxQ) * 100).toFixed(1);
+    const total = p * q;
+    return `<div class="ob-row ${cls}" data-px="${p}">
+      <div class="bar" style="width:${barW}%"></div>
+      <span class="price">${fmtPrice(p)}</span>
+      <span class="qty">${fmtQty(q)}</span>
+      <span class="total">${fmtQty(total)}</span>
+    </div>`;
+  };
+
+  asksEl.innerHTML = asks.map(([p,q]) => row('ask', p, q)).join('');
+  bidsEl.innerHTML = bids.map(([p,q]) => row('bid', p, q)).join('');
+
+  // Mid panel
+  const spread = (S.bestAsk && S.bestBid) ? (S.bestAsk - S.bestBid) : 0;
+  const spreadPct = (S.bestAsk && S.bestBid)
+    ? ((spread / S.bestBid) * 100).toFixed(3) + '%'
+    : '—';
+  $('ob-last').textContent = fmtPrice(S.lastPrice || S.bestBid);
+  $('ob-spread').textContent = `spread ${fmtPrice(spread)} (${spreadPct})`;
+}
+
+// ── Render: price flash ─────────────────────────────────────────────
+function renderPriceTick(){
+  const el = $('price-big');
+  el.textContent = fmtPrice(S.lastPrice);
+  if (S.lastPrice > S.prevPrice) el.className = 'price-big up';
+  else if (S.lastPrice < S.prevPrice) el.className = 'price-big down';
+
+  const lastEl = $('ob-last');
+  lastEl.textContent = fmtPrice(S.lastPrice);
+  lastEl.className = 'last ' + (S.lastPrice >= S.prevPrice ? 'up' : 'down');
+}
+
+// ── Render: trades feed ─────────────────────────────────────────────
+function prependTradeRow(px, qty, ts, buyAggressor){
+  const tr = $('trades');
+  const row = document.createElement('div');
+  row.className = 'trades-row ' + (buyAggressor ? 'buy' : 'sell');
+  row.innerHTML = `<span class="price">${fmtPrice(px)}</span>
+                   <span class="qty">${fmtQty(qty)}</span>
+                   <span class="time">${fmtTime(ts)}</span>`;
+  tr.insertBefore(row, tr.firstChild);
+  while (tr.children.length > 30) tr.removeChild(tr.lastChild);
+}
+
+// ── Order book click → fill price ───────────────────────────────────
+document.addEventListener('click', (e) => {
+  const r = e.target.closest('.ob-row');
+  if (r && r.dataset.px) {
+    const px = parseFloat(r.dataset.px);
+    $('f-price').value = px;
+    syncFromPrice();
+  }
+});
+
+// "Best bid → tap" hint
+$('best-bid-hint').addEventListener('click', () => {
+  const px = S.side === 'BUY' ? S.bestAsk : S.bestBid;
+  if (px) { $('f-price').value = px; syncFromPrice(); }
+});
+
+// ── Side / type toggles ─────────────────────────────────────────────
+document.querySelectorAll('.side-toggle button').forEach(b => {
+  b.addEventListener('click', () => {
+    S.side = b.dataset.side;
+    document.querySelectorAll('.side-toggle button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    updateButtonLabel();
+    updateUnits();
+    // Refresh best-bid hint
+    $('best-bid-hint').textContent =
+      S.side === 'BUY' ? `best ask ${fmtPrice(S.bestAsk)} → tap` : `best bid ${fmtPrice(S.bestBid)} → tap`;
+  });
+});
+document.querySelectorAll('.type-toggle button').forEach(b => {
+  b.addEventListener('click', () => {
+    S.type = b.dataset.type;
+    document.querySelectorAll('.type-toggle button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    updateButtonLabel();
+    // Hide price field for market orders
+    $('price-field').style.display = (S.type === 'MARKET') ? 'none' : '';
+  });
+});
+
+function updateButtonLabel(){
+  const btn = $('submit-btn');
+  const verb = S.type === 'MARKET' ? 'MARKET' : 'Limit';
+  btn.textContent = (S.side === 'BUY' ? '🚀 BUY @ ' : '⚠️ SELL @ ') + verb;
+  btn.className = 'submit-btn ' + (S.side === 'BUY' ? 'buy' : 'sell');
+}
+function updateUnits(){
+  const base = S.symbol.endsWith('USDT') ? S.symbol.slice(0, -4) : S.symbol;
+  $('f-qty-unit').textContent = base;
+  $('f-qty-unit2').textContent = base;
+}
+
+// ── Sync price ↔ qty ↔ total ────────────────────────────────────────
+function syncFromPrice(){
+  const px = parseFloat($('f-price').value) || 0;
+  const qty = parseFloat($('f-qty').value) || 0;
+  if (px > 0 && qty > 0) $('f-total').value = (px * qty).toFixed(4);
+}
+function syncFromQty(){
+  const px = parseFloat($('f-price').value) || S.lastPrice || 0;
+  const qty = parseFloat($('f-qty').value) || 0;
+  if (px > 0) $('f-total').value = (px * qty).toFixed(4);
+}
+function syncFromTotal(){
+  const px = parseFloat($('f-price').value) || S.lastPrice || 0;
+  const total = parseFloat($('f-total').value) || 0;
+  if (px > 0) $('f-qty').value = (total / px).toFixed(8);
+}
+$('f-price').addEventListener('input', syncFromPrice);
+$('f-qty').addEventListener('input', syncFromQty);
+$('f-total').addEventListener('input', syncFromTotal);
+
+// USDT preset buttons — set Total = preset, derive qty.
+// iter131 — only target the fixed-amount row; wallet-% row is handled below.
+document.querySelectorAll('#row-amts button').forEach(b => {
+  b.addEventListener('click', () => {
+    $('f-total').value = b.dataset.amt;
+    syncFromTotal();
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────
+// iter131 — Wallet / position state + auto-fill helpers.
+//
+// S.usdtFree = free USDT balance (for BUY percentage buttons)
+// S.baseFree = free base-asset balance (for SELL percentage buttons)
+// S.position = { qty, cost, avgPrice } LIFO-computed from trade history
+//              (the operator's HELD position, ignoring locked-in-orders)
+// ──────────────────────────────────────────────────────────────────
+S.usdtFree = 0;
+S.baseFree = 0;
+S.position = null;
+
+async function fetchWallet(){
+  try {
+    const r = await fetch('/api/wallet/balances');
+    if (!r.ok) return;
+    const body = await r.json();
+    const arr = (body && body.balances) || [];
+    const base = baseAsset();
+    const u = arr.find(b => (b.asset || '').toUpperCase() === 'USDT');
+    const x = arr.find(b => (b.asset || '').toUpperCase() === base);
+    S.usdtFree = parseFloat((u && u.free) || 0) || 0;
+    S.baseFree = parseFloat((x && x.free) || 0) || 0;
+    renderWalletStrip();
+    renderWalletHint();
+  } catch(_) {}
+}
+
+function baseAsset(){
+  const s = (S.symbol || '').toUpperCase();
+  for (const q of ['USDT','USDC','FDUSD','BUSD','BTC','BNB','ETH']) {
+    if (s.endsWith(q) && s.length > q.length) return s.slice(0, -q.length);
+  }
+  return s;
+}
+
+function renderWalletStrip(){
+  $('ws-usdt').textContent = '$' + (S.usdtFree || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  $('ws-base-asset').textContent = baseAsset();
+  $('ws-base').textContent = (S.baseFree || 0).toLocaleString(undefined, { maximumFractionDigits: 6 });
+}
+
+function renderWalletHint(){
+  const txt = $('wallet-hint-text');
+  const pct = $('wallet-hint-pct');
+  if (!txt) return;
+  const base = baseAsset();
+  if (S.side === 'BUY') {
+    txt.innerHTML = `USDT free: <span class="hint-val free">$${(S.usdtFree || 0).toFixed(2)}</span>`;
+    if (pct) {
+      const total = parseFloat($('f-total').value) || 0;
+      const p = S.usdtFree > 0 ? (total / S.usdtFree) * 100 : 0;
+      pct.innerHTML = total > 0 ? `using <span class="hint-val">${p.toFixed(1)}%</span>` : '';
+    }
+  } else {
+    txt.innerHTML = `${base} held: <span class="hint-val held">${(S.baseFree || 0).toFixed(6)}</span>`;
+    if (pct) {
+      const q = parseFloat($('f-qty').value) || 0;
+      const p = S.baseFree > 0 ? (q / S.baseFree) * 100 : 0;
+      pct.innerHTML = q > 0 ? `selling <span class="hint-val">${p.toFixed(1)}%</span>` : '';
+    }
+  }
+}
+
+// LIFO position computation.  Auto-detects two input shapes:
+//
+//   per-ORDER  (what /api/trade/order-history returns — /allOrders API):
+//     { side: 'BUY'|'SELL', status, executedQty, cummulativeQuoteQty,
+//       updateTime|time, type, ... }
+//     ⚠️ no per-order commission — fees approximated at 0.075% per side.
+//
+//   per-FILL  (legacy — what /myTrades returns):
+//     { isBuyer, qty, quoteQty, commission, commissionAsset, price, time }
+//     ⚠️ multiple fills can share an orderId — grouped here for accuracy.
+//
+// iter139 — Earlier versions only handled the per-fill shape; the live
+// endpoint returns the per-order shape, which silently produced
+// {qty:0, cost:0} and made HELD + iter131 Position panel always say
+// "no position".  Now both shapes work.
+//
+// Returns { qty, cost, fees, avgPrice } for the CURRENT open position.
+const FEE_APPROX_PER_SIDE = 0.00075;   // Binance maker/taker default
+
+function computeOpenLIFO(rawData){
+  const ordersByTime = [];
+  // ── Group per-fill data by orderId (multi-fill orders) ─────────────
+  const fillsByOrderId = new Map();
+  for (const t of (rawData || [])) {
+    if (!t || typeof t !== 'object') continue;
+
+    const looksLikeOrder = ('executedQty' in t) || ('cummulativeQuoteQty' in t)
+                         || ('side' in t && ('status' in t || 'type' in t));
+    const looksLikeFill  = ('isBuyer' in t) || ('commissionAsset' in t);
+
+    if (looksLikeOrder) {
+      // Only count fills (FILLED or PARTIALLY_FILLED).
+      const status = String(t.status || '').toUpperCase();
+      if (status && status !== 'FILLED' && status !== 'PARTIALLY_FILLED') continue;
+      const qty  = parseFloat(t.executedQty) || 0;
+      const cost = parseFloat(t.cummulativeQuoteQty) || 0;
+      if (qty <= 1e-12 || cost <= 0) continue;
+      const side = String(t.side || '').toUpperCase();
+      const time = parseInt(t.updateTime || t.time || 0, 10) || 0;
+      ordersByTime.push({
+        isBuyer:  side === 'BUY',
+        qty,
+        quoteQty: cost,
+        fees: cost * FEE_APPROX_PER_SIDE,   // approximated — see header
+        time,
+      });
+    } else if (looksLikeFill) {
+      // Group per-fill rows into per-order rollups so multi-fill orders
+      // don't get processed as N separate stack entries.
+      const oid = String(t.orderId || t.id || '');
+      if (!oid) continue;
+      let g = fillsByOrderId.get(oid);
+      if (!g) {
+        g = {
+          isBuyer: !!t.isBuyer,
+          qty: 0, quoteQty: 0, fees: 0,
+          time: parseInt(t.time || 0, 10) || 0,
+        };
+        fillsByOrderId.set(oid, g);
+      }
+      g.qty      += parseFloat(t.qty)      || 0;
+      g.quoteQty += parseFloat(t.quoteQty) || 0;
+      // Convert commission to USDT (matches iter97 on premium.html).
+      const c = parseFloat(t.commission) || 0;
+      const p = parseFloat(t.price) || 0;
+      const sym = String(t.symbol || '').toUpperCase();
+      const asset = String(t.commissionAsset || '').toUpperCase();
+      const base = sym.endsWith('USDT') ? sym.slice(0, -4) : '';
+      if (asset === 'USDT')                        g.fees += c;
+      else if (asset === base && p > 0)            g.fees += c * p;
+      else if (asset === 'BNB' && (window.__bnbUsdtPrice || 0) > 0) {
+        g.fees += c * window.__bnbUsdtPrice;
+      }
+      if ((t.time || 0) > g.time) g.time = parseInt(t.time, 10) || g.time;
+    }
+  }
+  for (const g of fillsByOrderId.values()) ordersByTime.push(g);
+
+  ordersByTime.sort((a, b) => a.time - b.time);
+
+  // ── LIFO walk: BUY pushes, SELL pops the newest open buy first. ───
+  const stack = [];
+  for (const o of ordersByTime) {
+    if (o.qty <= 1e-12) continue;
+    if (o.isBuyer) {
+      stack.push({ qty: o.qty, cost: o.quoteQty, fees: o.fees });
+      continue;
+    }
+    let remaining = o.qty;
+    while (remaining > 1e-12 && stack.length) {
+      const buy = stack[stack.length - 1];
+      if (buy.qty <= 1e-12) { stack.pop(); continue; }
+      const take = Math.min(buy.qty, remaining);
+      const portion = take / buy.qty;
+      buy.qty  -= take;
+      buy.cost -= buy.cost * portion;
+      buy.fees -= buy.fees * portion;
+      if (buy.qty <= 1e-12) stack.pop();
+      remaining -= take;
+    }
+  }
+
+  if (!stack.length) return { qty: 0, cost: 0, fees: 0, avgPrice: 0 };
+  const sum = stack.reduce(
+    (a, x) => ({ qty: a.qty + x.qty, cost: a.cost + x.cost, fees: a.fees + x.fees }),
+    { qty: 0, cost: 0, fees: 0 }
+  );
+  return {
+    qty: sum.qty,
+    cost: sum.cost,
+    fees: sum.fees,
+    avgPrice: sum.qty > 0 ? sum.cost / sum.qty : 0,
+  };
+}
+
+let _positionFetchToken = 0;
+async function fetchPosition(sym){
+  if (!sym) return;
+  const myToken = ++_positionFetchToken;
+  try {
+    const r = await fetch('/api/trade/order-history?symbol=' + encodeURIComponent(sym));
+    if (!r.ok) return;
+    const trades = await r.json();
+    // Drop stale result if the operator already switched symbol.
+    if (myToken !== _positionFetchToken) return;
+    S.position = computeOpenLIFO(trades || []);
+    renderPositionPanel();
+    if (S.side === 'SELL') maybeAutofillSell();
+  } catch(_) {}
+}
+
+function renderPositionPanel(){
+  const panel = $('position-panel');
+  if (!panel) return;
+  if (S.side !== 'SELL') { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  const base = baseAsset();
+  if (!S.position || S.position.qty <= 1e-9) {
+    panel.classList.add('empty');
+    panel.innerHTML = `<div>No open position in <strong>${S.symbol}</strong>. The sell form is in free-form mode.</div>`;
+    return;
+  }
+  panel.classList.remove('empty');
+  const px  = S.lastPrice || 0;
+  const mv  = S.position.qty * px;
+  const pnl = mv - S.position.cost;
+  const pct = S.position.cost > 0 ? (pnl / S.position.cost) * 100 : 0;
+  const cls = pnl >= 0 ? 'up' : 'down';
+  panel.innerHTML = `
+    <div class="pp-row"><span class="k">Holding</span><span class="v">${S.position.qty.toFixed(6)} ${base}</span></div>
+    <div class="pp-row"><span class="k">Avg buy</span><span class="v">${fmtPrice(S.position.avgPrice)}</span></div>
+    <div class="pp-row"><span class="k">Cost</span><span class="v">$${S.position.cost.toFixed(2)}</span></div>
+    <div class="pp-row"><span class="k">Current</span><span class="v">${fmtPrice(px)}</span></div>
+    <div class="pp-row big"><span class="k">Unrealised</span><span class="v ${cls}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)</span></div>
+    <div class="pp-actions">
+      <button data-pp="avg"  title="Set price = avg buy">Price = avg buy</button>
+      <button data-pp="bep"  title="Set price = avg buy + 0.20% fee buffer (true break-even)">Break-even +fees</button>
+      <button data-pp="full" title="Set qty = full held position">Qty = full</button>
+      <button data-pp="reset" title="Re-pull position + auto-fill">↻ Refill</button>
+    </div>
+  `;
+}
+
+// Pre-populate price + qty when operator flips to SELL and the form is empty.
+function maybeAutofillSell(){
+  if (S.side !== 'SELL' || !S.position || S.position.qty <= 1e-9) return;
+  if (!$('f-price').value) $('f-price').value = +S.position.avgPrice.toFixed(8);
+  if (!$('f-qty').value)   $('f-qty').value   = +S.position.qty.toFixed(8);
+  syncFromPrice();
+  renderWalletHint();
+}
+
+// Wire position-panel action buttons.
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('.position-panel .pp-actions button');
+  if (!b || !S.position) return;
+  const k = b.dataset.pp;
+  if (k === 'avg') {
+    $('f-price').value = +S.position.avgPrice.toFixed(8);
+  } else if (k === 'bep') {
+    // Avg buy + 0.20% rough round-trip fee buffer so the operator nets 0.
+    $('f-price').value = +(S.position.avgPrice * 1.002).toFixed(8);
+  } else if (k === 'full') {
+    $('f-qty').value = +S.position.qty.toFixed(8);
+  } else if (k === 'reset') {
+    $('f-price').value = ''; $('f-qty').value = ''; $('f-total').value = '';
+    maybeAutofillSell();
+    return;
+  }
+  syncFromPrice();
+  renderWalletHint();
+});
+
+// Wallet-% buttons — BUY: % of USDT free.  SELL: % of base-asset free.
+document.querySelectorAll('#row-wpct button').forEach(b => {
+  b.addEventListener('click', () => {
+    const pct = parseFloat(b.dataset.wpct) / 100;
+    if (S.side === 'BUY') {
+      const total = (S.usdtFree || 0) * pct;
+      $('f-total').value = total.toFixed(2);
+      syncFromTotal();
+    } else {
+      const qty = (S.baseFree || 0) * pct;
+      $('f-qty').value = +qty.toFixed(8);
+      syncFromQty();
+    }
+    renderWalletHint();
+  });
+});
+
+// Update wallet hint whenever the user edits a field.
+['f-price','f-qty','f-total'].forEach(id => {
+  $(id).addEventListener('input', renderWalletHint);
+});
+
+// Side switch → re-render hint + position panel + maybe autofill.
+const _origSideHandler = null;  // (just for clarity — side toggle below already fires)
+document.querySelectorAll('.side-toggle button').forEach(b => {
+  b.addEventListener('click', () => {
+    // Already updates S.side via the existing handler above; this listener
+    // runs AFTER and refreshes the iter131 UI.
+    setTimeout(() => {
+      renderWalletHint();
+      renderPositionPanel();
+      if (S.side === 'SELL') maybeAutofillSell();
+    }, 0);
+  });
+});
+
+// Poll wallet every 10s + after every order placement.
+setInterval(fetchWallet, 10_000);
+// Poll position every 20s — changes less often than wallet.
+setInterval(() => fetchPosition(S.symbol), 20_000);
+
+// ── Symbol picker ───────────────────────────────────────────────────
+function applySymbol(raw){
+  let s = normalizeSym(raw);
+  if (!s) return;
+  if (!s.endsWith('USDT') && !s.endsWith('USDC') && !s.endsWith('BTC') && !s.endsWith('ETH') && !s.endsWith('BNB')) {
+    s = s + 'USDT';
+  }
+  S.symbol = s;
+  $('sym-input').value = s;
+  $('bn-link').href = 'https://www.binance.com/en/trade/'
+    + (s.endsWith('USDT') ? s.slice(0,-4) + '_USDT'
+     : s.endsWith('USDC') ? s.slice(0,-4) + '_USDC'
+     : s) + '?type=spot';
+  // Update URL bar so this is shareable.
+  const u = new URL(window.location.href);
+  u.searchParams.set('sym', s);
+  window.history.replaceState({}, '', u);
+  updateUnits();
+  // Reset state and reconnect
+  S.bids = []; S.asks = []; S.lastPrice = 0; S.prevPrice = 0;
+  S.bestBid = 0; S.bestAsk = 0;
+  $('trades').innerHTML = '';
+  $('asks').innerHTML = '';
+  $('bids').innerHTML = '';
+  $('price-big').textContent = '—';
+  $('price-big').className = 'price-big';
+  $('pct-24h').textContent = '—';
+  $('pct-24h').className = 'pct';
+  $('s-high').textContent = '—';
+  $('s-low').textContent  = '—';
+  $('s-vol').textContent  = '—';
+  connectWs();
+  loadOpenOrders();
+  // iter131 — pull fresh wallet + position for the new symbol so the
+  // sizing buttons and SELL auto-fill reflect what the operator actually
+  // holds.  Wallet is global; position is per-symbol.
+  S.position = null;
+  fetchWallet();
+  fetchPosition(s);
+  document.title = `${s} · Quick Trade · BookNow`;
+}
+$('sym-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') applySymbol($('sym-input').value);
+});
+$('sym-input').addEventListener('blur', () => {
+  if ($('sym-input').value && normalizeSym($('sym-input').value) !== S.symbol) {
+    applySymbol($('sym-input').value);
+  }
+});
+
+// iter134 — Single-click BUY/SELL.  The earlier 2-tap arm/disarm
+// pattern was friction the operator didn't want during pumps; the
+// modal confirmation on order edits already gives a safety check
+// for the cancel-and-replace flow.  For the primary submit there's
+// no double-confirm anymore — one click fires.
+$('submit-btn').addEventListener('click', submitOrder);
+
+// ── Submit order via /api/trade/quick-* proxy ───────────────────────
+async function submitOrder(){
+  const sym = S.symbol;
+  const qty = parseFloat($('f-qty').value);
+  const total = parseFloat($('f-total').value);
+  if (!qty || qty <= 0) {
+    toast('error', 'Missing quantity', 'Set a positive base-asset quantity (or USDT total).');
+    return;
+  }
+
+  const btn = $('submit-btn');
+  btn.disabled = true;
+  const prevLabel = btn.textContent;
+  btn.textContent = '⏳ Sending…';
+
+  try {
+    let url, mode;
+    if (S.side === 'BUY' && S.type === 'MARKET') {
+      mode = 'MARKET BUY';
+      url = `/api/trade/quick-buy/${encodeURIComponent(sym)}?qty=${qty}`;
+    } else if (S.side === 'BUY' && S.type === 'LIMIT') {
+      mode = 'LIMIT BUY';
+      const px = parseFloat($('f-price').value);
+      if (!px || px <= 0) {
+        toast('error', 'Missing price', 'Pick a limit price or tap an order-book row.');
+        btn.disabled = false; btn.textContent = prevLabel; return;
+      }
+      const ref = S.lastPrice || S.bestAsk || S.bestBid || px;
+      // offsetPct relative to current price.  Engine subtracts this %
+      // from current to place the limit-buy, so we send the % distance
+      // below `ref`.  If user picked px > ref, offsetPct goes negative
+      // and the engine will place ABOVE — useful for chase-buys.
+      const offsetPct = ((ref - px) / ref) * 100;
+      const tp = parseFloat($('f-tp').value) || 0;
+      url = `/api/trade/quick-limit-buy/${encodeURIComponent(sym)}`
+          + `?qty=${qty}&offsetPct=${offsetPct.toFixed(4)}&profitPct=${tp}`;
+    } else if (S.side === 'SELL' && S.type === 'MARKET') {
+      mode = 'MARKET SELL';
+      url = `/api/trade/quick-sell/${encodeURIComponent(sym)}?qty=${qty}`;
+    } else if (S.side === 'SELL' && S.type === 'LIMIT') {
+      // iter130 — LIMIT SELL hits the new proxy with the exact price.
+      const px = parseFloat($('f-price').value);
+      if (!px || px <= 0) {
+        toast('error', 'Missing price', 'Pick a limit price or tap an order-book row.');
+        btn.disabled = false; btn.textContent = prevLabel; return;
+      }
+      mode = 'LIMIT SELL';
+      url = `/api/trade/quick-limit-sell/${encodeURIComponent(sym)}?qty=${qty}&price=${px}`;
+    } else {
+      toast('error', 'Unsupported', 'Unknown order combination.'); return;
+    }
+    const r = await fetch(url);
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || !body.ok) {
+      toast('error', `${mode} failed`, (body.error || `HTTP ${r.status}`));
+    } else {
+      const summary = (S.type === 'MARKET'
+        ? `${qty} ${sym}`
+        : `${qty} ${sym} @ ${$('f-price').value}`);
+      toast('ok', `${mode} sent`, summary);
+      loadOpenOrders();
+      // iter131 — order changed our wallet + position; refresh both
+      // so the next click reflects the new state instantly.
+      fetchWallet();
+      fetchPosition(S.symbol);
+    }
+  } catch (e) {
+    toast('error', 'Network error', e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prevLabel;
+    updateButtonLabel();
+  }
+}
+
+// ── Open orders (5s poll) ───────────────────────────────────────────
+async function loadOpenOrders(){
+  try {
+    const r = await fetch('/api/trade/quick-open-orders');
+    const body = await r.json().catch(() => ({}));
+    const list = (body.ok && Array.isArray(body.orders)) ? body.orders : [];
+    const el = $('open-orders');
+    // iter137 — render summary chip + per-symbol cards every poll.
+    renderOpenOrdersSummary(list);
+    if (!list.length) {
+      el.innerHTML = '<div class="empty">No open orders</div>';
+      return;
+    }
+    el.innerHTML = list.map(o => {
+      const px  = parseFloat(o.price ?? o.limitPrice ?? 0);
+      const qty = parseFloat(o.origQty ?? o.qty ?? 0);
+      const side = (o.side || '').toUpperCase();
+      const sym = (o.symbol || '');
+      const oid = (o.orderId ?? o.id ?? '');
+      // iter132 — ✏️ Edit button alongside cancel.  Single quotes on
+      // numbers because oid can be a 64-bit integer that JS treats as
+      // string-safe; price/qty are converted client-side.
+      return `<div class="oo-row">
+        <span class="sym">${sym}</span>
+        <span class="side ${side}">${side}</span>
+        <span class="px">${fmtPrice(px)}</span>
+        <span class="qty">${fmtQty(qty)}</span>
+        <span style="display:inline-flex;gap:4px">
+          <button class="edit" onclick="openEditModal('${sym}','${oid}','${side}',${px},${qty})" title="Edit price / amount">✏️</button>
+          <button class="cancel" onclick="cancelOrder('${sym}','${oid}')">cancel</button>
+        </span>
+      </div>`;
+    }).join('');
+  } catch (_) { /* ignore */ }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// iter138 — Per-symbol HELD position cache.
+//
+// For every symbol with an open SELL order we need to know the
+// operator's actual cost basis (avg buy + total USDT spent + fees
+// paid), pulled from the LIFO match of their trade history.  The
+// renderer is called every 5s so a naive fetch-per-symbol-per-poll
+// would hammer the order-history endpoint.  Cache for 30s per symbol;
+// also reuse S.position when it matches the currently-viewed symbol.
+// ──────────────────────────────────────────────────────────────────
+const _posCache = new Map();           // symbol -> { pos, ts }
+const POS_CACHE_TTL_MS = 30_000;
+let _lastOrdersForSummary = null;      // for re-render after async fetch lands
+
+function getCachedPosition(symbol){
+  if (!symbol) return null;
+  // The currently-viewed symbol's position is kept fresh by iter131's
+  // fetchPosition / 20s poll — prefer it.
+  if (S.symbol === symbol && S.position) return S.position;
+  const c = _posCache.get(symbol);
+  return c ? c.pos : null;
+}
+
+async function refreshPositionForSummary(symbol){
+  if (!symbol) return;
+  const c = _posCache.get(symbol);
+  if (c && (Date.now() - c.ts) < POS_CACHE_TTL_MS) return;
+  try {
+    const r = await fetch('/api/trade/order-history?symbol=' + encodeURIComponent(symbol));
+    if (!r.ok) return;
+    const trades = await r.json();
+    const pos = computeOpenLIFO(trades || []);
+    _posCache.set(symbol, { pos, ts: Date.now() });
+    // Position arrived after the synchronous render — refresh the
+    // summary so the HELD row appears.
+    if (_lastOrdersForSummary) renderOpenOrdersSummary(_lastOrdersForSummary);
+  } catch (_) { /* ignore — next poll will retry */ }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// iter137 — Open-Orders summary
+//
+// Group open orders by symbol, separate BUY vs SELL, and project
+// what happens if everything fills:
+//   • BUY side:  weighted avg buy + total qty + total cost
+//   • SELL side: weighted avg sell + total qty + total revenue
+//   • Round trip: min(buyQty, sellQty) matched, gross/fees/NET
+// Fee model: 0.075% per side × 2 sides ≈ 0.15% round-trip (matches
+// the iter97 / iter109 NET P&L calc on /premium.html).
+// ──────────────────────────────────────────────────────────────────
+const OO_FEE_PER_SIDE = 0.00075;
+
+function summarizeOpenOrders(orders){
+  const bySym = new Map();
+  for (const o of (orders || [])) {
+    const sym = (o.symbol || '').toUpperCase();
+    if (!sym) continue;
+    const px  = parseFloat(o.price ?? o.limitPrice ?? 0) || 0;
+    const qty = parseFloat(o.origQty ?? o.qty ?? 0) || 0;
+    const side = (o.side || '').toUpperCase();
+    if (px <= 0 || qty <= 0) continue;
+    let s = bySym.get(sym);
+    if (!s) {
+      s = {
+        symbol: sym,
+        buy:  { qty: 0, cost: 0, avg: 0 },
+        sell: { qty: 0, rev:  0, avg: 0 },
+        buyOrders: 0, sellOrders: 0,
+      };
+      bySym.set(sym, s);
+    }
+    if (side === 'BUY') {
+      s.buy.qty  += qty;
+      s.buy.cost += qty * px;
+      s.buyOrders += 1;
+    } else if (side === 'SELL') {
+      s.sell.qty += qty;
+      s.sell.rev += qty * px;
+      s.sellOrders += 1;
+    }
+  }
+  let totBuyCost = 0, totSellRev = 0, totNet = 0;
+  let totBuyOrders = 0, totSellOrders = 0;
+  const out = [];
+  for (const s of bySym.values()) {
+    s.buy.avg  = s.buy.qty  > 0 ? s.buy.cost / s.buy.qty : 0;
+    s.sell.avg = s.sell.qty > 0 ? s.sell.rev / s.sell.qty : 0;
+    const matched = Math.min(s.buy.qty, s.sell.qty);
+    if (matched > 0) {
+      const cost = matched * s.buy.avg;
+      const rev  = matched * s.sell.avg;
+      const fees = OO_FEE_PER_SIDE * (cost + rev);
+      const net  = rev - cost - fees;
+      s.round = {
+        matched, cost, rev, fees,
+        gross: rev - cost,
+        net,
+        netPct: cost > 0 ? (net / cost) * 100 : 0,
+      };
+      totNet += net;
+    } else {
+      s.round = null;
+    }
+    totBuyCost   += s.buy.cost;
+    totSellRev   += s.sell.rev;
+    totBuyOrders += s.buyOrders;
+    totSellOrders+= s.sellOrders;
+    out.push(s);
+  }
+  out.sort((a, b) => a.symbol.localeCompare(b.symbol));
+  return {
+    perSymbol: out,
+    totals: {
+      symbols: out.length,
+      buyOrders: totBuyOrders,
+      sellOrders: totSellOrders,
+      totalBuyCost: totBuyCost,
+      totalSellRev: totSellRev,
+      totalNet: totNet,
+    },
+  };
+}
+
+function renderOpenOrdersSummary(orders){
+  const summary = summarizeOpenOrders(orders);
+  const t = summary.totals;
+  // Compact chip in the panel header.
+  const chip = $('oo-summary-chip');
+  if (chip) {
+    if (t.buyOrders + t.sellOrders === 0) {
+      chip.style.display = 'none';
+      chip.innerHTML = '';
+    } else {
+      chip.style.display = '';
+      const netCls = t.totalNet >= 0 ? 'up' : 'down';
+      const netSign = t.totalNet >= 0 ? '+' : '';
+      const netStr = `${netSign}$${t.totalNet.toFixed(2)}`;
+      chip.innerHTML =
+        `<span class="oo-chip-grp">${t.buyOrders + t.sellOrders} open</span>` +
+        `<span class="oo-chip-grp"><span style="color:var(--green)">${t.buyOrders} BUY</span> / <span style="color:var(--red)">${t.sellOrders} SELL</span></span>` +
+        `<span class="oo-chip-grp ${netCls}">if-all-fill ${netStr}</span>`;
+    }
+  }
+  // Per-symbol cards.
+  const panel = $('oo-summary');
+  if (!panel) return;
+  if (!summary.perSymbol.length) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+    return;
+  }
+  panel.style.display = '';
+  // iter138 — remember the order list so refreshPositionForSummary()
+  // can re-render after an async order-history fetch lands.
+  _lastOrdersForSummary = orders;
+
+  panel.innerHTML = summary.perSymbol.map(s => {
+    // iter138 — pull the held (LIFO) position so SELL projections can
+    // use the operator's actual cost basis.
+    const held = (s.sell.qty > 0) ? getCachedPosition(s.symbol) : null;
+
+    const buyHtml = s.buy.qty > 0 ? `
+      <div class="oos-side buy">
+        <span class="oos-tag">BUY</span>
+        <span class="oos-stat"><span class="k">avg</span><span class="v">${fmtPrice(s.buy.avg)}</span></span>
+        <span class="oos-stat"><span class="k">qty</span><span class="v">${fmtQty(s.buy.qty)}</span></span>
+        <span class="oos-stat"><span class="k">cost</span><span class="v">$${s.buy.cost.toFixed(2)}</span></span>
+        <span class="oos-stat"><span class="k">orders</span><span class="v">${s.buyOrders}</span></span>
+      </div>` : '';
+
+    // iter138 — HELD row: LIFO-matched open position from trade history.
+    //   • avg buy   — qty-weighted avg buy price for currently-held units
+    //   • cost      — total USDT spent on those buys
+    //   • fees      — converted-to-USDT commissions on those buys
+    //   • qty       — units currently held
+    // Only shown when there's at least one open SELL on this symbol.
+    let heldHtml = '';
+    if (s.sell.qty > 0) {
+      if (held && held.qty > 1e-9) {
+        heldHtml = `
+          <div class="oos-side held">
+            <span class="oos-tag">HELD</span>
+            <span class="oos-stat"><span class="k">avg buy</span><span class="v">${fmtPrice(held.avgPrice)}</span></span>
+            <span class="oos-stat"><span class="k">qty</span><span class="v">${fmtQty(held.qty)}</span></span>
+            <span class="oos-stat"><span class="k">cost</span><span class="v">$${held.cost.toFixed(2)}</span></span>
+            <span class="oos-stat"><span class="k">fees paid</span><span class="v">$${held.fees.toFixed(4)}</span></span>
+          </div>`;
+      } else if (held === null) {
+        heldHtml = `<div class="oos-side held muted"><span class="oos-tag">HELD</span><span class="oos-stat"><span class="k">loading…</span></span></div>`;
+      } else {
+        heldHtml = `<div class="oos-side held muted"><span class="oos-tag">HELD</span><span class="oos-stat"><span class="k">no position from trade history</span></span></div>`;
+      }
+    }
+
+    const sellHtml = s.sell.qty > 0 ? `
+      <div class="oos-side sell">
+        <span class="oos-tag">SELL</span>
+        <span class="oos-stat"><span class="k">avg</span><span class="v">${fmtPrice(s.sell.avg)}</span></span>
+        <span class="oos-stat"><span class="k">qty</span><span class="v">${fmtQty(s.sell.qty)}</span></span>
+        <span class="oos-stat"><span class="k">rev</span><span class="v">$${s.sell.rev.toFixed(2)}</span></span>
+        <span class="oos-stat"><span class="k">orders</span><span class="v">${s.sellOrders}</span></span>
+      </div>` : '';
+
+    // iter138 — when HELD data exists, RECOMPUTE the round-trip
+    // projection against the held cost basis instead of the (often
+    // empty) open BUY side.  More accurate and matches what the
+    // operator actually paid.
+    let rtHtml = '';
+    if (s.sell.qty > 0 && held && held.qty > 1e-9) {
+      const matched = Math.min(s.sell.qty, held.qty);
+      const buyPortion = matched / held.qty;
+      const costBasis = held.cost * buyPortion;
+      const buyFees   = held.fees * buyPortion;
+      const rev       = matched * s.sell.avg;
+      const sellFees  = OO_FEE_PER_SIDE * rev;
+      const totalFees = buyFees + sellFees;
+      const gross     = rev - costBasis;
+      const net       = gross - sellFees;   // buyFees already paid
+      const netVsCost = gross - totalFees;  // shows the TRUE round-trip net
+      const cls       = netVsCost >= 0 ? 'up' : 'down';
+      const sign      = (v) => (v >= 0 ? '+' : '');
+      const pct       = costBasis > 0 ? (netVsCost / costBasis) * 100 : 0;
+      rtHtml = `<div class="oos-round">
+        🔁
+        <span class="oos-stat"><span class="k">matched</span><span class="v">${fmtQty(matched)}</span></span>
+        <span class="oos-stat"><span class="k">cost basis</span><span class="v">$${costBasis.toFixed(2)}</span></span>
+        <span class="oos-stat"><span class="k">revenue</span><span class="v">${sign(rev)}$${rev.toFixed(2)}</span></span>
+        <span class="oos-stat"><span class="k">fees (RT)</span><span class="v">−$${totalFees.toFixed(4)}</span></span>
+        <span class="oos-stat"><span class="k">NET</span><span class="v ${cls}">${sign(netVsCost)}$${netVsCost.toFixed(2)} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)</span></span>
+      </div>`;
+    } else if (s.round) {
+      // Fallback: original open-BUY-vs-open-SELL projection (iter137).
+      const r = s.round;
+      const cls = r.net >= 0 ? 'up' : 'down';
+      const sign = r.net >= 0 ? '+' : '';
+      rtHtml = `<div class="oos-round">
+        🔁
+        <span class="oos-stat"><span class="k">matched</span><span class="v">${fmtQty(r.matched)}</span></span>
+        <span class="oos-stat"><span class="k">gross</span><span class="v">${sign}$${r.gross.toFixed(2)}</span></span>
+        <span class="oos-stat"><span class="k">fees</span><span class="v">−$${r.fees.toFixed(2)}</span></span>
+        <span class="oos-stat"><span class="k">NET</span><span class="v ${cls}">${sign}$${r.net.toFixed(2)} (${r.netPct >= 0 ? '+' : ''}${r.netPct.toFixed(2)}%)</span></span>
+      </div>`;
+    } else if (s.buy.qty > 0 && s.sell.qty === 0) {
+      rtHtml = `<div class="oos-round muted">No matching SELL — set a target above $${(s.buy.avg * 1.002).toFixed(6)} to lock in profit (after fees).</div>`;
+    } else if (s.sell.qty > 0 && !held) {
+      rtHtml = `<div class="oos-round muted">Pulling held position from trade history…</div>`;
+    }
+    return `<div class="oos-card">
+      <div class="oos-head">${s.symbol}</div>
+      ${buyHtml}
+      ${heldHtml}
+      ${sellHtml}
+      ${rtHtml}
+    </div>`;
+  }).join('');
+
+  // iter138 — fire async fetches for any symbol with an open SELL
+  // whose position cache is stale or missing.  When they land, the
+  // summary re-renders with the HELD row populated.
+  for (const s of summary.perSymbol) {
+    if (s.sell.qty > 0 && getCachedPosition(s.symbol) === null) {
+      refreshPositionForSummary(s.symbol);
+    }
+  }
+}
+
+async function cancelOrder(sym, oid){
+  if (!confirm(`Cancel ${sym} order ${oid}?`)) return;
+  try {
+    const r = await fetch(`/api/trade/quick-cancel/${encodeURIComponent(sym)}/${encodeURIComponent(oid)}`);
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || !body.ok) {
+      toast('error', 'Cancel failed', body.error || `HTTP ${r.status}`);
+    } else {
+      toast('ok', 'Cancelled', `${sym} #${oid}`);
+      loadOpenOrders();
+    }
+  } catch (e) {
+    toast('error', 'Network error', e.message);
+  }
+}
+window.cancelOrder = cancelOrder;
+setInterval(loadOpenOrders, 5000);
+
+// ──────────────────────────────────────────────────────────────────
+// iter 132 — Edit open order: cancel-and-replace flow.
+// Mirrors Binance's UX (✏️ pencil → modal → confirm).
+// ──────────────────────────────────────────────────────────────────
+let _editTarget = null;
+
+function openEditModal(sym, oid, side, px, qty){
+  _editTarget = { sym, oid, side };
+  $('em-sym').textContent = sym;
+  const sideSpan = $('em-side');
+  sideSpan.textContent = side;
+  sideSpan.className = 'side-' + side;
+  $('em-id').textContent = '#' + oid;
+  $('em-price').value = px;
+  $('em-qty').value = qty;
+  $('em-total').value = (px * qty).toFixed(4);
+  $('edit-modal').classList.add('show');
+  // Focus the price field so the operator can start typing immediately.
+  setTimeout(() => { try { $('em-price').focus(); $('em-price').select(); } catch(_){} }, 0);
+}
+
+function closeEditModal(){
+  _editTarget = null;
+  $('edit-modal').classList.remove('show');
+  const btn = $('em-confirm');
+  btn.disabled = false; btn.textContent = 'Confirm';
+}
+window.openEditModal = openEditModal;
+window.closeEditModal = closeEditModal;
+
+// Sync Total when Price or Amount change in the modal.
+['em-price','em-qty'].forEach(id => {
+  $(id).addEventListener('input', () => {
+    const p = parseFloat($('em-price').value) || 0;
+    const q = parseFloat($('em-qty').value) || 0;
+    $('em-total').value = (p > 0 && q > 0) ? (p * q).toFixed(4) : '';
+  });
+});
+
+// Esc to close.
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('edit-modal').classList.contains('show')) {
+    closeEditModal();
+  }
+});
+
+// Confirm — cancel old, place new.  Both the inline onclick (iter133)
+// and this listener are wired so a missing one doesn't silently break.
+$('em-confirm').addEventListener('click', confirmEditOrder);
+
+async function confirmEditOrder(){
+  console.log('[edit-order] confirm clicked, target =', _editTarget);
+  if (!_editTarget) {
+    toast('warn', 'No target', 'No open order is selected. Re-open the modal.');
+    return;
+  }
+  const { sym, oid, side } = _editTarget;
+  const newPx = parseFloat($('em-price').value);
+  const newQty = parseFloat($('em-qty').value);
+  if (!newPx || newPx <= 0 || !newQty || newQty <= 0) {
+    toast('error', 'Invalid input', 'Price and amount must both be positive numbers.');
+    return;
+  }
+  const btn = $('em-confirm');
+  btn.disabled = true; btn.textContent = '⏳ Cancelling old…';
+
+  // ─── Step 1: cancel the existing order. ─────────────────────────────
+  const cancelUrl = '/api/trade/quick-cancel/'
+                  + encodeURIComponent(sym) + '/'
+                  + encodeURIComponent(oid);
+  console.log('[edit-order] step 1 cancel:', cancelUrl);
+  try {
+    const r = await fetch(cancelUrl);
+    // Response may be JSON OR plain text (cancel route returns text on error).
+    const txt = await r.text();
+    let body = null;
+    try { body = JSON.parse(txt); } catch(_) { body = { ok: r.ok, raw: txt }; }
+    console.log('[edit-order] cancel resp:', r.status, body);
+    if (!r.ok || body.ok === false) {
+      toast('error', 'Cancel failed', (body.error || body.raw || ('HTTP ' + r.status)));
+      btn.disabled = false; btn.textContent = 'Confirm';
+      return;
+    }
+    toast('ok', '1/2 · Old order cancelled', '#' + oid);
+  } catch (e) {
+    console.error('[edit-order] cancel network error:', e);
+    toast('error', 'Network error on cancel', e.message);
+    btn.disabled = false; btn.textContent = 'Confirm';
+    return;
+  }
+
+  // ─── Step 2: place the new order. ───────────────────────────────────
+  // SELL uses the absolute-price /quick-limit-sell endpoint (iter130).
+  // BUY uses /quick-limit-buy with offsetPct derived from S.lastPrice
+  // (small drift if the price ticks during the request).
+  btn.textContent = '⏳ Placing new…';
+  let placeUrl;
+  if (side === 'SELL') {
+    placeUrl = '/api/trade/quick-limit-sell/' + encodeURIComponent(sym)
+             + '?qty=' + newQty + '&price=' + newPx;
+  } else {
+    const ref = S.lastPrice || S.bestBid || S.bestAsk || newPx;
+    const offsetPct = ((ref - newPx) / ref) * 100;
+    placeUrl = '/api/trade/quick-limit-buy/' + encodeURIComponent(sym)
+             + '?qty=' + newQty
+             + '&offsetPct=' + offsetPct.toFixed(4)
+             + '&profitPct=0';
+  }
+  console.log('[edit-order] step 2 place:', placeUrl);
+  try {
+    const r = await fetch(placeUrl);
+    const txt = await r.text();
+    let body = null;
+    try { body = JSON.parse(txt); } catch(_) { body = { ok: r.ok, raw: txt }; }
+    console.log('[edit-order] place resp:', r.status, body);
+    if (!r.ok || body.ok === false) {
+      // ⚠️ Old order is GONE but the new one didn't land.  Tell the
+      // operator LOUDLY so they don't think they still have an order.
+      toast('error', '⚠️ NEW ORDER FAILED',
+            'Old order cancelled but new ' + side + ' ' + newQty + ' @ ' + newPx
+            + ' was NOT placed: ' + (body.error || body.raw || ('HTTP ' + r.status))
+            + ' — re-place from the form.');
+      closeEditModal();
+      // Delay slightly so the engine sees the cancel before we re-query.
+      setTimeout(loadOpenOrders, 800);
+      return;
+    }
+    toast('ok', '2/2 · New order placed', side + ' ' + newQty + ' @ ' + newPx);
+    closeEditModal();
+    // Delay the refresh by 1.2s so the engine + Binance have time to
+    // register the new order — otherwise the open-orders panel can
+    // momentarily look empty and the operator thinks nothing happened.
+    setTimeout(() => {
+      loadOpenOrders();
+      fetchWallet();
+      fetchPosition(S.symbol);
+    }, 1200);
+  } catch (e) {
+    console.error('[edit-order] place network error:', e);
+    toast('error', '⚠️ Network error on PLACE',
+          'Old order cancelled but PLACE failed: ' + e.message + ' — re-place from the form.');
+    closeEditModal();
+    setTimeout(loadOpenOrders, 800);
+  }
+}
+// iter133 — expose on window so the inline onclick fallback resolves
+// even in odd module-scoping scenarios.
+window.confirmEditOrder = confirmEditOrder;
+
+// ── iter126 — Candlestick chart (TradingView lightweight-charts) ────
+// Two pieces:
+//   1. Historical klines via Binance REST  (one-shot per symbol+tf)
+//   2. Live updates via <sym>@kline_<tf> WS on a SEPARATE connection
+//      so changing the timeframe doesn't disrupt the order book.
+const SUPPORTED_TFS = new Set(['1s','1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d','3d','1w','1M']);
+const TF_SEC = {
+  '1s':1, '1m':60, '3m':180, '5m':300, '15m':900, '30m':1800,
+  '1h':3600, '2h':7200, '4h':14400, '6h':21600, '8h':28800, '12h':43200,
+  '1d':86400, '3d':259200, '1w':604800, '1M':2592000,
+};
+
+let chart = null;
+let candleSeries = null;
+let volSeries = null;
+let ma7Series = null;
+let ma25Series = null;
+let klineWs = null;
+let _candles = [];  // local cache of {time, open, high, low, close, volume}
+let _currentTf = '1m';
+let _resizeBound = false;
+
+function initChart(){
+  if (chart) return;
+  if (!window.LightweightCharts) {
+    setTimeout(initChart, 200); return;  // CDN not arrived yet
+  }
+  const container = $('chart-canvas');
+  chart = LightweightCharts.createChart(container, {
+    layout: { background: { color: '#141925' }, textColor: '#8a93a6' },
+    grid:   { vertLines: { color: '#1b2130' }, horzLines: { color: '#1b2130' } },
+    crosshair: { mode: 0 },  // magnet off → free crosshair
+    rightPriceScale: { borderColor: '#232b3d', scaleMargins: { top: 0.06, bottom: 0.28 } },
+    timeScale:       { borderColor: '#232b3d', timeVisible: true, secondsVisible: true },
+    width: container.clientWidth, height: container.clientHeight,
+  });
+  candleSeries = chart.addCandlestickSeries({
+    upColor: '#16c784', downColor: '#ea3943',
+    wickUpColor: '#16c784', wickDownColor: '#ea3943',
+    borderVisible: false, priceLineVisible: true,
+  });
+  volSeries = chart.addHistogramSeries({
+    priceFormat: { type: 'volume' }, priceScaleId: '',
+    color: 'rgba(75,159,255,.45)',
+  });
+  volSeries.priceScale().applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
+  ma7Series  = chart.addLineSeries({ color: '#f0b90b', lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+  ma25Series = chart.addLineSeries({ color: '#e91e63', lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+
+  // Click any candle → copy CLOSE into the price field
+  chart.subscribeClick(param => {
+    const c = param.seriesData.get(candleSeries);
+    if (c && c.close != null) {
+      $('f-price').value = c.close;
+      syncFromPrice();
+      toast('ok', 'Price copied', `${fmtPrice(c.close)} → order form`);
+    }
+  });
+
+  // Crosshair-move updates OHLC strip
+  chart.subscribeCrosshairMove(param => {
+    if (!param || !param.seriesData) return updateOhlcStrip(_candles[_candles.length - 1]);
+    const c = param.seriesData.get(candleSeries);
+    if (c) updateOhlcStrip({ ...c, time: param.time });
+    else   updateOhlcStrip(_candles[_candles.length - 1]);
+  });
+
+  // Resize chart on window resize
+  if (!_resizeBound) {
+    window.addEventListener('resize', () => {
+      if (chart && $('chart-canvas')) chart.applyOptions({
+        width: $('chart-canvas').clientWidth,
+        height: $('chart-canvas').clientHeight,
+      });
+    });
+    _resizeBound = true;
+  }
+}
+
+function fmtUnixToLabel(ts, tf){
+  if (!ts) return '—';
+  const ms = (ts < 1e12) ? ts * 1000 : ts;
+  const d = new Date(ms);
+  const intra = ['1s','1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h'].includes(tf);
+  if (intra) {
+    return d.toLocaleString(undefined, { hour12: false, year:'2-digit', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+  }
+  return d.toLocaleDateString();
+}
+
+function updateOhlcStrip(c){
+  if (!c) return;
+  const o = +c.open, h = +c.high, l = +c.low, cl = +c.close;
+  const chg = (o > 0) ? ((cl - o) / o) * 100 : 0;
+  const rng = (o > 0) ? ((h - l) / o) * 100 : 0;
+  $('ohlc-time').textContent = fmtUnixToLabel(c.time, _currentTf);
+  $('ohlc-o').textContent = fmtPrice(o);
+  $('ohlc-h').textContent = fmtPrice(h);
+  $('ohlc-l').textContent = fmtPrice(l);
+  $('ohlc-c').textContent = fmtPrice(cl);
+  $('ohlc-c').className = 'v ' + (cl >= o ? 'up' : 'down');
+  $('ohlc-chg').textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
+  $('ohlc-chg').className = 'v ' + (chg >= 0 ? 'up' : 'down');
+  $('ohlc-rng').textContent = rng.toFixed(2) + '%';
+}
+
+function computeMA(period){
+  if (_candles.length < period) return [];
+  const out = [];
+  let sum = 0;
+  for (let i = 0; i < _candles.length; i++){
+    sum += _candles[i].close;
+    if (i >= period) sum -= _candles[i - period].close;
+    if (i >= period - 1) out.push({ time: _candles[i].time, value: sum / period });
+  }
+  return out;
+}
+
+function updateMA(){
+  if (!ma7Series || !ma25Series) return;
+  const ma7 = computeMA(7);
+  const ma25 = computeMA(25);
+  ma7Series.setData(ma7);
+  ma25Series.setData(ma25);
+  if (ma7.length) $('ma7-val').textContent = fmtPrice(ma7[ma7.length - 1].value);
+  if (ma25.length) $('ma25-val').textContent = fmtPrice(ma25[ma25.length - 1].value);
+}
+
+async function loadHistoricalKlines(symbol, interval){
+  // Binance REST — public, no auth needed.  500 bars is plenty.
+  const url = `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=500`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('klines HTTP ' + r.status);
+  const arr = await r.json();
+  _candles = arr.map(row => ({
+    time:   Math.floor(row[0] / 1000),       // open-time → unix seconds
+    open:   parseFloat(row[1]),
+    high:   parseFloat(row[2]),
+    low:    parseFloat(row[3]),
+    close:  parseFloat(row[4]),
+    volume: parseFloat(row[5]),
+  }));
+  if (!candleSeries) return;
+  candleSeries.setData(_candles.map(c => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
+  volSeries.setData(_candles.map(c => ({
+    time: c.time, value: c.volume,
+    color: c.close >= c.open ? 'rgba(22,199,132,.55)' : 'rgba(234,57,67,.55)',
+  })));
+  updateMA();
+  updateOhlcStrip(_candles[_candles.length - 1]);
+  // iter 136 — dynamic price-axis precision.  Default precision=2
+  // truncated $0.04490 → '0.04' on the right axis and on crosshair
+  // hover.  Pick the right number of decimals for this asset's
+  // magnitude so the operator sees the full price.
+  applyPriceFormat(_candles[_candles.length - 1].close);
+  $('chart-meta').textContent = `${_candles.length} bars · ${interval}`;
+}
+
+// iter 136 — Choose decimal precision for the chart price axis +
+// MA legend + crosshair tooltip from the current price magnitude.
+// 1234.56  -> 2 dec   (BTC, ETH heights)
+// 12.3456  -> 4 dec   (mid caps)
+// 0.04490  -> 5 dec   (the screenshot case)
+// 0.00040  -> 7 dec   (small caps)
+// 0.00000040 -> 8 dec (memes)
+function pickDecimals(refPrice){
+  const abs = Math.abs(+refPrice || 0);
+  if (abs >= 1000)   return 2;
+  if (abs >= 100)    return 3;
+  if (abs >= 1)      return 4;
+  if (abs >= 0.01)   return 5;
+  if (abs >= 0.0001) return 7;
+  return 8;
+}
+function applyPriceFormat(refPrice){
+  if (!candleSeries) return;
+  const dec = pickDecimals(refPrice);
+  const minMove = Number((Math.pow(10, -dec)).toFixed(dec));
+  const fmt = { type: 'price', precision: dec, minMove };
+  try {
+    candleSeries.applyOptions({ priceFormat: fmt });
+    if (ma7Series)  ma7Series.applyOptions({  priceFormat: fmt });
+    if (ma25Series) ma25Series.applyOptions({ priceFormat: fmt });
+  } catch(_) {}
+}
+
+function connectKlineWs(symbol, interval){
+  if (klineWs) {
+    try { klineWs.close(); } catch(_){}
+    klineWs = null;
+  }
+  const s = String(symbol).toLowerCase();
+  const url = `wss://stream.binance.com:9443/ws/${s}@kline_${interval}`;
+  let ws;
+  try { ws = new WebSocket(url); } catch(_) { return; }
+  klineWs = ws;
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch(_) { return; }
+    if (msg.e !== 'kline' || !msg.k) return;
+    const k = msg.k;
+    const candle = {
+      time:   Math.floor(k.t / 1000),
+      open:   parseFloat(k.o),
+      high:   parseFloat(k.h),
+      low:    parseFloat(k.l),
+      close:  parseFloat(k.c),
+      volume: parseFloat(k.v),
+    };
+    // Replace last if same open-time, else append a new bar.
+    const last = _candles[_candles.length - 1];
+    if (last && last.time === candle.time) {
+      _candles[_candles.length - 1] = candle;
+    } else if (!last || candle.time > last.time) {
+      _candles.push(candle);
+      if (_candles.length > 1000) _candles.shift();
+    }
+    if (candleSeries) candleSeries.update({ time: candle.time, open: candle.open, high: candle.high, low: candle.low, close: candle.close });
+    if (volSeries) volSeries.update({
+      time: candle.time, value: candle.volume,
+      color: candle.close >= candle.open ? 'rgba(22,199,132,.55)' : 'rgba(234,57,67,.55)',
+    });
+    updateMA();
+    updateOhlcStrip(candle);
+  };
+  ws.onclose = () => {
+    // Auto-reconnect after 1.5s, but only if this is still the current ws (avoid races on tf change).
+    setTimeout(() => {
+      if (klineWs === ws) connectKlineWs(S.symbol, _currentTf);
+    }, 1500);
+  };
+}
+
+async function applyTimeframe(tf){
+  if (!SUPPORTED_TFS.has(tf)) return;
+  _currentTf = tf;
+  document.querySelectorAll('#tf-tabs button').forEach(b => {
+    b.classList.toggle('active', b.dataset.tf === tf);
+  });
+  initChart();
+  try {
+    await loadHistoricalKlines(S.symbol, tf);
+    connectKlineWs(S.symbol, tf);
+  } catch (e) {
+    toast('error', 'Chart load failed', e.message);
+  }
+}
+
+document.querySelectorAll('#tf-tabs button').forEach(b => {
+  b.addEventListener('click', () => applyTimeframe(b.dataset.tf));
+});
+
+// Hook into applySymbol: whenever the symbol changes, reload chart for the same tf.
+const _origApplySymbol = applySymbol;
+applySymbol = function(raw){
+  _origApplySymbol(raw);
+  // Reload chart for the new symbol with whatever tf is currently active.
+  applyTimeframe(_currentTf);
+};
+
+// ── Boot ────────────────────────────────────────────────────────────
+(function boot(){
+  const u = new URL(window.location.href);
+  const fromUrl = u.searchParams.get('sym');
+  applySymbol(fromUrl || 'EDENUSDT');
+})();
+</script>
+
+<!-- Universal nav (iter77 + iter123) -->
+<script src="/nav.js"></script>
+</body>
+</html>

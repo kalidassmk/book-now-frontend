@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+  public/zerodha.html
+  ──────────────────────────────────────────────────────────────────────────
+  Zerodha (Kite Connect) — operator overview.
+
+  One-screen snapshot of the Zerodha engine's health:
+    * session (auth) status + last refresh
+    * WebSocket ticker connection + subscription counts
+    * equity + commodity funds
+    * holdings count + total value
+    * net positions count
+    * recent order events feed (last 10 — pulled from
+      ZERODHA:ORDERS:RECENT via the backend)
+    * Redis topology diag (trading + analyse instance health)
+
+  Pages off this:
+    /zerodha-spot.html       NSE/BSE buy/sell + GTT
+    /zerodha-mcx.html        MCX commodity futures
+    /zerodha-portfolio.html  read-only consolidated portfolio + orders + trades
+
+  Backend dependency: book-now-zerodha-backend's /api/zerodha/v1/* routes.
+  Polled every 4 s for the funds/holdings, every 2 s for the orders feed.
+-->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Zerodha Overview — BookNow</title>
+<link rel="stylesheet" href="/css/zerodha.css" />
+</head>
+<body class="zd">
+<div class="zd-wrap">
+
+  <h1 class="zd-title">🇮🇳 Zerodha overview</h1>
+  <div class="zd-sub">
+    Live session, funds, positions, and recent orders. Trade buttons go
+    to <a href="/zerodha-spot.html" style="color:var(--bn-accent)">Spot Equity</a>
+    or <a href="/zerodha-mcx.html" style="color:var(--bn-accent)">MCX Commodity</a>.
+  </div>
+
+  <!-- ── Top status row (session + ticker) ────────────────────────── -->
+  <div class="zd-row" id="zd-status-row">
+    <div class="zd-chip"            id="chip-mode"><span class="dot"></span><span>mode <strong id="mode-val">…</strong></span></div>
+    <div class="zd-chip"            id="chip-auth"><span class="dot"></span><span>auth <strong id="auth-val">…</strong></span></div>
+    <div class="zd-chip"            id="chip-ticker"><span class="dot"></span><span>ticker <strong id="ticker-val">…</strong></span></div>
+    <div class="zd-chip"            id="chip-redis"><span class="dot"></span><span>redis <strong id="redis-val">…</strong></span></div>
+    <div class="zd-chip" id="chip-as-of">last refresh <strong id="as-of-val">—</strong></div>
+  </div>
+
+  <!-- ── Big stats (funds + holdings) ─────────────────────────────── -->
+  <div class="zd-grid cols-4" style="margin-top: 4px;">
+    <div class="zd-stat">
+      <div class="lbl">Equity available</div>
+      <div class="val" id="stat-equity">₹0.00</div>
+      <div class="sub" id="stat-equity-sub">cash + collateral</div>
+    </div>
+    <div class="zd-stat">
+      <div class="lbl">Commodity available</div>
+      <div class="val" id="stat-commodity">₹0.00</div>
+      <div class="sub" id="stat-commodity-sub">MCX margin pool</div>
+    </div>
+    <div class="zd-stat">
+      <div class="lbl">Holdings (CNC)</div>
+      <div class="val" id="stat-holdings">0</div>
+      <div class="sub" id="stat-holdings-sub">settled delivery</div>
+    </div>
+    <div class="zd-stat">
+      <div class="lbl">Net positions</div>
+      <div class="val" id="stat-positions">0</div>
+      <div class="sub" id="stat-positions-sub">intraday + carry</div>
+    </div>
+  </div>
+
+  <!-- ── Day P&L summary (from holdings + positions) ─────────────── -->
+  <div class="zd-grid cols-3" style="margin-top: 12px;">
+    <div class="zd-stat">
+      <div class="lbl">Holdings P&L (today)</div>
+      <div class="val" id="stat-day-pnl">—</div>
+      <div class="sub">day change vs prev close</div>
+    </div>
+    <div class="zd-stat">
+      <div class="lbl">Positions P&L (running)</div>
+      <div class="val" id="stat-pos-pnl">—</div>
+      <div class="sub">m2m on net positions</div>
+    </div>
+    <div class="zd-stat">
+      <div class="lbl">Ticker throughput</div>
+      <div class="val" id="stat-ticks">—</div>
+      <div class="sub" id="stat-ticks-sub">total / last age</div>
+    </div>
+  </div>
+
+  <!-- ── Recent order events feed ────────────────────────────────── -->
+  <h2 class="zd-section-h" style="margin-top: 22px;">
+    Recent orders <span class="count" id="orders-count">0</span>
+    <a href="/zerodha-portfolio.html#orders" style="margin-left:auto;color:var(--bn-accent);font-size:11px;font-weight:600;text-transform:none;">view all →</a>
+  </h2>
+  <div class="zd-table-wrap">
+    <table class="zd-table" id="orders-table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Side</th>
+          <th>Symbol</th>
+          <th>Exch</th>
+          <th>Product</th>
+          <th class="num">Qty</th>
+          <th class="num">Avg fill</th>
+          <th>Status</th>
+          <th>Tag</th>
+        </tr>
+      </thead>
+      <tbody id="orders-tbody">
+        <tr><td colspan="9" class="zd-empty">No recent orders</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── Redis health (the small footer panel) ─────────────────── -->
+  <h2 class="zd-section-h" style="margin-top: 22px;">Redis health</h2>
+  <div class="zd-grid cols-2">
+    <div class="zd-card tight" id="redis-trading-card">
+      <h3><span class="ic">🧾</span> trading instance <span style="margin-left:auto;font-size:10px;color:var(--bn-muted);font-weight:600;" id="redis-trading-host"></span></h3>
+      <div class="kv"><span class="k">ping</span>            <span class="v" id="rt-ping">—</span></div>
+      <div class="kv"><span class="k">memory</span>          <span class="v" id="rt-mem">—</span></div>
+      <div class="kv"><span class="k">policy</span>          <span class="v" id="rt-policy">—</span></div>
+      <div class="kv"><span class="k">AOF / RDB</span>       <span class="v" id="rt-persist">—</span></div>
+      <div class="kv"><span class="k">auth cached</span>     <span class="v" id="rt-auth">—</span></div>
+      <div class="kv"><span class="k">instruments idx</span> <span class="v" id="rt-instr">—</span></div>
+    </div>
+    <div class="zd-card tight" id="redis-analyse-card">
+      <h3><span class="ic">📊</span> analyse instance <span style="margin-left:auto;font-size:10px;color:var(--bn-muted);font-weight:600;" id="redis-analyse-host"></span></h3>
+      <div class="kv"><span class="k">ping</span>     <span class="v" id="ra-ping">—</span></div>
+      <div class="kv"><span class="k">memory</span>   <span class="v" id="ra-mem">—</span></div>
+      <div class="kv"><span class="k">policy</span>   <span class="v" id="ra-policy">—</span></div>
+      <div class="kv"><span class="k">evicted</span>  <span class="v" id="ra-evicted">—</span></div>
+    </div>
+  </div>
+
+</div>
+
+<script src="/nav.js"></script>
+<script>
+/* ──────────────────────────────────────────────────────────────────────────
+ * Polling cadence — slow enough to be polite, fast enough to feel live.
+ * ──────────────────────────────────────────────────────────────────────── */
+const POLL_FAST_MS = 2000;   // orders feed + ticker stats
+const POLL_SLOW_MS = 4000;   // funds + holdings + positions
+const POLL_DIAG_MS = 10000;  // redis health + auth diag
+
+/* ── Currency helpers (INR not USDT) ──────────────────────────────────── */
+function inr(v) {
+  if (v == null || isNaN(v)) return '₹—';
+  const n = Number(v);
+  return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function num(v, d = 0) {
+  if (v == null || isNaN(v)) return '—';
+  return Number(v).toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function shortTime(iso) {
+  if (!iso) return '—';
+  try { return new Date(iso).toLocaleTimeString('en-IN', { hour12: false }); }
+  catch (_) { return iso; }
+}
+function ago(s) {
+  if (s == null) return '—';
+  if (s < 1) return Math.round(s * 1000) + 'ms';
+  if (s < 60) return s.toFixed(1) + 's';
+  if (s < 3600) return (s/60).toFixed(1) + 'm';
+  return (s/3600).toFixed(1) + 'h';
+}
+
+/* ── Chip-state helpers ───────────────────────────────────────────────── */
+function setChip(id, klass, value) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.remove('good', 'bad', 'warn', 'accent');
+  if (klass) el.classList.add(klass);
+  const v = el.querySelector('strong');
+  if (v) v.textContent = value;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+ * Pollers — each is independent so one stalled fetch can't block others.
+ * Throw away results from a slow request that returned after a newer one.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+let lastFundsTs = 0;
+async function pollFunds() {
+  const t = Date.now();
+  try {
+    const r = await fetch('/api/zerodha/v1/funds');
+    if (!r.ok) throw new Error(`status ${r.status}`);
+    const data = await r.json();
+    if (t < lastFundsTs) return;
+    lastFundsTs = t;
+    // Kite returns either {equity: {…}, commodity: {…}} or one segment.
+    const eq = (data.equity && data.equity.available) || data.equity || {};
+    const cm = (data.commodity && data.commodity.available) || data.commodity || {};
+    const eqCash = (eq.cash != null) ? eq.cash : eq.live_balance;
+    const cmCash = (cm.cash != null) ? cm.cash : cm.live_balance;
+    document.getElementById('stat-equity').textContent = inr(eqCash);
+    document.getElementById('stat-commodity').textContent = inr(cmCash);
+    if (eq.collateral != null) {
+      document.getElementById('stat-equity-sub').textContent =
+        'collateral ' + inr(eq.collateral);
+    }
+  } catch (e) {
+    document.getElementById('stat-equity').textContent = '₹—';
+    document.getElementById('stat-commodity').textContent = '₹—';
+  }
+}
+
+async function pollHoldings() {
+  try {
+    const r = await fetch('/api/zerodha/v1/holdings');
+    if (!r.ok) return;
+    const rows = await r.json();
+    if (!Array.isArray(rows)) return;
+    document.getElementById('stat-holdings').textContent = rows.length;
+    let value = 0, dayPnl = 0;
+    for (const h of rows) {
+      value  += (h.last_price || h.average_price || 0) * (h.quantity || 0);
+      dayPnl += (h.day_change || 0) * (h.quantity || 0);
+    }
+    document.getElementById('stat-holdings-sub').textContent =
+      'value ' + inr(value);
+    const pnlEl = document.getElementById('stat-day-pnl');
+    pnlEl.textContent = inr(dayPnl);
+    pnlEl.className = 'val ' + (dayPnl > 0 ? 'good' : dayPnl < 0 ? 'bad' : '');
+  } catch (_) { /* keep last value */ }
+}
+
+async function pollPositions() {
+  try {
+    const r = await fetch('/api/zerodha/v1/positions');
+    if (!r.ok) return;
+    const data = await r.json();
+    const net = (data && data.net) || [];
+    const open = net.filter(p => (p.quantity || 0) !== 0);
+    document.getElementById('stat-positions').textContent = open.length;
+    let posPnl = 0;
+    for (const p of net) posPnl += p.pnl || 0;
+    const pnlEl = document.getElementById('stat-pos-pnl');
+    pnlEl.textContent = inr(posPnl);
+    pnlEl.className = 'val ' + (posPnl > 0 ? 'good' : posPnl < 0 ? 'bad' : '');
+  } catch (_) {}
+}
+
+async function pollTickerStats() {
+  try {
+    const r = await fetch('/api/zerodha/v1/ticker/stats');
+    if (!r.ok) return;
+    const data = await r.json();
+    setChip('chip-ticker', data.connected ? 'good' : 'bad',
+            data.connected ? `${data.subscribed||0} subs` : 'down');
+    document.getElementById('stat-ticks').textContent = num(data.ticks_received || 0);
+    document.getElementById('stat-ticks-sub').textContent =
+      'last ' + ago(data.last_tick_age_s) + ' ago • ' +
+      (data.subscribed || 0) + ' subs';
+  } catch (_) {
+    setChip('chip-ticker', 'bad', 'down');
+  }
+}
+
+async function pollAuth() {
+  try {
+    const r = await fetch('/api/zerodha/v1/auth/status');
+    if (!r.ok) throw new Error();
+    const data = await r.json();
+    if (data.authenticated) {
+      setChip('chip-auth', 'good', shortTime(data.refreshed_at));
+    } else {
+      setChip('chip-auth', 'bad', 'not cached');
+    }
+  } catch (_) {
+    setChip('chip-auth', 'bad', 'offline');
+  }
+}
+
+/* The /api/zerodha/v1/health endpoint also tells us LIVE vs PAPER via
+ * /api/zerodha/v1/profile.user_type — but for the top-row chip we use
+ * the engine's own live-mode flag (auth/status doesn't carry it). We
+ * derive it from a small synthetic probe: a 200 on /health ⇒ engine up,
+ * and we read mode from a config endpoint.
+ *
+ * For now we read TRADING_CONFIG via the diag pass.
+ */
+async function pollMode() {
+  // No dedicated mode endpoint yet; show "engine up/down".
+  try {
+    const r = await fetch('/api/zerodha/v1/health');
+    setChip('chip-mode', r.ok ? 'accent' : 'bad', r.ok ? 'engine up' : 'engine down');
+  } catch (_) {
+    setChip('chip-mode', 'bad', 'engine down');
+  }
+}
+
+async function pollOrders() {
+  try {
+    // We don't have a "recent feed" endpoint yet; use /orders which is
+    // today's full set, take the last 10 by order_timestamp desc.
+    const r = await fetch('/api/zerodha/v1/orders');
+    if (!r.ok) return;
+    const rows = await r.json();
+    if (!Array.isArray(rows)) return;
+    const recent = rows.slice().sort((a, b) =>
+      String(b.order_timestamp || '').localeCompare(String(a.order_timestamp || ''))
+    ).slice(0, 10);
+    document.getElementById('orders-count').textContent = rows.length;
+    const tbody = document.getElementById('orders-tbody');
+    if (!recent.length) {
+      tbody.innerHTML = '<tr><td colspan="9" class="zd-empty">No orders today</td></tr>';
+      return;
+    }
+    tbody.innerHTML = recent.map(o => {
+      const sideTag = `<span class="zd-tag ${ (o.transaction_type||'').toLowerCase() === 'buy' ? 'buy' : 'sell'}">${o.transaction_type||''}</span>`;
+      const statusKey = (o.status || '').toLowerCase().replace(/\s+/g, '');
+      const statusTag = `<span class="zd-tag ${
+        statusKey === 'complete' ? 'complete' :
+        statusKey === 'open' ? 'open' :
+        statusKey === 'cancelled' ? 'cancelled' :
+        statusKey === 'rejected' ? 'rejected' : ''
+      }">${o.status||''}</span>`;
+      return `<tr>
+        <td class="mute">${shortTime(o.order_timestamp)}</td>
+        <td>${sideTag}</td>
+        <td class="sym">${o.tradingsymbol||''}</td>
+        <td class="mute">${o.exchange||''}</td>
+        <td class="mute">${o.product||''}</td>
+        <td class="num">${o.quantity||0}</td>
+        <td class="num">${o.average_price ? num(o.average_price, 2) : '—'}</td>
+        <td>${statusTag}</td>
+        <td class="mute">${o.tag||''}</td>
+      </tr>`;
+    }).join('');
+  } catch (_) {}
+}
+
+async function pollDiagRedis() {
+  try {
+    const r = await fetch('/api/zerodha/v1/diag/redis');
+    if (!r.ok) return;
+    const data = await r.json();
+    setChip('chip-redis', data.is_healthy ? 'good' : 'bad',
+            data.is_healthy ? 'OK' : 'DEGRADED');
+
+    const trading = data.trading || {};
+    const analyse = data.analyse || {};
+
+    document.getElementById('redis-trading-host').textContent = trading.host || '';
+    document.getElementById('redis-analyse-host').textContent = analyse.host || '';
+
+    const findCheck = (rep, name) =>
+      (rep.checks || []).find(c => c.name === name) || {};
+
+    // Trading instance
+    const tPing  = findCheck(trading, 'ping');
+    const tMem   = findCheck(trading, 'memory_pressure');
+    const tPol   = findCheck(trading, 'eviction_policy');
+    const tPer   = findCheck(trading, 'persistence');
+    const tAuth  = findCheck(trading, 'auth_cached');
+    const tInstr = findCheck(trading, 'instruments_cache');
+    document.getElementById('rt-ping').textContent   = tPing.detail || '—';
+    document.getElementById('rt-mem').textContent    = (trading.memory && trading.memory.used_human) || tMem.detail || '—';
+    document.getElementById('rt-policy').textContent = tPol.detail || '—';
+    document.getElementById('rt-persist').textContent= tPer.detail || '—';
+    document.getElementById('rt-auth').textContent   = tAuth.detail || '—';
+    document.getElementById('rt-instr').textContent  = tInstr.detail || '—';
+
+    // Analyse instance
+    const aPing = findCheck(analyse, 'ping');
+    const aMem  = findCheck(analyse, 'memory_pressure');
+    const aPol  = findCheck(analyse, 'eviction_policy');
+    document.getElementById('ra-ping').textContent   = aPing.detail || '—';
+    document.getElementById('ra-mem').textContent    = (analyse.memory && analyse.memory.used_human) || aMem.detail || '—';
+    document.getElementById('ra-policy').textContent = aPol.detail || '—';
+    document.getElementById('ra-evicted').textContent= (analyse.memory && analyse.memory.evicted != null) ? num(analyse.memory.evicted) : '—';
+  } catch (_) {
+    setChip('chip-redis', 'bad', 'offline');
+  }
+}
+
+function updateAsOf() {
+  const t = new Date();
+  document.getElementById('as-of-val').textContent = t.toLocaleTimeString('en-IN', { hour12: false });
+}
+
+/* ── Boot ─────────────────────────────────────────────────────────────── */
+function runAll(slow=true) {
+  pollMode(); pollAuth(); pollTickerStats(); pollOrders();
+  if (slow) { pollFunds(); pollHoldings(); pollPositions(); pollDiagRedis(); }
+  updateAsOf();
+}
+runAll(true);
+setInterval(() => runAll(false), POLL_FAST_MS);
+setInterval(() => { pollFunds(); pollHoldings(); pollPositions(); }, POLL_SLOW_MS);
+setInterval(pollDiagRedis, POLL_DIAG_MS);
+</script>
+
+</body>
+</html>

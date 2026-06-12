@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+  public/zerodha-scanner.html
+  ──────────────────────────────────────────────────────────────────────────
+  Legacy combined scanner — superseded by Z-iter18 split:
+    * /zerodha-equity-scanner.html     (NSE/BSE — NIFTY 100)
+    * /zerodha-commodity-scanner.html  (MCX front-months + chain)
+
+  This page just redirects to the equity scanner so old bookmarks /
+  shared URLs still land somewhere useful. The split was driven by:
+    - Equity universe (~100 instruments) needs different ranking weights
+      than the much smaller MCX universe (~8 underlyings).
+    - Click target moved to the Z-iter17 workspace (chart + BUY/SELL +
+      order book + 🎯 Price Planner).
+    - Mixing both into one page made it hard to keep MCX-specific
+      controls (front-month resolver, lot/margin, chain explorer) close
+      to the data they belong with.
+-->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Zerodha Scanner → split — BookNow</title>
+<link rel="stylesheet" href="/css/zerodha.css" />
+<meta http-equiv="refresh" content="0;url=/zerodha-equity-scanner.html" />
+<style>
+  .redirect-card {
+    max-width: 540px;
+    margin: 60px auto;
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 10px;
+    padding: 26px 30px;
+  }
+  .redirect-card h1 { font-size: 18px; margin: 0 0 8px; color: var(--bn-text); }
+  .redirect-card p  { font-size: 13px; color: var(--bn-muted); margin: 8px 0; line-height: 1.5; }
+  .redirect-card .links { margin-top: 18px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .redirect-card a {
+    background: var(--bn-panel-2);
+    border: 1px solid var(--bn-line);
+    color: var(--bn-accent);
+    padding: 9px 14px;
+    border-radius: 5px;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .redirect-card a:hover { border-color: var(--bn-accent); }
+</style>
+</head>
+<body class="zd">
+<div class="zd-wrap">
+  <div class="redirect-card">
+    <h1>🔍 Scanner is now split</h1>
+    <p>
+      We split the combined scanner into two focused pages — each is
+      tuned for its own asset class and lands on the Z-iter17 workspace
+      (chart + BUY/SELL + order book + 🎯 Price Planner) when you click
+      a row.
+    </p>
+    <p>Redirecting to the Equity Scanner in a moment…</p>
+    <div class="links">
+      <a href="/zerodha-equity-scanner.html">📊 Equity Scanner →</a>
+      <a href="/zerodha-commodity-scanner.html">🛢️ Commodity Scanner →</a>
+    </div>
+  </div>
+</div>
+<script src="/nav.js"></script>
+</body>
+</html>

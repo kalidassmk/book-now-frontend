@@ -247,6 +247,21 @@
     box-shadow: 0 0 0 1px rgba(255,213,79,.15), 0 6px 18px rgba(0,0,0,.25);
   }
   .alerts-section.s-top5 .sec-title { color: #ffd54f; }
+  /* iter121 — browser-pop-up toggle on the Top-5 panel */
+  .notif-toggle {
+    font-size: 11px; font-weight: 600; letter-spacing: .2px;
+    padding: 4px 10px; border-radius: 14px;
+    border: 1px solid var(--border); background: var(--panel2, #1b2130);
+    color: var(--muted); cursor: pointer;
+    transition: background .15s, color .15s, border-color .15s;
+    margin-right: 8px;
+  }
+  .notif-toggle:hover { color: var(--text); border-color: var(--muted); }
+  .notif-toggle.on {
+    background: rgba(22,199,132,.15);
+    border-color: rgba(22,199,132,.5);
+    color: var(--good);
+  }
   .alerts-section .sec-head {
     display: flex; align-items: center; justify-content: space-between;
     margin-bottom: 8px;
@@ -361,6 +376,17 @@
     font-variant-numeric: tabular-nums;
   }
   .alert-row .bn-binance-link { padding: 2px 6px; font-size: 10px; }
+  /* iter129 — single grid cell that holds BOTH the Binance + Quick Trade
+     chips.  Without this wrapper the helper's two <a> elements landed in
+     two separate grid columns (an implicit auto column was created and
+     stretched, producing the bar-bug in the screenshot). */
+  .alert-row .a-links {
+    display: inline-flex; align-items: center; gap: 4px;
+    justify-content: flex-end;
+    flex-shrink: 0;
+  }
+  .alert-row .a-links .bn-binance-link,
+  .alert-row .a-links .bn-quick-link { margin-left: 0; }
   .alerts-section .sec-more {
     text-align: center; font-size: 10px; color: var(--muted);
     padding: 6px 0 2px; font-style: italic;
@@ -889,7 +915,12 @@ function render(payload) {
       <div style="text-align:right">
         <div class="coin-price">${fmtPrice(m.last_price)}</div>
         <div style="font-size:18px;font-weight:700;margin-top:4px" class="${chg24 >= 0 ? 'pos' : 'neg'}">${fmtPct(chg24)}</div>
-        <a class="bn-binance-link large" href="${binanceUrl}" target="_blank" rel="noopener noreferrer" style="margin-top:8px" title="Open ${currentSym} on Binance">🟡 View on Binance →</a>
+        <div style="display:inline-flex;gap:8px;flex-wrap:wrap;margin-top:8px;justify-content:flex-end">
+          <a class="bn-binance-link large" href="${binanceUrl}" target="_blank" rel="noopener noreferrer" title="Open ${currentSym} on Binance">🟡 View on Binance →</a>
+          <!-- iter127 — sibling Quick Trade button next to the big Binance one.
+               iter128 — typographic 'B' mark instead of 🚀 emoji. -->
+          <a class="bn-quick-link large" href="/quick-trade.html?sym=${currentSym}" title="Open ${currentSym} in BookNow Quick Trade"><span class="b-mark">B</span> Quick Trade →</a>
+        </div>
       </div>
     </div>
   `;
@@ -1343,6 +1374,194 @@ function describe(ev) {
   return { ic: '•', source: ev.kind || 'event', chips: [] };
 }
 
+// iter121 — browser pop-up notifications for new Top-5 BUY signals.
+// Permission must be requested from a user gesture, so an in-panel
+// toggle button drives the flow.  We persist the on/off choice in
+// localStorage and use a sessionStorage watermark (ts of the newest
+// signal we've already notified about) so a fresh tab doesn't fire
+// pop-ups for already-existing entries.
+const NOTIF_KEY = 'bn_top5_notif_on';
+const NOTIF_TS_KEY = 'bn_top5_notif_ts';
+
+function notifSupported(){ return typeof Notification !== 'undefined'; }
+function notifWanted(){ return localStorage.getItem(NOTIF_KEY) === '1'; }
+function notifLive(){ return notifSupported() && notifWanted() && Notification.permission === 'granted'; }
+
+async function toggleNotif(){
+  if (!notifSupported()){
+    alert('Your browser does not support pop-up notifications.');
+    return;
+  }
+  if (notifLive()){
+    localStorage.removeItem(NOTIF_KEY);
+    updateNotifButton();
+    return;
+  }
+  if (Notification.permission === 'denied'){
+    alert('Notifications are blocked for this site in your browser settings. Re-enable them there, then try again.');
+    return;
+  }
+  let perm = Notification.permission;
+  if (perm !== 'granted') perm = await Notification.requestPermission();
+  if (perm === 'granted'){
+    localStorage.setItem(NOTIF_KEY, '1');
+    // Anchor watermark to NOW so existing entries don't fire pop-ups.
+    if (!sessionStorage.getItem(NOTIF_TS_KEY)){
+      sessionStorage.setItem(NOTIF_TS_KEY, String(Date.now()));
+    }
+    updateNotifButton();
+    try {
+      const n = new Notification('🔔 BookNow alerts enabled', {
+        body: 'You will be pinged when new Top-5 BUY signals appear.',
+        tag: 'bn-notif-enable',
+      });
+      setTimeout(() => { try { n.close(); } catch(_){} }, 5000);
+    } catch(_){}
+    // iter123 — initialise the WebAudio context inside the user gesture
+    // so the first real ping can play (browsers gate ctx on a gesture).
+    try { bnPlayPing(); } catch(_){}
+  } else {
+    updateNotifButton();
+  }
+}
+
+function updateNotifButton(){
+  const btn = document.getElementById('notifBtn');
+  if (!btn) return;
+  if (!notifSupported()){
+    btn.textContent = '🔕 Pop-ups unsupported';
+    btn.disabled = true;
+    return;
+  }
+  if (notifLive()){
+    btn.textContent = '🔔 Pop-ups ON';
+    btn.title = 'Click to disable browser pop-ups for new BUY signals';
+    btn.classList.add('on');
+  } else {
+    const blocked = Notification.permission === 'denied';
+    btn.textContent = blocked ? '🚫 Pop-ups blocked' : '🔕 Enable pop-ups';
+    btn.title = blocked
+      ? 'Notifications are blocked in browser settings'
+      : 'Click to get a browser pop-up when a new BUY signal appears';
+    btn.classList.remove('on');
+  }
+}
+
+// iter123 — in-tab cues (audio ping + title flash) that work even if
+// the browser has notifications blocked or the operator hasn't yet
+// clicked '🔕 Enable pop-ups'.  WebAudio context is created lazily
+// (browsers gate it on a user gesture, which clicking the toggle
+// provides; otherwise the first ping silently fails and the title
+// flash still works).
+let _bnAudioCtx = null;
+function bnPlayPing(){
+  try {
+    if (!_bnAudioCtx) _bnAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = _bnAudioCtx;
+    const now = ctx.currentTime;
+    // Two-tone chirp: short rising "ding"
+    [
+      { freq: 880,  start: 0.00, dur: 0.10 },
+      { freq: 1320, start: 0.10, dur: 0.14 },
+    ].forEach(t => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = t.freq;
+      gain.gain.setValueAtTime(0.0001, now + t.start);
+      gain.gain.exponentialRampToValueAtTime(0.18, now + t.start + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + t.start + t.dur);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(now + t.start);
+      osc.stop(now + t.start + t.dur + 0.02);
+    });
+  } catch(_){}
+}
+
+let _bnOriginalTitle = null;
+let _bnTitleFlashTimer = null;
+let _bnTitleFlashStep = 0;
+function bnFlashTitle(label){
+  if (_bnOriginalTitle == null) _bnOriginalTitle = document.title;
+  if (_bnTitleFlashTimer) clearInterval(_bnTitleFlashTimer);
+  _bnTitleFlashStep = 0;
+  const flashLabel = '🔥 ' + label;
+  const tick = () => {
+    document.title = (_bnTitleFlashStep % 2 === 0) ? flashLabel : _bnOriginalTitle;
+    _bnTitleFlashStep++;
+    if (_bnTitleFlashStep >= 16){
+      clearInterval(_bnTitleFlashTimer);
+      _bnTitleFlashTimer = null;
+      document.title = _bnOriginalTitle;
+    }
+  };
+  tick();
+  _bnTitleFlashTimer = setInterval(tick, 750);
+  // Stop flashing once the operator focuses the tab again.
+  const stopOnFocus = () => {
+    if (_bnTitleFlashTimer){ clearInterval(_bnTitleFlashTimer); _bnTitleFlashTimer = null; }
+    document.title = _bnOriginalTitle || document.title;
+    window.removeEventListener('focus', stopOnFocus);
+  };
+  window.addEventListener('focus', stopOnFocus, { once: true });
+}
+
+function notifyNewBuys(topBuys){
+  if (!topBuys || !topBuys.length) return;
+  // iter123 — watermark is shared by ALL in-tab cues (audio + title
+  // + pop-up).  If pop-ups are off but audio/title are on the page,
+  // we still want each new signal to fire exactly once.
+  const watermark = parseInt(sessionStorage.getItem(NOTIF_TS_KEY) || '0', 10);
+  // On the FIRST tick after page load, if no watermark exists, anchor
+  // it to the newest current entry so we don't ping for back-history.
+  if (!watermark){
+    const newestTs = topBuys.reduce((m, e) => Math.max(m, e.ts || 0), 0);
+    if (newestTs) sessionStorage.setItem(NOTIF_TS_KEY, String(newestTs));
+    return;
+  }
+  const fresh = topBuys
+    .filter(e => (e.ts || 0) > watermark)
+    .sort((a, b) => (a.ts || 0) - (b.ts || 0))
+    .slice(-3);  // cap so a burst of 5 doesn't fire 5 pop-ups
+  if (!fresh.length) return;
+
+  // In-tab cues — fire ONCE per tick regardless of how many fresh
+  // entries arrived.  Always fires (no permission needed).
+  try { bnPlayPing(); } catch(_){}
+  try { bnFlashTitle(`${fresh.length} new BUY signal${fresh.length === 1 ? '' : 's'}`); } catch(_){}
+
+  // Browser pop-up — gated on the permission toggle.  iter123 drops
+  // the focus-skip so the operator sees the pop-up even while the
+  // BookNow tab is in front (Chrome handles that gracefully).
+  if (notifLive()){
+    for (const ev of fresh){
+      try {
+        const sym = ev.symbol || '?';
+        const detector = (ev.kind || 'signal').toUpperCase().replace(/_/g, ' ');
+        const priceStr = (ev.signal_price != null ? ev.signal_price
+                        : ev.price != null ? ev.price : null);
+        const priceTail = priceStr != null ? ` @ $${(+priceStr).toPrecision(6)}` : '';
+        // iter140 — coin name MUST live in the body too. On macOS /
+        // Chrome, when several notifications stack or get collapsed
+        // into the Notification Center summary, the title gets hidden
+        // and the user sees only the body. Without the symbol in the
+        // body they couldn't tell which coin fired the alert. Lead
+        // the body with the symbol in uppercase so it's the first
+        // thing visible even in compact views.
+        const n = new Notification(`🔥 ${sym} — ${detector}`, {
+          body: `${sym}: strong BUY signal${priceTail}. Click to open dashboard.`,
+          tag: `bn-buy-${sym}-${ev.kind}-${ev.ts}`,  // de-dup if two ticks race
+          renotify: false,
+        });
+        n.onclick = () => { try { window.focus(); } catch(_){} n.close(); };
+        setTimeout(() => { try { n.close(); } catch(_){} }, 12000);
+      } catch(_){}
+    }
+  }
+
+  sessionStorage.setItem(NOTIF_TS_KEY, String(fresh[fresh.length - 1].ts));
+}
+
 async function renderAlertsHome() {
   if (currentSym) return;  // user has loaded a coin — don't overwrite
   try {
@@ -1458,13 +1677,18 @@ async function renderAlertsHome() {
       const d = describe(ev);
       const bz = (window.bnBinanceLinkHtml || (()=>''))(ev.symbol, { compact: true });
       const cb = consensusBadgeHtml(ev.symbol);
+      // iter129 — wrap the two chips in ONE grid cell so the 6-col grid
+      // doesn't auto-create an implicit column for the second chip.
+      // Also extend the click guard to ignore the Quick Trade chip so
+      // clicking it actually opens /quick-trade.html instead of being
+      // hijacked into /coin.html?sym=...
       return `
-        <div class="alert-row" role="link" tabindex="0" onclick="if(event.target.closest('.bn-binance-link'))return;location.href='/coin.html?sym=${ev.symbol}'">
+        <div class="alert-row" role="link" tabindex="0" onclick="if(event.target.closest('.bn-binance-link,.bn-quick-link'))return;location.href='/coin.html?sym=${ev.symbol}'">
           <span class="a-ic">${d.ic}</span>
           <span class="a-sym">${ev.symbol}</span>
           <span class="a-source">${d.source}</span>
           <span class="a-metrics">${(d.chips || []).join('')}${cb}</span>
-          ${bz}
+          <span class="a-links">${bz}</span>
           <span class="a-when" title="${new Date(ev.ts).toISOString()}">
             <span class="a-time">${istStamp(ev.ts).time}</span>
             <span class="a-date">${istStamp(ev.ts).date} IST</span>
@@ -1505,6 +1729,13 @@ async function renderAlertsHome() {
         .slice()
         .sort((a, b) => (b.ts || 0) - (a.ts || 0))
         .slice(0, 5);
+      // iter121 — fire browser pop-up for any new entries past the
+      // watermark.  Skips silently when notifications are disabled.
+      notifyNewBuys(topBuys);
+      // iter121 — toggle button HTML (same markup in both branches so
+      // the operator can enable/disable pop-ups even when the list is
+      // currently empty).
+      const notifBtnHtml = `<button id="notifBtn" class="notif-toggle" onclick="toggleNotif()" type="button">🔕 Enable pop-ups</button>`;
       if (topBuys.length) {
         html += `
           <section class="alerts-section s-top5">
@@ -1513,7 +1744,10 @@ async function renderAlertsHome() {
                 <span class="sec-title">🎯 Top 5 Latest Buy Signals</span>
                 <span class="sec-desc">Most recent high-confidence BUY candidates — review &amp; manually execute</span>
               </div>
-              <span class="sec-count">${topBuys.length} latest</span>
+              <div style="display:flex;align-items:center;gap:6px">
+                ${notifBtnHtml}
+                <span class="sec-count">${topBuys.length} latest</span>
+              </div>
             </div>
             <div class="sec-rows">
               ${topBuys.map(renderRow).join('')}
@@ -1528,6 +1762,7 @@ async function renderAlertsHome() {
                 <span class="sec-title">🎯 Top 5 Latest Buy Signals</span>
                 <span class="sec-desc">No strong BUY signals in the current window — check Watch List below</span>
               </div>
+              <div>${notifBtnHtml}</div>
             </div>
           </section>
         `;
@@ -1565,6 +1800,9 @@ async function renderAlertsHome() {
     `;
 
     document.getElementById('content').innerHTML = html;
+    // iter121 — re-sync the toggle's label/colour after every render
+    // (the button HTML is freshly injected each tick).
+    updateNotifButton();
   } catch (e) {
     document.getElementById('content').innerHTML = `<div class="card empty">Error loading alerts: ${e.message}</div>`;
   }

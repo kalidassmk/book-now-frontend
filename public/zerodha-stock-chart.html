@@ -1,0 +1,1848 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+  public/zerodha-stock-chart.html  (Z-iter17 redesign)
+  ──────────────────────────────────────────────────────────────────────────
+  Full trading workspace for NSE/BSE equities.
+
+  Layout (desktop):
+
+    ┌──────────────────────────────────────────────────────────────────┐
+    │  Top bar — search · symbol · TF buttons · WS pill                │
+    ├────────────────────────────────────────┬─────────────────────────┤
+    │                                        │  Price snapshot         │
+    │                                        ├─────────────────────────┤
+    │                                        │  Order entry            │
+    │              CHART                     │   (BUY / SELL, qty,     │
+    │   (candles + volume + crosshair)       │    type, product, GTT)  │
+    │                                        ├─────────────────────────┤
+    │                                        │  Order book (top 5)     │
+    │                                        ├─────────────────────────┤
+    │                                        │  Position pill          │
+    ├────────────────────────────────────────┴─────────────────────────┤
+    │  Tabs · Open orders | Recent fills | Active GTTs                 │
+    └──────────────────────────────────────────────────────────────────┘
+
+  Chart rendering fixes vs the old version:
+    * Removed `overflow: hidden` on the container so the right price
+      scale + bottom time axis aren't clipped.
+    * Two SEPARATE panes (price + volume) instead of an overlay —
+      volume on its own price-scale axis so it doesn't smush at the
+      bottom of the price candles.
+    * Chart resizes on window resize AND on layout shifts (right panel
+      collapse on mobile).
+    * Crosshair tooltip stays inside the chart, doesn't bleed into
+      the right panel.
+
+  Order entry features:
+    * BUY / SELL toggle with colour cue.
+    * MARKET / LIMIT order types — LIMIT auto-snaps to tick size.
+    * Product: CNC / MIS for spot equity.
+    * Auto-AMO when market is closed (auto_amo=true to backend).
+    * "Use LTP" / "Mid-price" / "Last trade" quick-fill buttons.
+    * OCO GTT inline — SL% + TP% inputs, live preview, one click to arm.
+    * Click any row in the order book to copy that price into the
+      LIMIT field. World-class trading apps do this; so do we.
+
+  Live data:
+    * Historical seed via /api/zerodha/v1/historical/...
+    * Live update via existing WebSocket /api/zerodha/v1/ws/ticks
+    * Open orders / fills / GTTs polled every 5s when their tab is active.
+
+  URL: /zerodha-stock-chart.html?sym=RELIANCE&exch=NSE&tf=5m
+-->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Stock Workspace · Zerodha · BookNow</title>
+<link rel="stylesheet" href="/css/zerodha.css" />
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  /* ── Layout grid ─────────────────────────────────────────────── */
+  body.zd { min-height: 100vh; }
+  .ws-wrap {
+    max-width: 1640px;
+    margin: 0 auto;
+    padding: 14px 18px 24px;
+    display: grid;
+    grid-template-rows: auto auto 1fr auto;
+    gap: 12px;
+    min-height: calc(100vh - 80px);
+  }
+  /* Two-column main row — chart left, side panel right. */
+  .main-row {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 12px;
+    align-items: stretch;
+    min-height: 0;
+  }
+  @media (max-width: 980px) {
+    .main-row { grid-template-columns: 1fr; }
+    .side { order: 2; }
+    .chart-panel { order: 1; min-height: 460px; }
+  }
+
+  /* ── Top bar ──────────────────────────────────────────────────── */
+  .top-bar {
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 8px;
+    padding: 10px 14px;
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 12px;
+    align-items: center;
+  }
+  .top-bar .search {
+    display: flex; gap: 8px; align-items: center;
+  }
+  .top-bar .search input {
+    background: var(--bn-panel-2); border: 1px solid var(--bn-line);
+    color: var(--bn-text); padding: 6px 10px; border-radius: 5px;
+    font: inherit; font-size: 13px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .3px;
+    width: 180px;
+    outline: 0;
+  }
+  .top-bar .search input:focus { border-color: var(--bn-accent); }
+  .top-bar .search select {
+    background: var(--bn-panel-2); color: var(--bn-text);
+    border: 1px solid var(--bn-line); border-radius: 5px;
+    padding: 6px 10px; font: inherit; font-size: 12px;
+  }
+  .top-bar .symbol-meta {
+    color: var(--bn-muted); font-size: 11px;
+    display: flex; gap: 10px; align-items: baseline;
+  }
+  .top-bar .symbol-meta strong { color: var(--bn-text); font-weight: 700; font-size: 13px; }
+
+  /* Timeframe bar */
+  .tf-bar {
+    display: flex; gap: 1px;
+    background: var(--bn-panel); border: 1px solid var(--bn-line);
+    border-radius: 6px; padding: 3px;
+  }
+  .tf-btn {
+    background: transparent; color: var(--bn-muted);
+    border: 0; padding: 4px 9px;
+    border-radius: 3px; font-size: 11px; font-weight: 700;
+    cursor: pointer; font-variant-numeric: tabular-nums;
+    transition: background .12s, color .12s;
+  }
+  .tf-btn:hover { color: var(--bn-text); background: var(--bn-panel-2); }
+  .tf-btn.on { background: var(--bn-accent); color: #fff; }
+  .tf-sep { width: 1px; background: var(--bn-line); margin: 3px 2px; }
+
+  /* WS pill */
+  .ws-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 12px;
+    background: var(--bn-panel-2); border: 1px solid var(--bn-line);
+    font-size: 11px; font-weight: 700;
+    color: var(--bn-muted);
+  }
+  .ws-pill .dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--bn-muted);
+  }
+  .ws-pill.on  { color: var(--bn-good); border-color: rgba(46,204,113,.35); }
+  .ws-pill.on  .dot { background: var(--bn-good); animation: bnPulse 1.6s ease-in-out infinite; }
+  .ws-pill.off { color: var(--bn-bad); }
+  .ws-pill.off .dot { background: var(--bn-bad); }
+  @keyframes bnPulse { 0%,100%{opacity:1;} 50%{opacity:.4;} }
+
+  /* ── Symbol header (under top bar) ───────────────────────────── */
+  .sym-header {
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 8px;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+  .sym-header .sym {
+    font-size: 22px; font-weight: 800;
+    letter-spacing: -.2px;
+  }
+  .sym-header .ltp {
+    font-size: 22px; font-weight: 800;
+    font-variant-numeric: tabular-nums;
+  }
+  .sym-header .change { font-size: 13px; font-weight: 700; }
+  .sym-header .change.good { color: var(--bn-good); }
+  .sym-header .change.bad  { color: var(--bn-bad); }
+  .sym-header .sub {
+    color: var(--bn-muted); font-size: 11px;
+    margin-left: auto;
+    display: flex; gap: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+  .sym-header .sub strong { color: var(--bn-text); font-weight: 700; }
+
+  /* ── Chart panel ─────────────────────────────────────────────── */
+  .chart-panel {
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 8px;
+    position: relative;
+    /* Padding around the chart so the price + time scales aren't
+       clipped against the rounded border. */
+    padding: 4px 4px 4px 8px;
+    min-height: 540px;
+    display: flex;
+    flex-direction: column;
+  }
+  #chart {
+    flex: 1;
+    min-height: 0;       /* allow grid child to shrink properly */
+    /* IMPORTANT: no overflow:hidden — that clips the lightweight-chart's
+       internal scales. The chart library manages its own clipping. */
+  }
+  #chart-loading {
+    position: absolute; inset: 8px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--bn-muted); font-size: 13px;
+    background: rgba(20, 27, 36, 0.85);
+    border-radius: 5px;
+    pointer-events: none;
+    transition: opacity .25s;
+    z-index: 5;
+  }
+  #chart-loading.hidden { opacity: 0; pointer-events: none; }
+
+  /* ── Right side panel ────────────────────────────────────────── */
+  .side {
+    display: grid;
+    grid-template-rows: auto auto auto auto;
+    gap: 10px;
+    align-content: start;
+  }
+  .panel {
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 8px;
+    padding: 11px 14px;
+  }
+  .panel h4 {
+    margin: 0 0 9px;
+    font-size: 11px; font-weight: 700;
+    color: var(--bn-muted);
+    text-transform: uppercase; letter-spacing: .5px;
+    display: flex; align-items: center; gap: 6px;
+  }
+
+  /* Price snapshot mini-grid */
+  .price-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 14px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .price-grid .k { color: var(--bn-muted); }
+  .price-grid .v { color: var(--bn-text); font-weight: 700; text-align: right; }
+  .price-grid .v.good { color: var(--bn-good); }
+  .price-grid .v.bad  { color: var(--bn-bad); }
+
+  /* ── Order entry form ────────────────────────────────────────── */
+  .side-toggle {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px;
+    background: var(--bn-panel-2);
+    border: 1px solid var(--bn-line);
+    border-radius: 5px;
+    padding: 2px;
+    margin-bottom: 8px;
+  }
+  .side-toggle button {
+    background: transparent;
+    color: var(--bn-muted);
+    border: 0;
+    padding: 6px 0;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .4px;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: background .12s, color .12s;
+  }
+  .side-toggle button.on.buy  { background: var(--bn-good); color: #fff; }
+  .side-toggle button.on.sell { background: var(--bn-bad);  color: #fff; }
+
+  .field-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .field-row.three { grid-template-columns: 1fr 1fr 1fr; }
+  .field {
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .field label {
+    font-size: 9px; color: var(--bn-muted);
+    text-transform: uppercase; letter-spacing: .4px; font-weight: 700;
+  }
+  .field input, .field select {
+    background: var(--bn-panel-2);
+    color: var(--bn-text);
+    border: 1px solid var(--bn-line);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font: inherit; font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    outline: 0;
+    transition: border-color .12s;
+  }
+  .field input:focus, .field select:focus { border-color: var(--bn-accent); }
+  .field input:disabled { opacity: .5; }
+
+  .quick-fill {
+    display: flex; gap: 3px; margin-top: 2px;
+    font-size: 10px;
+  }
+  .quick-fill button {
+    background: var(--bn-panel-2);
+    color: var(--bn-muted);
+    border: 1px solid var(--bn-line);
+    border-radius: 3px;
+    padding: 2px 6px;
+    font-size: 10px; font-weight: 600;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+  }
+  .quick-fill button:hover { color: var(--bn-text); border-color: var(--bn-accent); }
+
+  .place-btn {
+    width: 100%;
+    padding: 9px;
+    font: inherit; font-size: 13px; font-weight: 800;
+    letter-spacing: .5px;
+    text-transform: uppercase;
+    border: 0;
+    border-radius: 5px;
+    cursor: pointer;
+    margin-top: 4px;
+    transition: transform .12s, opacity .12s;
+  }
+  .place-btn.buy  { background: var(--bn-good); color: #fff; }
+  .place-btn.sell { background: var(--bn-bad);  color: #fff; }
+  .place-btn:hover:not(:disabled) { transform: translateY(-1px); }
+  .place-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* GTT inline section */
+  .gtt-section {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--bn-line);
+  }
+  .gtt-preview {
+    margin-top: 6px;
+    background: var(--bn-panel-2);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 2px 10px;
+    align-items: baseline;
+  }
+  .gtt-preview .k { color: var(--bn-muted); }
+  .gtt-preview .v { color: var(--bn-text); font-weight: 700; text-align: right; }
+  .gtt-preview .v.good { color: var(--bn-good); }
+  .gtt-preview .v.bad  { color: var(--bn-bad); }
+
+  /* ── Order book ──────────────────────────────────────────────── */
+  .book-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .book-side {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    gap: 1px 4px;
+  }
+  .book-side .h {
+    color: var(--bn-muted); font-size: 9px;
+    font-weight: 700; letter-spacing: .4px;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--bn-line);
+    padding-bottom: 3px;
+  }
+  .book-side .px {
+    font-weight: 700;
+    cursor: pointer;
+    padding: 1px 0;
+  }
+  .book-side.bid .px { color: var(--bn-good); }
+  .book-side.ask .px { color: var(--bn-bad); }
+  .book-side .px:hover { background: rgba(41, 182, 246, .1); }
+  .book-side .qty { text-align: right; color: var(--bn-text); }
+
+  /* ── Position pill ───────────────────────────────────────────── */
+  .pos-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 3px 12px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .pos-grid .k { color: var(--bn-muted); }
+  .pos-grid .v { font-weight: 700; text-align: right; }
+  .pos-grid .v.good { color: var(--bn-good); }
+  .pos-grid .v.bad  { color: var(--bn-bad); }
+
+  /* ── Bottom tabs ─────────────────────────────────────────────── */
+  .bottom-tabs {
+    background: var(--bn-panel);
+    border: 1px solid var(--bn-line);
+    border-radius: 8px;
+    padding: 0;
+  }
+  .tab-bar {
+    display: flex;
+    border-bottom: 1px solid var(--bn-line);
+    padding: 0 6px;
+  }
+  .tab-btn {
+    background: transparent;
+    color: var(--bn-muted);
+    border: 0;
+    padding: 9px 14px;
+    font: inherit; font-size: 12px; font-weight: 700;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color .12s, border-color .12s;
+  }
+  .tab-btn:hover { color: var(--bn-text); }
+  .tab-btn.on {
+    color: var(--bn-text);
+    border-bottom-color: var(--bn-accent);
+  }
+  .tab-content {
+    padding: 10px 14px;
+    min-height: 100px;
+    overflow-x: auto;
+  }
+  .tab-content table { width: 100%; border-collapse: collapse; }
+  .tab-content th, .tab-content td {
+    padding: 5px 8px;
+    font-size: 11px;
+    border-bottom: 1px solid rgba(31,41,51,.5);
+    white-space: nowrap;
+  }
+  .tab-content th {
+    color: var(--bn-muted);
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 9px;
+    letter-spacing: .4px;
+  }
+  .tab-content td.num, .tab-content th.num {
+    text-align: right; font-variant-numeric: tabular-nums;
+  }
+  .tab-content .empty {
+    color: var(--bn-muted);
+    text-align: center;
+    padding: 20px;
+    font-size: 12px;
+  }
+  .tab-content .good { color: var(--bn-good); font-weight: 700; }
+  .tab-content .bad  { color: var(--bn-bad);  font-weight: 700; }
+
+  /* Toast */
+  .zd-toast {
+    position: fixed; right: 20px; bottom: 20px;
+    background: var(--bn-panel); border: 1px solid var(--bn-line);
+    color: var(--bn-text);
+    padding: 11px 15px; border-radius: 6px;
+    font-size: 12px; font-weight: 600;
+    z-index: 10000;
+    opacity: 0; transform: translateY(8px);
+    transition: opacity .2s, transform .2s;
+    max-width: 380px;
+  }
+  .zd-toast.show { opacity: 1; transform: translateY(0); }
+  .zd-toast.good { border-color: rgba(46, 204, 113, .5); }
+  .zd-toast.bad  { border-color: rgba(231, 76, 60, .5); }
+  .zd-toast .head { font-weight: 800; margin-bottom: 3px; }
+  .zd-toast.good .head { color: var(--bn-good); }
+  .zd-toast.bad  .head { color: var(--bn-bad); }
+
+  /* ── Price Planner card ──────────────────────────────────────────
+     Reads order book + order flow + day-range positioning and emits a
+     verdict + suggested BUY/SELL prices + R:R + confidence bar. */
+  .planner-verdict {
+    display: grid; grid-template-columns: 1fr 1fr 64px; gap: 8px;
+    margin-bottom: 8px;
+  }
+  .planner-verdict .vbox {
+    background: var(--bn-panel-2); border: 1px solid var(--bn-line);
+    border-radius: 5px; padding: 6px 8px;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .planner-verdict .vbox .lbl {
+    font-size: 9px; text-transform: uppercase; color: var(--bn-muted);
+    letter-spacing: .4px; font-weight: 700;
+  }
+  .planner-verdict .vbox .val {
+    font-size: 14px; font-weight: 800;
+    font-variant-numeric: tabular-nums;
+  }
+  .planner-verdict .vbox .val.good { color: var(--bn-good); }
+  .planner-verdict .vbox .val.bad  { color: var(--bn-bad); }
+  .planner-verdict .vbox .val.mute { color: var(--bn-muted); }
+
+  .verdict-chip {
+    margin-left: auto;
+    font-size: 9px; font-weight: 800; letter-spacing: .4px;
+    padding: 2px 7px; border-radius: 10px;
+    text-transform: uppercase;
+    border: 1px solid;
+  }
+  .verdict-chip.strong-buy { background: rgba(46,204,113,.2); color: var(--bn-good); border-color: rgba(46,204,113,.5); }
+  .verdict-chip.buy        { background: rgba(46,204,113,.1); color: var(--bn-good); border-color: rgba(46,204,113,.35); }
+  .verdict-chip.neutral    { background: rgba(160,170,180,.1); color: var(--bn-muted); border-color: rgba(160,170,180,.3); }
+  .verdict-chip.wait       { background: rgba(241,196,15,.12); color: var(--bn-warn); border-color: rgba(241,196,15,.35); }
+  .verdict-chip.avoid      { background: rgba(231,76,60,.15); color: var(--bn-bad); border-color: rgba(231,76,60,.45); }
+
+  .conf-bar {
+    position: relative;
+    height: 6px; background: var(--bn-panel-2); border-radius: 3px;
+    overflow: hidden; margin: 6px 0 4px;
+  }
+  .conf-fill {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: 0%; background: linear-gradient(90deg, var(--bn-bad), var(--bn-warn), var(--bn-good));
+    transition: width .25s;
+  }
+  .conf-text {
+    font-size: 9px; color: var(--bn-muted); font-weight: 700;
+    letter-spacing: .3px; text-transform: uppercase;
+  }
+
+  .planner-chips {
+    display: flex; flex-wrap: wrap; gap: 4px;
+    margin: 6px 0 4px;
+  }
+  .mc {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: var(--bn-panel-2); border: 1px solid var(--bn-line);
+    border-radius: 3px;
+    padding: 2px 6px;
+    font-size: 9px; font-weight: 700; letter-spacing: .3px;
+    text-transform: uppercase;
+    color: var(--bn-muted);
+  }
+  .mc strong { color: var(--bn-text); font-weight: 800; font-variant-numeric: tabular-nums; }
+  .mc.good strong { color: var(--bn-good); }
+  .mc.bad  strong { color: var(--bn-bad); }
+  .mc.warn strong { color: var(--bn-warn); }
+
+  .planner-why {
+    font-size: 10px; color: var(--bn-muted); line-height: 1.4;
+    background: var(--bn-panel-2); border-left: 2px solid var(--bn-accent);
+    padding: 5px 8px; border-radius: 3px;
+    margin: 4px 0 8px;
+  }
+
+  .apply-row { display: flex; gap: 6px; }
+  .apply-btn {
+    flex: 1;
+    border: 1px solid var(--bn-line);
+    background: var(--bn-panel-2);
+    color: var(--bn-text);
+    padding: 6px 8px; border-radius: 4px;
+    font-size: 10px; font-weight: 800; letter-spacing: .3px;
+    text-transform: uppercase; cursor: pointer;
+    transition: background .12s, transform .08s;
+  }
+  .apply-btn:hover { background: var(--bn-panel); }
+  .apply-btn:active { transform: translateY(1px); }
+  .apply-btn.buy  { border-color: rgba(46,204,113,.5); color: var(--bn-good); }
+  .apply-btn.sell { border-color: rgba(231,76,60,.45); color: var(--bn-bad); }
+</style>
+</head>
+<body class="zd">
+<div class="ws-wrap">
+
+  <!-- ─── Top bar ───────────────────────────────────────────── -->
+  <div class="top-bar">
+    <div class="search">
+      <input id="search-input" type="text" placeholder="RELIANCE" autocomplete="off" autocapitalize="characters" />
+      <select id="exch-select">
+        <option value="NSE">NSE</option>
+        <option value="BSE">BSE</option>
+      </select>
+      <div class="symbol-meta">
+        <span>Sector <strong id="meta-sector">—</strong></span>
+        <span>Lot <strong id="meta-lot">1</strong></span>
+        <span>Tick <strong id="meta-tick">₹0.05</strong></span>
+      </div>
+    </div>
+
+    <div class="tf-bar" id="tf-bar">
+      <button class="tf-btn" data-tf="1s">1s</button>
+      <button class="tf-btn" data-tf="1m">1m</button>
+      <button class="tf-btn" data-tf="3m">3m</button>
+      <button class="tf-btn" data-tf="5m">5m</button>
+      <button class="tf-btn" data-tf="15m">15m</button>
+      <button class="tf-btn" data-tf="30m">30m</button>
+      <span class="tf-sep"></span>
+      <button class="tf-btn" data-tf="1h">1h</button>
+      <button class="tf-btn" data-tf="2h">2h</button>
+      <button class="tf-btn" data-tf="4h">4h</button>
+      <span class="tf-sep"></span>
+      <button class="tf-btn" data-tf="1d">1d</button>
+      <button class="tf-btn" data-tf="1w">1w</button>
+      <button class="tf-btn" data-tf="1mo">1mo</button>
+    </div>
+
+    <div class="ws-pill" id="ws-pill"><span class="dot"></span><span id="ws-text">connecting…</span></div>
+  </div>
+
+  <!-- ─── Symbol header ─────────────────────────────────────── -->
+  <div class="sym-header">
+    <span class="sym" id="hd-sym">—</span>
+    <span class="ltp" id="hd-ltp">—</span>
+    <span class="change" id="hd-change">—</span>
+    <div class="sub">
+      <span>O <strong id="hd-open">—</strong></span>
+      <span>H <strong id="hd-high">—</strong></span>
+      <span>L <strong id="hd-low">—</strong></span>
+      <span>VWAP <strong id="hd-vwap">—</strong></span>
+      <span>Vol <strong id="hd-vol">—</strong></span>
+    </div>
+  </div>
+
+  <!-- ─── Main row (chart + side) ───────────────────────────── -->
+  <div class="main-row">
+
+    <!-- Chart panel -->
+    <div class="chart-panel">
+      <div id="chart"></div>
+      <div id="chart-loading">Pick a symbol to see candles</div>
+    </div>
+
+    <!-- Right side panel -->
+    <div class="side">
+
+      <!-- Price snapshot -->
+      <div class="panel">
+        <h4>💹 Price snapshot</h4>
+        <div class="price-grid">
+          <span class="k">Open</span>      <span class="v" id="p-open">—</span>
+          <span class="k">High</span>      <span class="v good" id="p-high">—</span>
+          <span class="k">Low</span>       <span class="v bad" id="p-low">—</span>
+          <span class="k">Close</span>     <span class="v" id="p-close">—</span>
+          <span class="k">VWAP</span>      <span class="v" id="p-vwap">—</span>
+          <span class="k">vs VWAP</span>   <span class="v" id="p-vsvwap">—</span>
+          <span class="k">Day Δ</span>     <span class="v" id="p-day">—</span>
+          <span class="k">Range</span>     <span class="v" id="p-range">—</span>
+        </div>
+      </div>
+
+      <!-- Order entry -->
+      <div class="panel">
+        <h4>🛒 Order entry</h4>
+        <div class="side-toggle" id="side-toggle">
+          <button data-side="BUY"  class="buy on">BUY</button>
+          <button data-side="SELL" class="sell">SELL</button>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label>Order type</label>
+            <select id="ord-type">
+              <option value="MARKET">MARKET</option>
+              <option value="LIMIT">LIMIT</option>
+              <option value="SL">SL (stop-loss)</option>
+              <option value="SL-M">SL-M</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Product</label>
+            <select id="ord-product">
+              <option value="CNC">CNC (delivery)</option>
+              <option value="MIS">MIS (intraday)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label>Quantity</label>
+            <input id="ord-qty" type="number" min="1" step="1" value="1" />
+          </div>
+          <div class="field" id="price-field-wrap">
+            <label>Limit price (₹)</label>
+            <input id="ord-price" type="number" min="0" step="0.05" placeholder="auto" />
+          </div>
+        </div>
+
+        <div class="field-row" id="trigger-field-wrap" style="display:none;">
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Trigger price (₹)</label>
+            <input id="ord-trigger" type="number" min="0" step="0.05" placeholder="trigger price for SL/SL-M" />
+          </div>
+        </div>
+
+        <div class="quick-fill" id="quick-fill">
+          <button data-fill="ltp">LTP</button>
+          <button data-fill="bid">Bid</button>
+          <button data-fill="ask">Ask</button>
+          <button data-fill="mid">Mid</button>
+          <button data-fill="open">Open</button>
+          <button data-fill="-1">-1%</button>
+          <button data-fill="+1">+1%</button>
+        </div>
+
+        <button class="place-btn buy" id="place-btn">🛒 Place BUY · MARKET</button>
+
+        <!-- Inline OCO GTT (only for BUY/CNC) -->
+        <div class="gtt-section" id="gtt-section">
+          <h4 style="margin-top:0;">🎯 Auto-protect (OCO GTT)</h4>
+          <div class="field-row three">
+            <div class="field">
+              <label>Use?</label>
+              <select id="gtt-enable">
+                <option value="0">No</option>
+                <option value="1">Arm after fill</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>SL %</label>
+              <input id="gtt-sl" type="number" min="0.25" step="0.25" value="2.0" />
+            </div>
+            <div class="field">
+              <label>TP %</label>
+              <input id="gtt-tp" type="number" min="0.25" step="0.25" value="5.0" />
+            </div>
+          </div>
+          <div class="gtt-preview" id="gtt-preview">
+            <span class="k">SL at</span>  <span class="v bad" id="gtt-sl-px">—</span> <span class="k" id="gtt-sl-d">—</span>
+            <span class="k">TP at</span>  <span class="v good" id="gtt-tp-px">—</span> <span class="k" id="gtt-tp-d">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Order book (top 5) -->
+      <div class="panel">
+        <h4>📚 Order book <span style="margin-left:auto;font-size:9px;font-weight:600;color:var(--bn-muted);">click price → limit</span></h4>
+        <div class="book-grid">
+          <div class="book-side bid" id="book-bid">
+            <span class="h">Bid</span><span class="h" style="text-align:right;">Qty</span>
+            <span style="grid-column:1/-1;color:var(--bn-muted);text-align:center;padding:6px 0;font-size:10px;">—</span>
+          </div>
+          <div class="book-side ask" id="book-ask">
+            <span class="h">Ask</span><span class="h" style="text-align:right;">Qty</span>
+            <span style="grid-column:1/-1;color:var(--bn-muted);text-align:center;padding:6px 0;font-size:10px;">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 🎯 Price Planner — analyses depth + order flow + day-range
+           positioning and suggests BUY/SELL prices with R:R. -->
+      <div class="panel" id="planner-card">
+        <h4>🎯 Price Planner <span class="verdict-chip neutral" id="plan-verdict">analysing…</span></h4>
+
+        <div class="planner-verdict">
+          <div class="vbox">
+            <span class="lbl">Suggested BUY</span>
+            <span class="val good" id="plan-buy-px">—</span>
+          </div>
+          <div class="vbox">
+            <span class="lbl">Suggested SELL</span>
+            <span class="val bad" id="plan-sell-px">—</span>
+          </div>
+          <div class="vbox" title="Reward-to-risk ratio (target ÷ stop distance)">
+            <span class="lbl">R : R</span>
+            <span class="val mute" id="plan-rr">—</span>
+          </div>
+        </div>
+
+        <div class="conf-bar"><div class="conf-fill" id="plan-conf-fill"></div></div>
+        <div class="conf-text" id="plan-conf-text">confidence —</div>
+
+        <div class="planner-chips">
+          <span class="mc" id="plan-imb">Depth <strong>—</strong></span>
+          <span class="mc" id="plan-flow">Flow <strong>—</strong></span>
+          <span class="mc" id="plan-spread">Spread <strong>—</strong></span>
+          <span class="mc" id="plan-rangepos">Range pos <strong>—</strong></span>
+          <span class="mc" id="plan-vwap">vs VWAP <strong>—</strong></span>
+        </div>
+
+        <div class="planner-why" id="plan-why">
+          Waiting for order book + ticks to build a recommendation…
+        </div>
+
+        <div class="apply-row">
+          <button type="button" class="apply-btn buy"  id="plan-apply-buy"  onclick="applyPlannerBuy()">Use BUY price</button>
+          <button type="button" class="apply-btn sell" id="plan-apply-sell" onclick="applyPlannerSell()">Use SELL price</button>
+        </div>
+      </div>
+
+      <!-- Position -->
+      <div class="panel">
+        <h4>💼 Position <span id="pos-pill" style="margin-left:auto;font-size:9px;font-weight:600;color:var(--bn-muted);">none</span></h4>
+        <div class="pos-grid">
+          <span class="k">Source</span>   <span class="v" id="pos-src">—</span>
+          <span class="k">Qty</span>      <span class="v" id="pos-qty">—</span>
+          <span class="k">Avg buy</span>  <span class="v" id="pos-avg">—</span>
+          <span class="k">M2M P&L</span>  <span class="v" id="pos-pnl">—</span>
+          <span class="k">P&L %</span>    <span class="v" id="pos-pct">—</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ─── Bottom tabs ───────────────────────────────────────── -->
+  <div class="bottom-tabs">
+    <div class="tab-bar">
+      <button class="tab-btn on" data-tab="orders">Open orders <span id="tab-c-orders" style="color:var(--bn-muted);font-weight:600;margin-left:4px;">0</span></button>
+      <button class="tab-btn" data-tab="fills">Recent fills <span id="tab-c-fills" style="color:var(--bn-muted);font-weight:600;margin-left:4px;">0</span></button>
+      <button class="tab-btn" data-tab="gtts">Active GTTs <span id="tab-c-gtts" style="color:var(--bn-muted);font-weight:600;margin-left:4px;">0</span></button>
+    </div>
+    <div class="tab-content" id="tab-content">
+      <div class="empty">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<div class="zd-toast" id="toast"><div class="head"></div><div class="body"></div></div>
+
+<script src="/nav.js"></script>
+<script src="/js/nifty100.js"></script>
+<script>
+/* ──────────────────────────────────────────────────────────────────────
+ * State + config
+ * ──────────────────────────────────────────────────────────────────── */
+const $ = id => document.getElementById(id);
+
+let currentSym  = '';
+let currentExch = 'NSE';
+let currentTf   = '5m';
+let currentSide = 'BUY';
+let currentTab  = 'orders';
+let ws          = null;
+let chart, candleSeries, volumeSeries, emaFast, emaSlow;
+let bars        = [];
+let lastBarTime = null;
+let chartTime   = 0;            // contiguous chart-time counter (no session gaps)
+const ctReal    = new Map();    // chart-time -> real unix seconds (for axis/crosshair labels)
+let prevClose   = null;
+let lastQuote   = null;     // latest /quote response for sidebar
+let tickInstr   = null;     // {tick_size, lot_size} cached for the symbol
+
+const SEC = { '1s':1, '1m':60, '3m':180, '5m':300, '15m':900, '30m':1800,
+              '1h':3600, '2h':7200, '4h':14400, '1d':86400, '1w':86400*7 };
+
+/* ── Format ───────────────────────────────────────────────────────── */
+function inr(v, d=2) { if(v==null||isNaN(v)) return '₹—'; return '₹'+Number(v).toLocaleString('en-IN',{minimumFractionDigits:d, maximumFractionDigits:d}); }
+function num(v, d=2) { if(v==null||isNaN(v)) return '—'; return Number(v).toLocaleString('en-IN',{minimumFractionDigits:d, maximumFractionDigits:d}); }
+function pct(v, d=2) { if(v==null||isNaN(v)) return '—'; return Number(v).toFixed(d)+'%'; }
+function sign(v) { return v>0 ? '+' : ''; }
+function klass(v) { return v>0 ? 'good' : v<0 ? 'bad' : 'mute'; }
+function compactVol(v) {
+  if(v==null||isNaN(v)) return '—';
+  const n = Number(v);
+  if (n >= 1e7) return (n/1e7).toFixed(1) + 'Cr';
+  if (n >= 1e5) return (n/1e5).toFixed(1) + 'L';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'k';
+  return String(Math.round(n));
+}
+
+function toast(kind, head, body) {
+  const t = $('toast');
+  t.className = 'zd-toast ' + (kind === 'bad' ? 'bad' : 'good');
+  t.querySelector('.head').textContent = head;
+  t.querySelector('.body').textContent = body || '';
+  t.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), 4500);
+}
+
+/* ── IST time labels (chart-time is contiguous, so we look up the real
+ *    timestamp for every axis tick / crosshair from the ctReal map) ── */
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function istDate(unix) { return new Date((unix + 19800) * 1000); }  // +5:30, read UTC parts
+function pad2(n) { return String(n).padStart(2, '0'); }
+function fmtAxis(unix) {
+  const d = istDate(unix);
+  if (['1d','1w','1mo'].includes(currentTf)) return `${d.getUTCDate()} ${MON[d.getUTCMonth()]}`;
+  return `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+}
+function fmtCrosshairTime(unix) {
+  const d = istDate(unix);
+  return `${d.getUTCDate()} ${MON[d.getUTCMonth()]}  ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+}
+function labelFor(map, ct, fmt) { const r = map.get(ct); return r == null ? '' : fmt(r); }
+
+/* Exponential moving average over an array of closes. */
+function emaArray(closes, period) {
+  const k = 2 / (period + 1), out = [];
+  let prev;
+  for (let i = 0; i < closes.length; i++) {
+    prev = i === 0 ? closes[i] : closes[i] * k + prev * (1 - k);
+    out.push(prev);
+  }
+  return out;
+}
+const EMA_FAST = 20, EMA_SLOW = 50;
+function emaStep(prevEma, close, period) { const k = 2 / (period + 1); return close * k + prevEma * (1 - k); }
+
+/* ──────────────────────────────────────────────────────────────────
+ * Chart
+ * ──────────────────────────────────────────────────────────────── */
+function makeChart() {
+  const el = $('chart');
+  if (chart) { chart.remove(); chart = null; }
+  chart = LightweightCharts.createChart(el, {
+    width: el.clientWidth,
+    height: el.clientHeight,
+    layout: {
+      background: { type: 'gradient', topColor: '#0e1621', bottomColor: '#0a0f16' },
+      textColor: '#8b949e',
+      fontFamily: '-apple-system, "Segoe UI", Roboto, sans-serif',
+      fontSize: 11,
+    },
+    grid: {
+      vertLines: { color: 'rgba(31, 41, 51, .35)' },
+      horzLines: { color: 'rgba(31, 41, 51, .35)' },
+    },
+    rightPriceScale: {
+      borderColor: '#1f2933',
+      scaleMargins: { top: 0.08, bottom: 0.28 },  // leave bottom for volume pane
+      autoScale: true,
+    },
+    timeScale: {
+      borderColor: '#1f2933',
+      timeVisible: ['1s','1m','3m','5m','15m','30m','1h','2h','4h'].includes(currentTf),
+      secondsVisible: currentTf === '1s',
+      rightOffset: 4,
+      barSpacing: 8,
+      // Chart-time is contiguous; map back to the real IST timestamp.
+      tickMarkFormatter: (ct) => labelFor(ctReal, ct, fmtAxis),
+    },
+    localization: {
+      timeFormatter: (ct) => labelFor(ctReal, ct, fmtCrosshairTime),
+      priceFormatter: (p) => '₹' + Number(p).toFixed(2),
+    },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Normal,
+      vertLine: { color: 'rgba(139,148,158,.4)', width: 1, style: LightweightCharts.LineStyle.Dashed, labelBackgroundColor: '#1f6feb' },
+      horzLine: { color: 'rgba(139,148,158,.4)', style: LightweightCharts.LineStyle.Dashed, labelBackgroundColor: '#1f6feb' },
+    },
+    watermark: {
+      visible: true,
+      text: `${currentSym || ''}  ·  ${currentTf}`,
+      color: 'rgba(139,148,158,.06)',
+      fontSize: 56,
+      fontStyle: 'bold',
+      horzAlign: 'center',
+      vertAlign: 'center',
+    },
+  });
+
+  candleSeries = chart.addCandlestickSeries({
+    upColor: '#26a96a', downColor: '#e5484d',
+    borderUpColor: '#2ecc71', borderDownColor: '#f0606a',
+    wickUpColor: '#2ecc71', wickDownColor: '#f0606a',
+    priceLineColor: '#1f6feb', priceLineWidth: 1,
+  });
+
+  // EMA overlays drawn on the price scale, on top of the candles.
+  emaFast = chart.addLineSeries({
+    color: 'rgba(241,196,15,.9)', lineWidth: 1,
+    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+  });
+  emaSlow = chart.addLineSeries({
+    color: 'rgba(155,89,182,.95)', lineWidth: 1,
+    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+  });
+
+  // Volume in its OWN price scale so it gets a dedicated bottom band
+  // instead of smushing on top of candles.
+  volumeSeries = chart.addHistogramSeries({
+    priceFormat: { type: 'volume' },
+    priceScaleId: 'vol',
+    color: '#4b9fff',
+  });
+  chart.priceScale('vol').applyOptions({
+    scaleMargins: { top: 0.78, bottom: 0.02 },
+    borderColor: '#1f2933',
+  });
+
+  // Click on chart to copy crosshair price into LIMIT field
+  chart.subscribeClick((param) => {
+    if (!param || !param.point) return;
+    const price = candleSeries.coordinateToPrice(param.point.y);
+    if (price != null && isFinite(price)) {
+      const tick = (tickInstr && tickInstr.tick_size) || 0.05;
+      const snapped = Math.round(price / tick) * tick;
+      $('ord-price').value = snapped.toFixed(2);
+      $('ord-type').value = 'LIMIT';
+      onOrderTypeChange();
+    }
+  });
+
+  if (!makeChart._resized) {
+    new ResizeObserver(() => {
+      if (chart) chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+    }).observe(el);
+    makeChart._resized = true;
+  }
+}
+
+/* Fill the whole chart panel with readable candles, newest flush right.
+   fitContent() can leave bars bunched (esp. if the panel was still being
+   laid out when the chart was created), so instead we pick how many of the
+   most-recent bars to show based on the live panel width and pin them to the
+   right edge. Few bars → wide candles; many bars → readable ~10px candles. */
+function fitChart() {
+  if (!chart || !bars.length) return;
+  const el = $('chart');
+  chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+  const TARGET_SPACING = 10;          // px per candle when there's plenty of history
+  const RIGHT_PAD = 2;                // small breathing room past the newest bar
+  const fitBars = Math.max(20, Math.floor(el.clientWidth / TARGET_SPACING) - RIGHT_PAD);
+  const to = bars.length - 1 + RIGHT_PAD;
+  const from = Math.max(0, bars.length - fitBars);
+  chart.timeScale().setVisibleLogicalRange({ from, to });
+}
+
+/* ── Historical seed ─────────────────────────────────────────────── */
+async function loadHistorical() {
+  if (!currentSym) return;
+  $('chart-loading').classList.remove('hidden');
+  $('chart-loading').textContent = `Loading ${currentExch}:${currentSym} · ${currentTf}…`;
+
+  if (chart) chart.applyOptions({ watermark: { text: `${currentSym || ''}  ·  ${currentTf}` } });
+
+  if (currentTf === '1s') {
+    bars = [];
+    chartTime = 0; ctReal.clear();
+    candleSeries.setData([]);
+    volumeSeries.setData([]);
+    emaFast.setData([]); emaSlow.setData([]);
+    $('chart-loading').textContent = '1s chart — waiting for ticks…';
+    return;
+  }
+
+  try {
+    const r = await fetch(`/api/zerodha/v1/historical/${currentExch}/${encodeURIComponent(currentSym)}?interval=${currentTf}`);
+    if (r.status === 503) {
+      const body = await r.json().catch(() => ({}));
+      const detail = body.detail || {};
+      if (detail.error === 'kite_auth_unavailable') {
+        $('chart-loading').textContent = '⚠ Kite auth not configured';
+        return;
+      }
+      $('chart-loading').textContent = `Service unavailable — ${detail.message || r.status}`;
+      return;
+    }
+    if (!r.ok) { $('chart-loading').textContent = `Error: HTTP ${r.status}`; return; }
+    const data = await r.json();
+    if (!Array.isArray(data) || !data.length) {
+      $('chart-loading').textContent = 'No data for this interval/symbol';
+      return;
+    }
+    // Build, sanitise (valid OHLC, ascending, de-duped by real time) so the
+    // series never contains holes that the library would draw as gaps.
+    const seen = new Set();
+    bars = data
+      .map(b => ({
+        time: Math.floor(new Date(b.t).getTime() / 1000),
+        open: +b.o, high: +b.h, low: +b.l, close: +b.c, volume: +b.v || 0,
+      }))
+      .filter(b => Number.isFinite(b.time) && [b.open,b.high,b.low,b.close].every(Number.isFinite))
+      .sort((a, b) => a.time - b.time)
+      .filter(b => (seen.has(b.time) ? false : seen.add(b.time)));
+
+    // Assign contiguous chart-time so consecutive trading bars sit flush —
+    // overnight / weekend session breaks no longer render as blank bands.
+    chartTime = 0; ctReal.clear();
+    for (const b of bars) { b.ct = ++chartTime; ctReal.set(b.ct, b.time); }
+
+    // EMA overlays (hidden until enough bars so the seed ramp isn't shown).
+    const closes = bars.map(b => b.close);
+    const e20 = emaArray(closes, EMA_FAST), e50 = emaArray(closes, EMA_SLOW);
+    bars.forEach((b, i) => { b.e20 = e20[i]; b.e50 = e50[i]; });
+
+    candleSeries.setData(bars.map(b => ({ time: b.ct, open: b.open, high: b.high, low: b.low, close: b.close })));
+    volumeSeries.setData(bars.map(b => ({
+      time: b.ct, value: b.volume,
+      color: b.close >= b.open ? 'rgba(46,204,113,.5)' : 'rgba(231,76,60,.5)',
+    })));
+    emaFast.setData(bars.map((b, i) => i >= EMA_FAST - 1 ? { time: b.ct, value: b.e20 } : { time: b.ct }));
+    emaSlow.setData(bars.map((b, i) => i >= EMA_SLOW - 1 ? { time: b.ct, value: b.e50 } : { time: b.ct }));
+
+    lastBarTime = bars.length ? bars[bars.length-1].time : null;
+    prevClose = bars.length >= 2 ? bars[bars.length-2].close : (bars[0] || {}).close;
+    requestAnimationFrame(fitChart);
+    $('chart-loading').classList.add('hidden');
+  } catch (e) {
+    $('chart-loading').textContent = 'Fetch failed: ' + e.message;
+  }
+}
+
+function bucketStart(ts) {
+  if (currentTf === '1mo') {
+    const d = new Date(ts * 1000);
+    const ist = new Date(d.getTime() + (5.5 - d.getTimezoneOffset()/60) * 3600000);
+    return Math.floor(new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), 1)).getTime() / 1000);
+  }
+  const s = SEC[currentTf] || 300;
+  return Math.floor(ts / s) * s;
+}
+
+function onTick(msg) {
+  if (msg.type !== 'tick' || !msg.ltp) return;
+  const ts = msg.ts ? Math.floor(msg.ts) : Math.floor(Date.now()/1000);
+  const px = +msg.ltp;
+  const bucket = bucketStart(ts);
+
+  if (bars.length && bucket === lastBarTime) {
+    const b = bars[bars.length - 1];
+    b.high = Math.max(b.high, px);
+    b.low  = Math.min(b.low, px);
+    b.close = px;
+    const prev = bars[bars.length - 2];
+    b.e20 = prev ? emaStep(prev.e20, px, EMA_FAST) : px;
+    b.e50 = prev ? emaStep(prev.e50, px, EMA_SLOW) : px;
+    candleSeries.update({ time: b.ct, open: b.open, high: b.high, low: b.low, close: b.close });
+    emaFast.update({ time: b.ct, value: b.e20 });
+    emaSlow.update({ time: b.ct, value: b.e50 });
+  } else {
+    const last = bars[bars.length - 1];
+    const b = {
+      time: bucket,
+      ct: ++chartTime,
+      open: last ? last.close : px,
+      high: px, low: px, close: px,
+      volume: 0,
+    };
+    b.e20 = last ? emaStep(last.e20, px, EMA_FAST) : px;
+    b.e50 = last ? emaStep(last.e50, px, EMA_SLOW) : px;
+    bars.push(b);
+    ctReal.set(b.ct, bucket);
+    if (bars.length > 5000) { const old = bars.shift(); ctReal.delete(old.ct); }
+    lastBarTime = bucket;
+    candleSeries.update({ time: b.ct, open: b.open, high: b.high, low: b.low, close: b.close });
+    emaFast.update({ time: b.ct, value: b.e20 });
+    emaSlow.update({ time: b.ct, value: b.e50 });
+    // A fresh bar just opened — slide the window so the live candle stays
+    // in view and the panel stays full instead of the trend freezing.
+    fitChart();
+  }
+
+  $('hd-ltp').textContent = inr(px);
+  if (prevClose) {
+    const d = px - prevClose;
+    const p = (d / prevClose) * 100;
+    $('hd-change').className = 'change ' + klass(p);
+    $('hd-change').innerHTML = `${sign(d)}${num(d, 2)} (${sign(p)}${pct(p)})`;
+  }
+  // Refresh planner / GTT preview off the new LTP
+  updateGttPreview();
+  updatePosition();
+}
+
+/* ── WebSocket ───────────────────────────────────────────────────── */
+function setWsPill(state, text) {
+  const pill = $('ws-pill');
+  pill.classList.remove('on', 'off');
+  if (state) pill.classList.add(state);
+  $('ws-text').textContent = text;
+}
+function openWs() {
+  if (ws && ws.readyState <= 1) return;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/api/zerodha/v1/ws/ticks`);
+  ws.onopen = () => {
+    setWsPill('on', 'live');
+    subscribeCurrent();
+  };
+  ws.onmessage = (e) => {
+    try { const msg = JSON.parse(e.data); if (msg.type === 'tick') onTick(msg); } catch (_) {}
+  };
+  ws.onclose = () => { setWsPill('off', 'reconnect…'); setTimeout(openWs, 3000); };
+  ws.onerror = () => setWsPill('off', 'error');
+}
+function subscribeCurrent() {
+  if (!ws || ws.readyState !== 1 || !currentSym) return;
+  ws.send(JSON.stringify({ action: 'subscribe', symbols: [`${currentExch}:${currentSym}`] }));
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Quote polling — fills the right side panel (price, book, position, header)
+ * ──────────────────────────────────────────────────────────────── */
+async function fetchQuote() {
+  if (!currentSym) return;
+  const key = `${currentExch}:${currentSym}`;
+  try {
+    const r = await fetch(`/api/zerodha/v1/quote?syms=${encodeURIComponent(key)}`);
+    if (!r.ok) return;
+    const data = await r.json();
+    const v = data[key] || data[Object.keys(data)[0]];
+    if (!v) return;
+    lastQuote = v;
+    renderPriceSnapshot(v);
+    renderBook(v);
+    renderPlanner(v);
+    updateGttPreview();
+  } catch (_) {}
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Price Planner — combines order book + order flow + day-range +
+ * VWAP gap into a verdict + suggested BUY/SELL prices + R:R.
+ *
+ * Signals (each normalised, then weighted):
+ *   imbalance     = (Σbid_qty − Σask_qty) / (Σbid_qty + Σask_qty)  [-1..+1]
+ *   session_flow  = (total_buy_qty − total_sell_qty)/(sum)         [-1..+1]
+ *   range_pos     = (ltp − dayLow) / (dayHigh − dayLow)             [0..1]
+ *   vwap_gap      = (ltp − vwap) / vwap × 100                       (%)
+ *   spread_pct    = (bestAsk − bestBid) / mid × 100                 (%)
+ *
+ * Verdict:
+ *   verdict_score = +30·imbalance +20·session_flow +25·(1−range_pos)
+ *                   −10·vwap_gap  − penalty(spread)
+ *     >  50  → STRONG BUY  (deep bid + flow positive + near day low)
+ *     >  20  → BUY
+ *     > −20  → NEUTRAL
+ *     > −50  → WAIT
+ *     else   → AVOID
+ *
+ * Suggested prices snap to tick_size. BUY anchors:
+ *   STRONG BUY → bestAsk        (chase — momentum continuation)
+ *   BUY        → bestBid + tick (front-run the queue at support)
+ *   NEUTRAL    → mid            (no edge — passive)
+ *   WAIT       → max(dayLow + 0.2·range, vwap − 0.5·range)
+ *   AVOID      → null           (don't trade)
+ *
+ * Suggested SELL = bullish_target:
+ *   target = clamp(buy + 2·risk, max(dayHigh, vwap + 0.7·range))
+ *   risk   = buy − stop where stop = min(dayLow, vwap − 0.5·range)
+ * ──────────────────────────────────────────────────────────────── */
+function renderPlanner(v) {
+  const depth = v.depth || {};
+  const bids = (depth.buy  || []).slice(0, 5);
+  const asks = (depth.sell || []).slice(0, 5);
+
+  const ohlc = v.ohlc || {};
+  const ltp  = v.last_price || 0;
+  const open = ohlc.open  || ltp;
+  const high = ohlc.high  || ltp;
+  const low  = ohlc.low   || ltp;
+  const vwap = v.average_price || v.vwap || null;
+  const tick = (tickInstr && tickInstr.tick_size) || 0.05;
+
+  const bestBid = bids[0] ? bids[0].price : ltp - tick;
+  const bestAsk = asks[0] ? asks[0].price : ltp + tick;
+  const mid     = (bestBid + bestAsk) / 2;
+
+  const bidQty = bids.reduce((s, b) => s + (b.quantity || 0), 0);
+  const askQty = asks.reduce((s, a) => s + (a.quantity || 0), 0);
+  const imbalance = (bidQty + askQty) > 0
+    ? (bidQty - askQty) / (bidQty + askQty) : 0;
+
+  const sessBuy  = v.buy_quantity  || v.total_buy_quantity  || 0;
+  const sessSell = v.sell_quantity || v.total_sell_quantity || 0;
+  const sessFlow = (sessBuy + sessSell) > 0
+    ? (sessBuy - sessSell) / (sessBuy + sessSell) : 0;
+
+  const dayRange = Math.max(high - low, tick);
+  const rangePos = (ltp - low) / dayRange;            // 0..1
+  const vwapGap  = vwap ? ((ltp - vwap) / vwap) * 100 : 0;
+  const spreadPct = mid > 0 ? ((bestAsk - bestBid) / mid) * 100 : 0;
+  const spreadPenalty = spreadPct > 0.2 ? Math.min(20, spreadPct * 30) : 0;
+
+  // Verdict score (centred around 0; positive = bullish setup for entry)
+  const verdictScore =
+    30 * imbalance +
+    20 * sessFlow +
+    25 * (1 - rangePos) +
+    (-10) * vwapGap +
+    (-1)  * spreadPenalty;
+
+  let verdict, vClass;
+  if      (verdictScore >  50) { verdict = 'STRONG BUY'; vClass = 'strong-buy'; }
+  else if (verdictScore >  20) { verdict = 'BUY';        vClass = 'buy'; }
+  else if (verdictScore > -20) { verdict = 'NEUTRAL';    vClass = 'neutral'; }
+  else if (verdictScore > -50) { verdict = 'WAIT';       vClass = 'wait'; }
+  else                         { verdict = 'AVOID';      vClass = 'avoid'; }
+
+  // Suggested BUY price anchor
+  let buyPx;
+  if      (verdict === 'STRONG BUY') buyPx = bestAsk;
+  else if (verdict === 'BUY')        buyPx = bestBid + tick;
+  else if (verdict === 'NEUTRAL')    buyPx = mid;
+  else if (verdict === 'WAIT')       buyPx = Math.max(low + 0.2 * dayRange,
+                                              vwap ? vwap - 0.5 * dayRange : low + 0.2 * dayRange);
+  else                                buyPx = null;
+
+  // Stop = day low or VWAP − 0.5·range (whichever is closer to buy)
+  const stop = Math.max(low, (vwap || low) - 0.5 * dayRange);
+  // Target = take the more conservative of (buy + 2·risk) vs (day high or VWAP + 0.7·range)
+  const idealTarget = Math.max(high, (vwap || high) + 0.7 * dayRange);
+  let sellPx = null;
+  let rr = null;
+  if (buyPx) {
+    const risk    = Math.max(buyPx - stop, tick);
+    const target  = buyPx + 2 * risk;
+    sellPx = Math.min(target, idealTarget);
+    if (sellPx <= buyPx) sellPx = buyPx + 2 * risk;
+    rr = (sellPx - buyPx) / risk;
+  }
+
+  // Snap to tick
+  const snap = (p) => p == null ? null : Math.round(p / tick) * tick;
+  buyPx  = snap(buyPx);
+  sellPx = snap(sellPx);
+
+  // Confidence: |verdictScore| capped at 100, with floor at 5 so the
+  // bar is always visible if we have data
+  const confidence = Math.min(100, Math.max(5, Math.abs(verdictScore) + 30));
+
+  // Render
+  const vc = $('plan-verdict');
+  vc.className = 'verdict-chip ' + vClass;
+  vc.textContent = verdict;
+
+  $('plan-buy-px').textContent  = buyPx  != null ? inr(buyPx)  : 'wait';
+  $('plan-sell-px').textContent = sellPx != null ? inr(sellPx) : '—';
+  $('plan-rr').textContent      = rr     != null ? rr.toFixed(2) + '×' : '—';
+
+  $('plan-conf-fill').style.width = confidence + '%';
+  $('plan-conf-text').textContent =
+    `confidence ${Math.round(confidence)}% · score ${verdictScore.toFixed(0)}`;
+
+  setPlanChip('plan-imb',   `Depth ${(imbalance*100).toFixed(0)}%`,    imbalance);
+  setPlanChip('plan-flow',  `Flow ${(sessFlow*100).toFixed(0)}%`,      sessFlow);
+  setPlanChip('plan-spread',`Spread ${spreadPct.toFixed(2)}%`,         -spreadPct);
+  setPlanChip('plan-rangepos',
+    `Range pos ${(rangePos*100).toFixed(0)}%`,  0.5 - rangePos);   // low = good
+  setPlanChip('plan-vwap',  `vs VWAP ${vwapGap.toFixed(2)}%`,          -vwapGap);
+
+  // Build the why-line
+  const reasons = [];
+  if (imbalance >  0.2) reasons.push('book stacked on bid side');
+  else if (imbalance < -0.2) reasons.push('book stacked on ask side');
+  if (sessFlow > 0.1)  reasons.push('session flow buyer-heavy');
+  else if (sessFlow < -0.1) reasons.push('session flow seller-heavy');
+  if (rangePos < 0.3)  reasons.push('LTP near day low (dip)');
+  else if (rangePos > 0.75) reasons.push('LTP near day high (extended)');
+  if (vwap && vwapGap < -0.3) reasons.push('below VWAP (mean-revert long)');
+  else if (vwap && vwapGap > 0.5) reasons.push('above VWAP (chasing extension)');
+  if (spreadPct > 0.3) reasons.push('wide spread — pay-up cost is real');
+
+  $('plan-why').textContent = reasons.length
+    ? '➤ ' + reasons.join(' · ')
+    : '➤ Mid-range, flat order flow — no edge either direction.';
+
+  // Cache for the Use BUY/SELL buttons
+  window._plannerSuggest = { buyPx, sellPx, verdict };
+}
+
+function setPlanChip(id, text, signal) {
+  const el = $(id);
+  if (!el) return;
+  el.classList.remove('good', 'bad', 'warn');
+  if (signal > 0.05) el.classList.add('good');
+  else if (signal < -0.05) el.classList.add('bad');
+  else el.classList.add('warn');
+  // Inline strong text inside the chip
+  el.innerHTML = text.replace(/([\-+0-9.]+%?)$/, '<strong>$1</strong>')
+                     .replace(/^([A-Za-z\s]+)/, m => m);
+}
+
+window.applyPlannerBuy = function () {
+  const s = window._plannerSuggest;
+  if (!s || s.buyPx == null) { toast('bad', 'No buy suggestion', 'Verdict is WAIT/AVOID.'); return; }
+  // Snap into the order form
+  document.querySelector('#side-toggle button[data-side="BUY"]').click();
+  $('ord-type').value = 'LIMIT';
+  onOrderTypeChange();
+  $('ord-price').value = Number(s.buyPx).toFixed(2);
+  $('ord-price').focus();
+  toast('good', `BUY ${inr(s.buyPx)}`, `Verdict: ${s.verdict}`);
+};
+window.applyPlannerSell = function () {
+  const s = window._plannerSuggest;
+  if (!s || s.sellPx == null) { toast('bad', 'No sell suggestion', 'Not enough range.'); return; }
+  document.querySelector('#side-toggle button[data-side="SELL"]').click();
+  $('ord-type').value = 'LIMIT';
+  onOrderTypeChange();
+  $('ord-price').value = Number(s.sellPx).toFixed(2);
+  $('ord-price').focus();
+  toast('good', `SELL ${inr(s.sellPx)}`, `Target from planner.`);
+};
+
+function renderPriceSnapshot(v) {
+  const ohlc = v.ohlc || {};
+  const ltp = v.last_price;
+  const close = ohlc.close || ltp;
+  const open  = ohlc.open  || ltp;
+  const high  = ohlc.high  || ltp;
+  const low   = ohlc.low   || ltp;
+  const vwap  = v.average_traded_price;
+
+  // Header big numbers
+  $('hd-sym').textContent = currentSym;
+  $('hd-ltp').textContent = inr(ltp);
+  const dayChange = ltp - close;
+  const dayPct = close ? (dayChange / close) * 100 : 0;
+  $('hd-change').className = 'change ' + klass(dayPct);
+  $('hd-change').innerHTML = `${sign(dayChange)}${num(dayChange, 2)} (${sign(dayPct)}${pct(dayPct)})`;
+
+  // Header sub stats
+  $('hd-open').textContent  = num(open);
+  $('hd-high').textContent  = num(high);
+  $('hd-low').textContent   = num(low);
+  $('hd-vwap').textContent  = vwap ? num(vwap) : '—';
+  $('hd-vol').textContent   = compactVol(v.volume || v.volume_traded);
+
+  // Side panel snapshot
+  $('p-open').textContent  = inr(open);
+  $('p-high').textContent  = inr(high);
+  $('p-low').textContent   = inr(low);
+  $('p-close').textContent = inr(close);
+  $('p-vwap').textContent  = vwap ? inr(vwap) : '—';
+  const vsv = vwap ? ((ltp - vwap) / vwap) * 100 : 0;
+  $('p-vsvwap').textContent = vwap ? `${sign(vsv)}${pct(vsv)}` : '—';
+  $('p-vsvwap').className = 'v ' + klass(vsv);
+  $('p-day').textContent = `${sign(dayPct)}${pct(dayPct)}`;
+  $('p-day').className = 'v ' + klass(dayPct);
+  $('p-range').textContent = `${num(high-low)} (${pct((high-low)/close*100,1)})`;
+
+  prevClose = close;
+}
+
+function renderBook(v) {
+  const depth = v.depth || {};
+  const bids = (depth.buy  || []).slice(0, 5);
+  const asks = (depth.sell || []).slice(0, 5);
+
+  const bidEl = $('book-bid');
+  if (bids.length) {
+    bidEl.innerHTML = '<span class="h">Bid</span><span class="h" style="text-align:right;">Qty</span>' +
+      bids.map(b => `<span class="px" onclick="copyToLimit(${b.price})">${inr(b.price)}</span><span class="qty">${num(b.quantity, 0)}</span>`).join('');
+  } else {
+    bidEl.innerHTML = '<span class="h">Bid</span><span class="h" style="text-align:right;">Qty</span><span style="grid-column:1/-1;color:var(--bn-muted);text-align:center;padding:6px 0;font-size:10px;">No bids</span>';
+  }
+
+  const askEl = $('book-ask');
+  if (asks.length) {
+    askEl.innerHTML = '<span class="h">Ask</span><span class="h" style="text-align:right;">Qty</span>' +
+      asks.map(a => `<span class="px" onclick="copyToLimit(${a.price})">${inr(a.price)}</span><span class="qty">${num(a.quantity, 0)}</span>`).join('');
+  } else {
+    askEl.innerHTML = '<span class="h">Ask</span><span class="h" style="text-align:right;">Qty</span><span style="grid-column:1/-1;color:var(--bn-muted);text-align:center;padding:6px 0;font-size:10px;">No asks</span>';
+  }
+}
+
+window.copyToLimit = function (px) {
+  $('ord-price').value = Number(px).toFixed(2);
+  $('ord-type').value = 'LIMIT';
+  onOrderTypeChange();
+};
+
+/* ──────────────────────────────────────────────────────────────────
+ * Position
+ * ──────────────────────────────────────────────────────────────── */
+async function updatePosition() {
+  if (!currentSym) return;
+  try {
+    const [hr, prr] = await Promise.all([
+      fetch('/api/zerodha/v1/holdings').catch(()=>null),
+      fetch('/api/zerodha/v1/positions').catch(()=>null),
+    ]);
+    let qty = 0, avg = 0, src = '', pnl = 0, pnlPct = 0;
+    if (hr && hr.ok) {
+      const rows = await hr.json();
+      if (Array.isArray(rows)) {
+        const h = rows.find(x => (x.tradingsymbol || '').toUpperCase() === currentSym);
+        if (h && h.quantity) {
+          qty = h.quantity; avg = h.average_price; src = 'CNC';
+        }
+      }
+    }
+    if (!qty && prr && prr.ok) {
+      const pp = await prr.json();
+      const net = (pp.net || []);
+      const p = net.find(x => (x.tradingsymbol || '').toUpperCase() === currentSym && x.quantity !== 0);
+      if (p) { qty = p.quantity; avg = p.average_price; src = p.product; }
+    }
+    if (qty && lastQuote) {
+      pnl = (lastQuote.last_price - avg) * qty;
+      pnlPct = ((lastQuote.last_price - avg) / avg) * 100;
+    }
+    $('pos-pill').textContent = qty ? `${num(qty,0)} sh` : 'none';
+    $('pos-src').textContent = src || '—';
+    $('pos-qty').textContent = qty ? num(qty, 0) : '—';
+    $('pos-avg').textContent = avg ? inr(avg) : '—';
+    $('pos-pnl').textContent = qty ? inr(pnl) : '—';
+    $('pos-pnl').className = 'v ' + klass(pnl);
+    $('pos-pct').textContent = qty ? `${sign(pnlPct)}${pct(pnlPct)}` : '—';
+    $('pos-pct').className = 'v ' + klass(pnlPct);
+  } catch (_) {}
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Order entry
+ * ──────────────────────────────────────────────────────────────── */
+function onSideChange() {
+  document.querySelectorAll('#side-toggle button').forEach(b => b.classList.toggle('on', b.dataset.side === currentSide));
+  const btn = $('place-btn');
+  btn.classList.remove('buy', 'sell');
+  btn.classList.add(currentSide.toLowerCase());
+  updatePlaceLabel();
+  // GTT only makes sense for BUY/CNC long protection
+  $('gtt-section').style.display = (currentSide === 'BUY' && $('ord-product').value === 'CNC') ? '' : 'none';
+}
+
+function onOrderTypeChange() {
+  const t = $('ord-type').value;
+  $('price-field-wrap').style.display = (t === 'LIMIT' || t === 'SL') ? '' : 'none';
+  $('trigger-field-wrap').style.display = (t === 'SL' || t === 'SL-M') ? '' : 'none';
+  updatePlaceLabel();
+}
+
+function updatePlaceLabel() {
+  const t = $('ord-type').value;
+  $('place-btn').textContent = (currentSide === 'BUY' ? '🛒 BUY · ' : '📤 SELL · ') + t;
+}
+
+function updateGttPreview() {
+  const lp = lastQuote ? lastQuote.last_price : null;
+  const sl = parseFloat($('gtt-sl').value);
+  const tp = parseFloat($('gtt-tp').value);
+  if (!lp || isNaN(sl) || isNaN(tp)) {
+    $('gtt-sl-px').textContent = '—'; $('gtt-tp-px').textContent = '—';
+    $('gtt-sl-d').textContent = ''; $('gtt-tp-d').textContent = '';
+    return;
+  }
+  const slPx = lp * (1 - sl/100);
+  const tpPx = lp * (1 + tp/100);
+  $('gtt-sl-px').textContent = inr(slPx);
+  $('gtt-tp-px').textContent = inr(tpPx);
+  $('gtt-sl-d').textContent = `-${pct(sl, 1)}`;
+  $('gtt-tp-d').textContent = `+${pct(tp, 1)}`;
+}
+
+async function placeOrder() {
+  if (!currentSym) return toast('bad', 'No symbol', 'Pick a tradingsymbol first.');
+  const qty = parseInt($('ord-qty').value, 10);
+  if (!qty || qty <= 0) return toast('bad', 'Bad quantity', 'Quantity must be > 0.');
+  const orderType = $('ord-type').value;
+  const product = $('ord-product').value;
+  const body = {
+    tradingsymbol: currentSym,
+    exchange:      currentExch,
+    quantity:      qty,
+    order_type:    orderType,
+    product:       product,
+    tag:           'MANUAL_DASHBOARD',
+    auto_amo:      true,
+  };
+  if (orderType === 'LIMIT' || orderType === 'SL') {
+    const px = parseFloat($('ord-price').value);
+    if (!px || px <= 0) return toast('bad', 'Bad price', 'Limit price required.');
+    body.price = px;
+  }
+  if (orderType === 'SL' || orderType === 'SL-M') {
+    const tp = parseFloat($('ord-trigger').value);
+    if (!tp || tp <= 0) return toast('bad', 'Bad trigger', 'Trigger price required for SL/SL-M.');
+    body.trigger_price = tp;
+  }
+  if (currentSide === 'SELL') {
+    if (!confirm(`Confirm SELL ${qty} ${currentSym} @ ${orderType}${body.price ? ' ₹' + body.price : ''} ?`)) return;
+  }
+  $('place-btn').disabled = true;
+  try {
+    const path = currentSide === 'BUY' ? 'equity/buy' : 'equity/sell';
+    const r = await fetch(`/api/zerodha/v1/${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || j.error || `status ${r.status}`);
+    toast('good', `${currentSide} placed`, `${currentSym} qty=${qty} → ${j.order_id}`);
+
+    // OCO GTT post-fill (Z-iter17 feature) — armed asynchronously after
+    // the buy fill is reported via order_update. For now we surface a
+    // toast describing what's planned; engine wiring is next iter.
+    if (currentSide === 'BUY' && product === 'CNC' && $('gtt-enable').value === '1') {
+      const sl = parseFloat($('gtt-sl').value);
+      const tp = parseFloat($('gtt-tp').value);
+      if (sl > 0 && tp > 0 && lastQuote) {
+        const slPx = lastQuote.last_price * (1 - sl/100);
+        const tpPx = lastQuote.last_price * (1 + tp/100);
+        // Place OCO GTT immediately (don't wait for fill in MVP).
+        try {
+          const gr = await fetch('/api/zerodha/v1/gtt/oco', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              tradingsymbol: currentSym, exchange: currentExch,
+              quantity: qty, last_price: lastQuote.last_price,
+              stop_loss_trigger: slPx, take_profit_trigger: tpPx,
+              product: 'CNC',
+            }),
+          });
+          if (gr.ok) { const gj = await gr.json(); toast('good', 'OCO GTT armed', `trigger_id ${gj.trigger_id}`); }
+        } catch (_) {}
+      }
+    }
+
+    refreshTab();
+    updatePosition();
+  } catch (e) {
+    toast('bad', `${currentSide} failed`, String(e.message || e));
+  } finally {
+    $('place-btn').disabled = false;
+  }
+}
+
+/* Quick-fill handlers ────────────────────────────────────────── */
+function quickFill(kind) {
+  if (!lastQuote) return;
+  const ltp = lastQuote.last_price;
+  const depth = lastQuote.depth || {};
+  const bids = depth.buy || [];
+  const asks = depth.sell || [];
+  let px = null;
+  if (kind === 'ltp')   px = ltp;
+  if (kind === 'bid')   px = bids[0] && bids[0].price;
+  if (kind === 'ask')   px = asks[0] && asks[0].price;
+  if (kind === 'mid')   px = (bids[0]?.price && asks[0]?.price) ? (bids[0].price + asks[0].price)/2 : ltp;
+  if (kind === 'open')  px = (lastQuote.ohlc || {}).open || ltp;
+  if (kind === '-1')    px = ltp * 0.99;
+  if (kind === '+1')    px = ltp * 1.01;
+  if (px != null) {
+    const tick = (tickInstr && tickInstr.tick_size) || 0.05;
+    px = Math.round(px / tick) * tick;
+    $('ord-price').value = px.toFixed(2);
+    $('ord-type').value = 'LIMIT';
+    onOrderTypeChange();
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Bottom tabs (orders / fills / GTTs)
+ * ──────────────────────────────────────────────────────────────── */
+async function refreshTab() {
+  if (!currentSym) {
+    $('tab-content').innerHTML = '<div class="empty">Pick a symbol first</div>';
+    return;
+  }
+  const sym = currentSym;
+  if (currentTab === 'orders') {
+    try {
+      const r = await fetch('/api/zerodha/v1/orders');
+      if (!r.ok) { $('tab-content').innerHTML = '<div class="empty">Failed to load</div>'; return; }
+      const all = await r.json();
+      const mine = (Array.isArray(all) ? all : []).filter(o =>
+        (o.tradingsymbol || '').toUpperCase() === sym &&
+        ['OPEN','TRIGGER PENDING','OPEN PENDING','VALIDATION PENDING','PUT ORDER REQ RECEIVED'].includes((o.status||'').toUpperCase())
+      );
+      $('tab-c-orders').textContent = mine.length;
+      if (!mine.length) { $('tab-content').innerHTML = '<div class="empty">No open orders</div>'; return; }
+      $('tab-content').innerHTML = `<table>
+        <thead><tr><th>Time</th><th>Side</th><th>Type</th><th>Product</th><th class="num">Qty</th><th class="num">Filled</th><th class="num">Price/Trig</th><th>Status</th><th>Tag</th><th></th></tr></thead>
+        <tbody>${mine.map(o => `<tr>
+          <td>${(o.order_timestamp||'').slice(11,19)}</td>
+          <td class="${(o.transaction_type||'').toLowerCase()==='buy'?'good':'bad'}">${o.transaction_type}</td>
+          <td>${o.order_type}</td>
+          <td>${o.product}</td>
+          <td class="num">${num(o.quantity, 0)}</td>
+          <td class="num">${num(o.filled_quantity || 0, 0)}</td>
+          <td class="num">${o.price ? num(o.price) : (o.trigger_price ? 'trig ' + num(o.trigger_price) : '—')}</td>
+          <td>${o.status}</td>
+          <td>${o.tag||''}</td>
+          <td><button onclick="cancelOrder('${o.order_id}')" style="background:transparent;border:1px solid var(--bn-line);color:var(--bn-muted);font-size:10px;padding:2px 6px;border-radius:3px;cursor:pointer;">✕</button></td>
+        </tr>`).join('')}</tbody>
+      </table>`;
+    } catch (e) {
+      $('tab-content').innerHTML = '<div class="empty">Error: ' + e.message + '</div>';
+    }
+  } else if (currentTab === 'fills') {
+    try {
+      const r = await fetch('/api/zerodha/v1/trades');
+      if (!r.ok) { $('tab-content').innerHTML = '<div class="empty">Failed to load</div>'; return; }
+      const all = await r.json();
+      const mine = (Array.isArray(all) ? all : []).filter(t => (t.tradingsymbol || '').toUpperCase() === sym);
+      $('tab-c-fills').textContent = mine.length;
+      if (!mine.length) { $('tab-content').innerHTML = '<div class="empty">No fills today</div>'; return; }
+      $('tab-content').innerHTML = `<table>
+        <thead><tr><th>Fill time</th><th>Side</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Value</th><th>Order ID</th></tr></thead>
+        <tbody>${mine.map(t => {
+          const val = (t.quantity || 0) * (t.average_price || t.price || 0);
+          return `<tr>
+            <td>${(t.fill_timestamp || t.exchange_timestamp || '').slice(11,19)}</td>
+            <td class="${(t.transaction_type||'').toLowerCase()==='buy'?'good':'bad'}">${t.transaction_type}</td>
+            <td class="num">${num(t.quantity, 0)}</td>
+            <td class="num">${num(t.average_price || t.price)}</td>
+            <td class="num">${num(val)}</td>
+            <td>${t.order_id||''}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>`;
+    } catch (e) {
+      $('tab-content').innerHTML = '<div class="empty">Error: ' + e.message + '</div>';
+    }
+  } else if (currentTab === 'gtts') {
+    try {
+      const r = await fetch('/api/zerodha/v1/gtt');
+      if (!r.ok) { $('tab-content').innerHTML = '<div class="empty">Failed to load</div>'; return; }
+      const all = await r.json();
+      const mine = (Array.isArray(all) ? all : []).filter(g => {
+        const cond = g.condition || {};
+        return (cond.tradingsymbol || '').toUpperCase() === sym && ['active','triggered'].includes(g.status);
+      });
+      $('tab-c-gtts').textContent = mine.length;
+      if (!mine.length) { $('tab-content').innerHTML = '<div class="empty">No active GTTs</div>'; return; }
+      $('tab-content').innerHTML = `<table>
+        <thead><tr><th>ID</th><th>Type</th><th class="num">SL</th><th class="num">TP</th><th class="num">Qty</th><th>Status</th><th>Created</th><th></th></tr></thead>
+        <tbody>${mine.map(g => {
+          const cond = g.condition || {};
+          const orders = g.orders || [];
+          const tv = cond.trigger_values || [];
+          return `<tr>
+            <td>${g.id||''}</td>
+            <td>${g.type === 'two-leg' ? 'OCO' : 'SINGLE'}</td>
+            <td class="num bad">${tv[0]!=null?num(tv[0]):'—'}</td>
+            <td class="num good">${tv[1]!=null?num(tv[1]):'—'}</td>
+            <td class="num">${num((orders[0]||{}).quantity || 0, 0)}</td>
+            <td>${g.status}</td>
+            <td>${(g.created_at||'').slice(0, 16).replace('T', ' ')}</td>
+            <td><button onclick="cancelGtt(${g.id})" style="background:transparent;border:1px solid var(--bn-line);color:var(--bn-muted);font-size:10px;padding:2px 6px;border-radius:3px;cursor:pointer;">✕</button></td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>`;
+    } catch (e) {
+      $('tab-content').innerHTML = '<div class="empty">Error: ' + e.message + '</div>';
+    }
+  }
+}
+
+window.cancelOrder = async function (id) {
+  if (!confirm('Cancel order ' + id + '?')) return;
+  try {
+    const r = await fetch(`/api/zerodha/v1/order/cancel/${id}`, { method: 'POST' });
+    if (!r.ok) throw new Error('status ' + r.status);
+    toast('good', 'Order cancelled', id);
+    refreshTab();
+  } catch (e) { toast('bad', 'Cancel failed', String(e.message || e)); }
+};
+window.cancelGtt = async function (id) {
+  if (!confirm('Cancel GTT ' + id + '?')) return;
+  try {
+    const r = await fetch(`/api/zerodha/v1/gtt/${id}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error('status ' + r.status);
+    toast('good', 'GTT cancelled', String(id));
+    refreshTab();
+  } catch (e) { toast('bad', 'Cancel failed', String(e.message || e)); }
+};
+
+/* ──────────────────────────────────────────────────────────────────
+ * Wiring
+ * ──────────────────────────────────────────────────────────────── */
+function setSymbol(sym, exch) {
+  const ns = (sym || '').toUpperCase().trim();
+  const ne = (exch || 'NSE').toUpperCase();
+  if (!ns) return;
+  if (ws && ws.readyState === 1 && currentSym && (ns !== currentSym || ne !== currentExch)) {
+    ws.send(JSON.stringify({ action: 'unsubscribe', symbols: [`${currentExch}:${currentSym}`] }));
+  }
+  currentSym = ns;
+  currentExch = ne;
+  $('search-input').value = ns;
+  $('exch-select').value = ne;
+  $('hd-sym').textContent = ns;
+
+  const meta = (window.NIFTY100 || []).find(o => o.sym === ns);
+  $('meta-sector').textContent = meta?.sector || '—';
+
+  history.replaceState({}, '', `?sym=${encodeURIComponent(ns)}&exch=${ne}&tf=${currentTf}`);
+  if (!chart) makeChart();
+  loadHistorical();
+  fetchQuote();
+  updatePosition();
+  refreshTab();
+  subscribeCurrent();
+}
+
+function setTimeframe(tf) {
+  currentTf = tf;
+  document.querySelectorAll('.tf-btn').forEach(b => b.classList.toggle('on', b.dataset.tf === tf));
+  history.replaceState({}, '', `?sym=${encodeURIComponent(currentSym)}&exch=${currentExch}&tf=${tf}`);
+  if (!chart) makeChart();
+  chart.applyOptions({
+    timeScale: {
+      timeVisible: ['1s','1m','3m','5m','15m','30m','1h','2h','4h'].includes(tf),
+      secondsVisible: tf === '1s',
+    }
+  });
+  if (currentSym) loadHistorical();
+}
+
+function setTab(t) {
+  currentTab = t;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  refreshTab();
+}
+
+// Wire up events
+$('search-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    const s = e.target.value.trim().toUpperCase();
+    if (s) setSymbol(s, $('exch-select').value);
+  }
+});
+$('exch-select').addEventListener('change', () => {
+  if (currentSym) setSymbol(currentSym, $('exch-select').value);
+});
+document.querySelectorAll('.tf-btn').forEach(b => b.addEventListener('click', () => setTimeframe(b.dataset.tf)));
+document.querySelectorAll('#side-toggle button').forEach(b => b.addEventListener('click', () => {
+  currentSide = b.dataset.side; onSideChange();
+}));
+$('ord-type').addEventListener('change', onOrderTypeChange);
+$('ord-product').addEventListener('change', onSideChange);   // re-evaluates GTT visibility
+['gtt-sl', 'gtt-tp'].forEach(id => $(id).addEventListener('input', updateGttPreview));
+$('place-btn').addEventListener('click', placeOrder);
+document.querySelectorAll('#quick-fill button').forEach(b => b.addEventListener('click', () => quickFill(b.dataset.fill)));
+document.querySelectorAll('.tab-btn').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
+
+/* ──────────────────────────────────────────────────────────────────
+ * Boot
+ * ──────────────────────────────────────────────────────────────── */
+(function init() {
+  const q = new URLSearchParams(location.search);
+  const sym = q.get('sym');
+  const exch = (q.get('exch') || 'NSE').toUpperCase();
+  const tf = q.get('tf') || '5m';
+  setTimeframe(tf);
+  onSideChange();
+  onOrderTypeChange();
+  setWsPill('off', 'connecting…');
+  openWs();
+  if (sym) setSymbol(sym, exch);
+  // Polling cadences
+  setInterval(() => { if (currentSym) fetchQuote(); }, 3000);
+  setInterval(() => { if (currentSym) updatePosition(); }, 8000);
+  setInterval(() => { if (currentSym) refreshTab(); }, 6000);
+})();
+</script>
+</body>
+</html>

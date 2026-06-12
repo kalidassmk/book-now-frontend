@@ -347,12 +347,58 @@
                 </div>
             </div>
 
+            <!-- iter124 — Buys Summary: per-coin avg buy price + open qty held -->
+            <div class="glass rounded-[2rem] overflow-hidden">
+                <div class="p-6 border-b border-white/5">
+                    <div class="flex items-start justify-between flex-wrap gap-4">
+                        <div>
+                            <h3 class="text-lg font-bold">📥 Buys Summary · Avg Price</h3>
+                            <p class="text-xs text-gray-500 mt-1">Your BUY orders in the selected range · weighted avg price + open qty currently held</p>
+                            <p id="buys-range-tag" class="text-[10px] text-blue-300 mt-1 mono">showing: today</p>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-[10px] uppercase tracking-widest font-bold text-gray-500">Spent in range</div>
+                            <div id="buys-total-spent" class="text-2xl font-black mono text-white">$0.00</div>
+                            <div id="buys-total-meta" class="text-[10px] text-gray-500 mt-1 mono">—</div>
+                        </div>
+                    </div>
+                    <!-- 3-way mode toggle -->
+                    <div class="mt-3 inline-flex rounded-lg overflow-hidden border border-white/10 text-[11px]">
+                        <label class="px-3 py-1 cursor-pointer transition-all" data-buys-view="bycoin">
+                            <input type="radio" name="buys-view" value="bycoin" checked class="hidden" />
+                            🪙 By coin (avg)
+                        </label>
+                        <label class="px-3 py-1 cursor-pointer transition-all border-l border-white/10" data-buys-view="byday">
+                            <input type="radio" name="buys-view" value="byday" class="hidden" />
+                            📅 By day + coin
+                        </label>
+                        <label class="px-3 py-1 cursor-pointer transition-all border-l border-white/10" data-buys-view="orders">
+                            <input type="radio" name="buys-view" value="orders" class="hidden" />
+                            🧾 Each order
+                        </label>
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-white/5 text-[10px] uppercase tracking-widest font-bold text-gray-500">
+                            <tr id="buys-thead-row">
+                                <!-- Populated by JS to match the current mode -->
+                            </tr>
+                        </thead>
+                        <tbody id="buys-tbody" class="text-sm divide-y divide-white/5">
+                            <tr><td colspan="9" class="px-6 py-10 text-center text-gray-500">Pick a range above…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
             <!-- iter96 — Grouped Orders: one row per orderId (multi-fill collapsed) -->
             <div class="glass rounded-[2rem] overflow-hidden">
                 <div class="p-6 border-b border-white/5 flex items-center justify-between">
                     <div>
                         <h3 class="text-lg font-bold">Recent Trade History</h3>
-                        <p class="text-xs text-gray-500 mt-1">One row per order — multi-fill orders are collapsed with totals</p>
+                        <p class="text-xs text-gray-500 mt-1">One row per order — multi-fill orders are collapsed with totals · respects the date range above (iter124)</p>
+                        <p id="history-range-tag" class="text-[10px] text-blue-300 mt-1 mono">showing: today</p>
                     </div>
                     <div class="flex items-center gap-2">
                         <button onclick="exportHistoryCsv()" class="px-4 py-2 bg-brand text-bg font-bold rounded-xl text-sm hover:brand-hover transition-all">Export CSV</button>
@@ -539,7 +585,30 @@
                 // per symbol.
                 const groups = groupByOrder(history);
                 const trips  = matchRoundTrips(groups);
-                renderGroupedHistoryTable(groups);
+                // iter124 — Recent Trade History now respects the date
+                // range filter, so 'Today' preset hides old unrelated
+                // coins from view.
+                const filtForHistory = (typeof getPnlFilters === 'function')
+                    ? getPnlFilters() : { from: null, to: null };
+                const groupsInRange = groups.filter(g => {
+                    const ts = Number(g.lastTime) || 0;
+                    if (filtForHistory.from && ts < filtForHistory.from) return false;
+                    if (filtForHistory.to   && ts > filtForHistory.to)   return false;
+                    return true;
+                });
+                renderGroupedHistoryTable(groupsInRange);
+                const hrTag = document.getElementById('history-range-tag');
+                if (hrTag) {
+                    if (!filtForHistory.from && !filtForHistory.to) {
+                        hrTag.textContent = `showing: all history (${groups.length} orders)`;
+                    } else {
+                        const fromTxt = filtForHistory.from ? ymdLocal(filtForHistory.from) : '—';
+                        const toTxt   = filtForHistory.to   ? ymdLocal(filtForHistory.to)   : '—';
+                        hrTag.textContent = `showing: ${fromTxt} → ${toTxt} (${groupsInRange.length} of ${groups.length} orders)`;
+                    }
+                }
+                // iter124 — render the new Buys Summary panel.
+                try { renderBuysSummary(groups, filtForHistory); } catch (_) {}
 
                 // iter113 — Round Trips table now also respects the
                 // iter112 date range picker.  The aggregator below + the
@@ -1222,8 +1291,290 @@
                 el.classList.toggle('text-bg', sel);
                 el.classList.toggle('text-gray-400', !sel);
             });
-            // Default to "Today" preset on first visit so the page isn't blank.
-            applyPreset('all');
+            // iter124 — default to "Today" so the page surfaces only
+            // today's activity, hiding old unrelated coins from view.
+            applyPreset('today');
+        });
+
+        // ──────────────────────────────────────────────────────────────
+        // iter 124 — Buys Summary
+        //
+        // The operator scales into a coin over multiple BUY orders at
+        // different prices.  They want:
+        //   • Per-coin avg buy price (qty-weighted) + open qty still held
+        //   • Per-day per-coin breakdown
+        //   • Each individual BUY order
+        // All three views respect the iter112 date range filter.
+        //
+        // Open qty = LIFO-matched balance from FULL history up to the
+        // END of the date range, so "as-of end-of-range I held X coins".
+        // ──────────────────────────────────────────────────────────────
+        function computeOpenPositions(groups, cutoffTs) {
+            const bySym = new Map();
+            for (const g of groups) {
+                if (g.lastTime > cutoffTs) continue;
+                if (!bySym.has(g.symbol)) bySym.set(g.symbol, []);
+                bySym.get(g.symbol).push(g);
+            }
+            const out = new Map();
+            for (const [sym, arr] of bySym) {
+                arr.sort((a, b) => a.lastTime - b.lastTime);
+                const stack = [];
+                for (const g of arr) {
+                    if (g.isBuyer) {
+                        stack.push({ qty: g.qty, cost: g.quoteQty, fees: g.commissionUsdt, firstTs: g.firstTime });
+                        continue;
+                    }
+                    let remaining = g.qty;
+                    while (remaining > 1e-12 && stack.length) {
+                        const buy = stack[stack.length - 1];
+                        if (buy.qty <= 1e-12) { stack.pop(); continue; }
+                        const take = Math.min(buy.qty, remaining);
+                        const portion = take / buy.qty;
+                        buy.qty  -= take;
+                        buy.cost -= buy.cost * portion;
+                        buy.fees -= buy.fees * portion;
+                        if (buy.qty <= 1e-12) stack.pop();
+                        remaining -= take;
+                    }
+                }
+                if (stack.length) {
+                    const sum = stack.reduce((acc, x) => ({
+                        qty:  acc.qty + x.qty,
+                        cost: acc.cost + x.cost,
+                        fees: acc.fees + x.fees,
+                        oldestTs: Math.min(acc.oldestTs, x.firstTs || Infinity),
+                    }), { qty: 0, cost: 0, fees: 0, oldestTs: Infinity });
+                    if (sum.qty > 1e-9) out.set(sym, sum);
+                }
+            }
+            return out;
+        }
+
+        function summarizeBuysByCoin(groups, filt) {
+            const buys = (groups || []).filter(g => g.isBuyer && (
+                (!filt.from || g.lastTime >= filt.from) &&
+                (!filt.to   || g.lastTime <= filt.to)
+            ));
+            const bySym = new Map();
+            for (const g of buys) {
+                let row = bySym.get(g.symbol);
+                if (!row) {
+                    row = {
+                        symbol: g.symbol, qty: 0, cost: 0, fees: 0,
+                        orders_count: 0, firstTime: g.firstTime, lastTime: g.lastTime,
+                    };
+                    bySym.set(g.symbol, row);
+                }
+                row.qty += g.qty;
+                row.cost += g.quoteQty;
+                row.fees += g.commissionUsdt;
+                row.orders_count += 1;
+                if (g.firstTime < row.firstTime) row.firstTime = g.firstTime;
+                if (g.lastTime  > row.lastTime)  row.lastTime  = g.lastTime;
+            }
+            const cutoff = filt.to || Infinity;
+            const openMap = computeOpenPositions(groups, cutoff);
+            const out = [];
+            for (const r of bySym.values()) {
+                const open = openMap.get(r.symbol) || { qty: 0, cost: 0 };
+                out.push({
+                    ...r,
+                    avgPrice:     r.qty > 0 ? r.cost / r.qty : 0,
+                    openQty:      open.qty,
+                    openCost:     open.cost,
+                    openAvgPrice: open.qty > 0 ? open.cost / open.qty : 0,
+                });
+            }
+            out.sort((a, b) => b.lastTime - a.lastTime);
+            return out;
+        }
+
+        function summarizeBuysByDayCoin(groups, filt) {
+            const buys = (groups || []).filter(g => g.isBuyer && (
+                (!filt.from || g.lastTime >= filt.from) &&
+                (!filt.to   || g.lastTime <= filt.to)
+            ));
+            const byKey = new Map();
+            for (const g of buys) {
+                const day = ymdLocal(g.lastTime);
+                const key = day + '|' + g.symbol;
+                let row = byKey.get(key);
+                if (!row) {
+                    row = { day, symbol: g.symbol, qty: 0, cost: 0, fees: 0,
+                            orders_count: 0, lastTime: g.lastTime };
+                    byKey.set(key, row);
+                }
+                row.qty  += g.qty;
+                row.cost += g.quoteQty;
+                row.fees += g.commissionUsdt;
+                row.orders_count += 1;
+                if (g.lastTime > row.lastTime) row.lastTime = g.lastTime;
+            }
+            const out = [...byKey.values()].map(r => ({
+                ...r, avgPrice: r.qty > 0 ? r.cost / r.qty : 0,
+            }));
+            out.sort((a, b) => (b.day.localeCompare(a.day)) || a.symbol.localeCompare(b.symbol));
+            return out;
+        }
+
+        function summarizeBuysByOrder(groups, filt) {
+            return (groups || []).filter(g => g.isBuyer && (
+                (!filt.from || g.lastTime >= filt.from) &&
+                (!filt.to   || g.lastTime <= filt.to)
+            ));
+        }
+
+        function renderBuysSummary(groups, filt) {
+            const sel = document.querySelector('input[name="buys-view"]:checked');
+            const mode = sel ? sel.value : 'bycoin';
+            const tbody  = document.getElementById('buys-tbody');
+            const thead  = document.getElementById('buys-thead-row');
+            const tag    = document.getElementById('buys-range-tag');
+            const spent  = document.getElementById('buys-total-spent');
+            const meta   = document.getElementById('buys-total-meta');
+            if (!tbody || !thead) return;
+
+            // Range tag
+            if (tag) {
+                if (!filt.from && !filt.to) {
+                    tag.textContent = 'showing: all history';
+                } else {
+                    const fromTxt = filt.from ? ymdLocal(filt.from) : '—';
+                    const toTxt   = filt.to   ? ymdLocal(filt.to)   : '—';
+                    tag.textContent = `showing: ${fromTxt} → ${toTxt}`;
+                }
+            }
+
+            // Render headers + rows per mode
+            let rows = [];
+            if (mode === 'bycoin') {
+                thead.innerHTML = `
+                    <th class="px-6 py-4">Symbol</th>
+                    <th class="px-6 py-4">Avg Buy</th>
+                    <th class="px-6 py-4">Qty Bought</th>
+                    <th class="px-6 py-4">Spent (USDT)</th>
+                    <th class="px-6 py-4">Fees</th>
+                    <th class="px-6 py-4">Orders</th>
+                    <th class="px-6 py-4">Open Qty</th>
+                    <th class="px-6 py-4">Open Avg</th>
+                    <th class="px-6 py-4">Last Buy</th>`;
+                rows = summarizeBuysByCoin(groups, filt);
+            } else if (mode === 'byday') {
+                thead.innerHTML = `
+                    <th class="px-6 py-4">Day</th>
+                    <th class="px-6 py-4">Symbol</th>
+                    <th class="px-6 py-4">Avg Buy</th>
+                    <th class="px-6 py-4">Qty</th>
+                    <th class="px-6 py-4">Spent (USDT)</th>
+                    <th class="px-6 py-4">Fees</th>
+                    <th class="px-6 py-4">Orders</th>
+                    <th class="px-6 py-4">Last Buy</th>`;
+                rows = summarizeBuysByDayCoin(groups, filt);
+            } else {
+                thead.innerHTML = `
+                    <th class="px-6 py-4">Symbol</th>
+                    <th class="px-6 py-4">Avg Buy</th>
+                    <th class="px-6 py-4">Qty</th>
+                    <th class="px-6 py-4">Spent (USDT)</th>
+                    <th class="px-6 py-4">Fees</th>
+                    <th class="px-6 py-4">Fills</th>
+                    <th class="px-6 py-4">Time</th>`;
+                rows = summarizeBuysByOrder(groups, filt);
+            }
+
+            if (!rows.length) {
+                const cols = (mode === 'orders') ? 7 : (mode === 'byday') ? 8 : 9;
+                tbody.innerHTML = `<tr><td colspan="${cols}" class="px-6 py-10 text-center text-gray-500">No buy orders in this range</td></tr>`;
+                if (spent) { spent.textContent = '$0.00'; spent.className = 'text-2xl font-black mono text-gray-500'; }
+                if (meta)  { meta.textContent  = '0 orders · 0 coins'; }
+                return;
+            }
+
+            tbody.innerHTML = rows.map(r => {
+                if (mode === 'bycoin') {
+                    const openChip = r.openQty > 1e-9
+                        ? `<span class="text-[10px] text-success bg-success/10 px-1.5 py-0.5 rounded ml-2">held</span>`
+                        : `<span class="text-[10px] text-gray-500 bg-white/5 px-1.5 py-0.5 rounded ml-2">flat</span>`;
+                    return `
+                    <tr class="hover:bg-white/[0.02] transition-colors">
+                        <td class="px-6 py-4 font-bold text-white uppercase">${r.symbol}${openChip}</td>
+                        <td class="px-6 py-4 mono text-white">${r.avgPrice.toFixed(6)}</td>
+                        <td class="px-6 py-4 mono text-gray-300">${r.qty.toFixed(4)}</td>
+                        <td class="px-6 py-4 mono text-white">${fmtUsd(r.cost)}</td>
+                        <td class="px-6 py-4 mono text-gray-400">${fmtUsd(r.fees, 4)}</td>
+                        <td class="px-6 py-4 mono text-gray-500">${r.orders_count}</td>
+                        <td class="px-6 py-4 mono ${r.openQty > 1e-9 ? 'text-success' : 'text-gray-500'}">${r.openQty.toFixed(4)}</td>
+                        <td class="px-6 py-4 mono ${r.openQty > 1e-9 ? 'text-white' : 'text-gray-500'}">${r.openAvgPrice ? r.openAvgPrice.toFixed(6) : '—'}</td>
+                        <td class="px-6 py-4 text-gray-500 text-xs">${new Date(r.lastTime).toLocaleString()}</td>
+                    </tr>`;
+                } else if (mode === 'byday') {
+                    return `
+                    <tr class="hover:bg-white/[0.02] transition-colors">
+                        <td class="px-6 py-4 font-bold text-white">${r.day}</td>
+                        <td class="px-6 py-4 font-bold text-white uppercase">${r.symbol}</td>
+                        <td class="px-6 py-4 mono text-white">${r.avgPrice.toFixed(6)}</td>
+                        <td class="px-6 py-4 mono text-gray-300">${r.qty.toFixed(4)}</td>
+                        <td class="px-6 py-4 mono text-white">${fmtUsd(r.cost)}</td>
+                        <td class="px-6 py-4 mono text-gray-400">${fmtUsd(r.fees, 4)}</td>
+                        <td class="px-6 py-4 mono text-gray-500">${r.orders_count}</td>
+                        <td class="px-6 py-4 text-gray-500 text-xs">${new Date(r.lastTime).toLocaleString()}</td>
+                    </tr>`;
+                } else {
+                    // orders mode — r is a group from groupByOrder
+                    return `
+                    <tr class="hover:bg-white/[0.02] transition-colors">
+                        <td class="px-6 py-4 font-bold text-white uppercase">${r.symbol}</td>
+                        <td class="px-6 py-4 mono text-white">${r.avgPrice.toFixed(6)}</td>
+                        <td class="px-6 py-4 mono text-gray-300">${r.qty.toFixed(4)}</td>
+                        <td class="px-6 py-4 mono text-white">${fmtUsd(r.quoteQty)}</td>
+                        <td class="px-6 py-4 mono text-gray-400">${fmtUsd(r.commissionUsdt, 4)}</td>
+                        <td class="px-6 py-4 mono text-gray-500">${r.fillsCount}</td>
+                        <td class="px-6 py-4 text-gray-500 text-xs">${new Date(r.lastTime).toLocaleString()}</td>
+                    </tr>`;
+                }
+            }).join('');
+
+            // Summary stat — sum of spent across rows in current mode.
+            let totalSpent = 0, totalOrders = 0;
+            const symSet = new Set();
+            for (const r of rows) {
+                totalSpent  += Number(mode === 'orders' ? r.quoteQty : r.cost) || 0;
+                totalOrders += Number(mode === 'orders' ? 1          : r.orders_count) || 0;
+                if (r.symbol) symSet.add(r.symbol);
+            }
+            if (spent) {
+                spent.textContent = fmtUsd(totalSpent);
+                spent.className = 'text-2xl font-black mono text-white';
+            }
+            if (meta) {
+                meta.textContent = `${totalOrders} ${totalOrders === 1 ? 'order' : 'orders'} · ${symSet.size} ${symSet.size === 1 ? 'coin' : 'coins'}`;
+            }
+        }
+
+        // iter124 — re-render Buys Summary when the operator flips the mode.
+        document.addEventListener('change', (e) => {
+            if (e.target && e.target.name === 'buys-view') {
+                // Visual highlight of selected radio
+                document.querySelectorAll('[data-buys-view]').forEach(el => {
+                    const sel = el.querySelector('input').checked;
+                    el.classList.toggle('bg-brand', sel);
+                    el.classList.toggle('text-bg', sel);
+                    el.classList.toggle('text-gray-400', !sel);
+                });
+                if (typeof UI !== 'undefined' && UI.renderHistory) {
+                    try { UI.renderHistory(state.history || []); } catch (_) {}
+                }
+            }
+        });
+        // Initial visual state for the toggle on first paint.
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('[data-buys-view]').forEach(el => {
+                const sel = el.querySelector('input').checked;
+                el.classList.toggle('bg-brand', sel);
+                el.classList.toggle('text-bg', sel);
+                el.classList.toggle('text-gray-400', !sel);
+            });
         });
 
         function exportHistoryCsv() {
@@ -1310,5 +1661,8 @@
         state.subscribe((s) => UI.render(s));
 
     </script>
+
+<!-- iter123 — universal nav header -->
+<script src="/nav.js"></script>
 </body>
 </html>
