@@ -943,6 +943,23 @@ function makeChart() {
   }
 }
 
+/* Fill the whole chart panel with readable candles, newest flush right.
+   fitContent() can leave bars bunched (esp. if the panel was still being
+   laid out when the chart was created), so instead we pick how many of the
+   most-recent bars to show based on the live panel width and pin them to the
+   right edge. Few bars → wide candles; many bars → readable ~10px candles. */
+function fitChart() {
+  if (!chart || !bars.length) return;
+  const el = $('chart');
+  chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+  const TARGET_SPACING = 10;          // px per candle when there's plenty of history
+  const RIGHT_PAD = 2;                // small breathing room past the newest bar
+  const fitBars = Math.max(20, Math.floor(el.clientWidth / TARGET_SPACING) - RIGHT_PAD);
+  const to = bars.length - 1 + RIGHT_PAD;
+  const from = Math.max(0, bars.length - fitBars);
+  chart.timeScale().setVisibleLogicalRange({ from, to });
+}
+
 /* ── Historical seed ─────────────────────────────────────────────── */
 async function loadHistorical() {
   if (!currentSym) return;
@@ -986,7 +1003,7 @@ async function loadHistorical() {
     })));
     lastBarTime = bars.length ? bars[bars.length-1].time : null;
     prevClose = bars.length >= 2 ? bars[bars.length-2].close : (bars[0] || {}).close;
-    chart.timeScale().fitContent();
+    requestAnimationFrame(fitChart);
     $('chart-loading').classList.add('hidden');
   } catch (e) {
     $('chart-loading').textContent = 'Fetch failed: ' + e.message;
