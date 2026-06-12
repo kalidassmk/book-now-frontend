@@ -835,9 +835,11 @@ let currentTf   = '5m';
 let currentSide = 'BUY';
 let currentTab  = 'orders';
 let ws          = null;
-let chart, candleSeries, volumeSeries;
+let chart, candleSeries, volumeSeries, emaFast, emaSlow;
 let bars        = [];
 let lastBarTime = null;
+let chartTime   = 0;            // contiguous chart-time counter (no session gaps)
+const ctReal    = new Map();    // chart-time -> real unix seconds (for axis/crosshair labels)
 let prevClose   = null;
 let lastQuote   = null;     // latest /quote response for sidebar
 let tickInstr   = null;     // {tick_size, lot_size} cached for the symbol
@@ -870,6 +872,35 @@ function toast(kind, head, body) {
   toast._t = setTimeout(() => t.classList.remove('show'), 4500);
 }
 
+/* ── IST time labels (chart-time is contiguous, so we look up the real
+ *    timestamp for every axis tick / crosshair from the ctReal map) ── */
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function istDate(unix) { return new Date((unix + 19800) * 1000); }  // +5:30, read UTC parts
+function pad2(n) { return String(n).padStart(2, '0'); }
+function fmtAxis(unix) {
+  const d = istDate(unix);
+  if (['1d','1w','1mo'].includes(currentTf)) return `${d.getUTCDate()} ${MON[d.getUTCMonth()]}`;
+  return `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+}
+function fmtCrosshairTime(unix) {
+  const d = istDate(unix);
+  return `${d.getUTCDate()} ${MON[d.getUTCMonth()]}  ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+}
+function labelFor(map, ct, fmt) { const r = map.get(ct); return r == null ? '' : fmt(r); }
+
+/* Exponential moving average over an array of closes. */
+function emaArray(closes, period) {
+  const k = 2 / (period + 1), out = [];
+  let prev;
+  for (let i = 0; i < closes.length; i++) {
+    prev = i === 0 ? closes[i] : closes[i] * k + prev * (1 - k);
+    out.push(prev);
+  }
+  return out;
+}
+const EMA_FAST = 20, EMA_SLOW = 50;
+function emaStep(prevEma, close, period) { const k = 2 / (period + 1); return close * k + prevEma * (1 - k); }
+
 /* ──────────────────────────────────────────────────────────────────
  * Chart
  * ──────────────────────────────────────────────────────────────── */
@@ -880,14 +911,14 @@ function makeChart() {
     width: el.clientWidth,
     height: el.clientHeight,
     layout: {
-      background: { color: 'transparent' },
+      background: { type: 'gradient', topColor: '#0e1621', bottomColor: '#0a0f16' },
       textColor: '#8b949e',
       fontFamily: '-apple-system, "Segoe UI", Roboto, sans-serif',
       fontSize: 11,
     },
     grid: {
-      vertLines: { color: 'rgba(31, 41, 51, .5)' },
-      horzLines: { color: 'rgba(31, 41, 51, .5)' },
+      vertLines: { color: 'rgba(31, 41, 51, .35)' },
+      horzLines: { color: 'rgba(31, 41, 51, .35)' },
     },
     rightPriceScale: {
       borderColor: '#1f2933',
@@ -898,16 +929,46 @@ function makeChart() {
       borderColor: '#1f2933',
       timeVisible: ['1s','1m','3m','5m','15m','30m','1h','2h','4h'].includes(currentTf),
       secondsVisible: currentTf === '1s',
-      rightOffset: 6,
+      rightOffset: 4,
       barSpacing: 8,
+      // Chart-time is contiguous; map back to the real IST timestamp.
+      tickMarkFormatter: (ct) => labelFor(ctReal, ct, fmtAxis),
     },
-    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    localization: {
+      timeFormatter: (ct) => labelFor(ctReal, ct, fmtCrosshairTime),
+      priceFormatter: (p) => '₹' + Number(p).toFixed(2),
+    },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Normal,
+      vertLine: { color: 'rgba(139,148,158,.4)', width: 1, style: LightweightCharts.LineStyle.Dashed, labelBackgroundColor: '#1f6feb' },
+      horzLine: { color: 'rgba(139,148,158,.4)', style: LightweightCharts.LineStyle.Dashed, labelBackgroundColor: '#1f6feb' },
+    },
+    watermark: {
+      visible: true,
+      text: `${currentSym || ''}  ·  ${currentTf}`,
+      color: 'rgba(139,148,158,.06)',
+      fontSize: 56,
+      fontStyle: 'bold',
+      horzAlign: 'center',
+      vertAlign: 'center',
+    },
   });
 
   candleSeries = chart.addCandlestickSeries({
-    upColor: '#2ecc71', downColor: '#e74c3c',
-    borderUpColor: '#2ecc71', borderDownColor: '#e74c3c',
-    wickUpColor: '#2ecc71', wickDownColor: '#e74c3c',
+    upColor: '#26a96a', downColor: '#e5484d',
+    borderUpColor: '#2ecc71', borderDownColor: '#f0606a',
+    wickUpColor: '#2ecc71', wickDownColor: '#f0606a',
+    priceLineColor: '#1f6feb', priceLineWidth: 1,
+  });
+
+  // EMA overlays drawn on the price scale, on top of the candles.
+  emaFast = chart.addLineSeries({
+    color: 'rgba(241,196,15,.9)', lineWidth: 1,
+    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+  });
+  emaSlow = chart.addLineSeries({
+    color: 'rgba(155,89,182,.95)', lineWidth: 1,
+    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
   });
 
   // Volume in its OWN price scale so it gets a dedicated bottom band
@@ -966,10 +1027,14 @@ async function loadHistorical() {
   $('chart-loading').classList.remove('hidden');
   $('chart-loading').textContent = `Loading ${currentExch}:${currentSym} · ${currentTf}…`;
 
+  if (chart) chart.applyOptions({ watermark: { text: `${currentSym || ''}  ·  ${currentTf}` } });
+
   if (currentTf === '1s') {
     bars = [];
+    chartTime = 0; ctReal.clear();
     candleSeries.setData([]);
     volumeSeries.setData([]);
+    emaFast.setData([]); emaSlow.setData([]);
     $('chart-loading').textContent = '1s chart — waiting for ticks…';
     return;
   }
@@ -992,15 +1057,36 @@ async function loadHistorical() {
       $('chart-loading').textContent = 'No data for this interval/symbol';
       return;
     }
-    bars = data.map(b => ({
-      time: Math.floor(new Date(b.t).getTime() / 1000),
-      open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v,
-    }));
-    candleSeries.setData(bars.map(b => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close })));
+    // Build, sanitise (valid OHLC, ascending, de-duped by real time) so the
+    // series never contains holes that the library would draw as gaps.
+    const seen = new Set();
+    bars = data
+      .map(b => ({
+        time: Math.floor(new Date(b.t).getTime() / 1000),
+        open: +b.o, high: +b.h, low: +b.l, close: +b.c, volume: +b.v || 0,
+      }))
+      .filter(b => Number.isFinite(b.time) && [b.open,b.high,b.low,b.close].every(Number.isFinite))
+      .sort((a, b) => a.time - b.time)
+      .filter(b => (seen.has(b.time) ? false : seen.add(b.time)));
+
+    // Assign contiguous chart-time so consecutive trading bars sit flush —
+    // overnight / weekend session breaks no longer render as blank bands.
+    chartTime = 0; ctReal.clear();
+    for (const b of bars) { b.ct = ++chartTime; ctReal.set(b.ct, b.time); }
+
+    // EMA overlays (hidden until enough bars so the seed ramp isn't shown).
+    const closes = bars.map(b => b.close);
+    const e20 = emaArray(closes, EMA_FAST), e50 = emaArray(closes, EMA_SLOW);
+    bars.forEach((b, i) => { b.e20 = e20[i]; b.e50 = e50[i]; });
+
+    candleSeries.setData(bars.map(b => ({ time: b.ct, open: b.open, high: b.high, low: b.low, close: b.close })));
     volumeSeries.setData(bars.map(b => ({
-      time: b.time, value: b.volume,
+      time: b.ct, value: b.volume,
       color: b.close >= b.open ? 'rgba(46,204,113,.5)' : 'rgba(231,76,60,.5)',
     })));
+    emaFast.setData(bars.map((b, i) => i >= EMA_FAST - 1 ? { time: b.ct, value: b.e20 } : { time: b.ct }));
+    emaSlow.setData(bars.map((b, i) => i >= EMA_SLOW - 1 ? { time: b.ct, value: b.e50 } : { time: b.ct }));
+
     lastBarTime = bars.length ? bars[bars.length-1].time : null;
     prevClose = bars.length >= 2 ? bars[bars.length-2].close : (bars[0] || {}).close;
     requestAnimationFrame(fitChart);
@@ -1031,19 +1117,30 @@ function onTick(msg) {
     b.high = Math.max(b.high, px);
     b.low  = Math.min(b.low, px);
     b.close = px;
-    candleSeries.update({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close });
+    const prev = bars[bars.length - 2];
+    b.e20 = prev ? emaStep(prev.e20, px, EMA_FAST) : px;
+    b.e50 = prev ? emaStep(prev.e50, px, EMA_SLOW) : px;
+    candleSeries.update({ time: b.ct, open: b.open, high: b.high, low: b.low, close: b.close });
+    emaFast.update({ time: b.ct, value: b.e20 });
+    emaSlow.update({ time: b.ct, value: b.e50 });
   } else {
     const last = bars[bars.length - 1];
     const b = {
       time: bucket,
+      ct: ++chartTime,
       open: last ? last.close : px,
       high: px, low: px, close: px,
       volume: 0,
     };
+    b.e20 = last ? emaStep(last.e20, px, EMA_FAST) : px;
+    b.e50 = last ? emaStep(last.e50, px, EMA_SLOW) : px;
     bars.push(b);
-    if (bars.length > 5000) bars.shift();
+    ctReal.set(b.ct, bucket);
+    if (bars.length > 5000) { const old = bars.shift(); ctReal.delete(old.ct); }
     lastBarTime = bucket;
-    candleSeries.update({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close });
+    candleSeries.update({ time: b.ct, open: b.open, high: b.high, low: b.low, close: b.close });
+    emaFast.update({ time: b.ct, value: b.e20 });
+    emaSlow.update({ time: b.ct, value: b.e50 });
     // A fresh bar just opened — slide the window so the live candle stays
     // in view and the panel stays full instead of the trend freezing.
     fitChart();
