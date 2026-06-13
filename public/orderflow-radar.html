@@ -51,6 +51,7 @@
           <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-gray-600"></span>
           <span id="ws-status" class="text-xs font-semibold text-gray-400">Connecting…</span>
         </div>
+        <div id="bn-alert-slot"></div>
         <div class="glass rounded-xl px-4 py-2 text-center"><p class="text-[10px] text-gray-500 uppercase">Watching</p><p id="coin-count" class="text-sm font-bold mono">—</p></div>
         <div class="glass rounded-xl px-4 py-2 text-center"><p class="text-[10px] text-gray-500 uppercase">Live deep</p><p id="deep-count" class="text-sm font-bold mono text-brand">0</p></div>
       </div>
@@ -402,7 +403,15 @@
   /* ── alerts ──────────────────────────────────────────────────────────── */
   let audioCtx = null;
   function beep(){ if(!$('sound-toggle').checked)return; try{ audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)(); const o=audioCtx.createOscillator(),g=audioCtx.createGain(); o.connect(g);g.connect(audioCtx.destination); o.frequency.value=880;g.gain.value=0.08;o.start();o.frequency.setValueAtTime(1320,audioCtx.currentTime+0.12);o.stop(audioCtx.currentTime+0.24);}catch{} }
-  function onConfirm(sym){ beep(); requestAnimationFrame(()=>{ const tr=document.querySelector(`tr[data-sym="${sym}"]`); if(tr){tr.classList.remove('flash');void tr.offsetWidth;tr.classList.add('flash');} }); }
+  function onConfirm(sym){
+    beep();
+    const st = S[sym];
+    if (st && st.status === 'BUY' && window.BNAlert) BNAlert.notify({
+      sym, kind: 'BUY', price: st.entry,
+      body: `${sym}: BUY rhythm — burst + T+1 confirm + 1h ARMED. Radar-ஐ திற.`,
+    });
+    requestAnimationFrame(()=>{ const tr=document.querySelector(`tr[data-sym="${sym}"]`); if(tr){tr.classList.remove('flash');void tr.offsetWidth;tr.classList.add('flash');} });
+  }
 
   /* ── UI wiring + boot ────────────────────────────────────────────────── */
   function setWs(t, c){ $('ws-status').textContent = t; $('ws-dot').className = 'w-2.5 h-2.5 rounded-full '+c; }
@@ -421,6 +430,7 @@
     await seedAll();
   })();
   </script>
+  <script src="/alert-kit.js"></script>
   <script src="/nav.js"></script>
 </body>
 </html>
