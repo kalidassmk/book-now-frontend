@@ -222,6 +222,40 @@
                     </table>
                 </div>
             </div>
+
+            <!-- iter142 — Limit-Sell Profit Projection (live via WebSocket) -->
+            <div class="glass rounded-[2rem] overflow-hidden">
+                <div class="p-6 border-b border-white/5 flex items-start justify-between flex-wrap gap-4">
+                    <div>
+                        <h3 class="text-lg font-bold">🎯 Limit-Sell Profit Projection</h3>
+                        <p class="text-xs text-gray-500 mt-1">For every open SELL limit order: gross sell amount, est. fees (0.075% / side), and projected NET profit once it fills · cost basis matched LIFO against your remaining open buys · recomputes live on every WebSocket update</p>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-[10px] uppercase tracking-widest font-bold text-gray-500">Projected Net (all sells)</div>
+                        <div id="sellproj-total" class="text-2xl font-black mono text-gray-500">$0.00</div>
+                        <div id="sellproj-meta" class="text-[10px] text-gray-500 mt-1 mono">—</div>
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left">
+                        <thead class="bg-white/5 text-[10px] uppercase tracking-widest font-bold text-gray-500">
+                            <tr>
+                                <th class="px-6 py-4">Symbol</th>
+                                <th class="px-6 py-4">Sell Qty</th>
+                                <th class="px-6 py-4">Limit Price</th>
+                                <th class="px-6 py-4">Sell Amount</th>
+                                <th class="px-6 py-4">Buy Cost</th>
+                                <th class="px-6 py-4">Fees (buy+sell)</th>
+                                <th class="px-6 py-4">Net Proceeds</th>
+                                <th class="px-6 py-4">Net Profit</th>
+                            </tr>
+                        </thead>
+                        <tbody id="sellproj-tbody" class="text-sm divide-y divide-white/5">
+                            <tr><td colspan="8" class="px-6 py-10 text-center text-gray-500">No open sell orders</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
 
         <!-- HISTORY PAGE (Hidden by default) -->
@@ -509,6 +543,7 @@
             render(state) {
                 this.renderAssets(state.assets);
                 this.renderOrders(state.orders);
+                this.renderSellProjections(state.orders, state.history);
                 this.renderHistory(state.history);
                 this.renderStats(state.stats, state.assets, state.botPositions, state.activePositions);
                 this.updateBTC(state.btcPrice);
@@ -576,6 +611,58 @@
                     </tr>
                 `).join('');
                 lucide.createIcons();
+            },
+
+            // iter142 — project net profit on every open limit-SELL order.
+            // Driven by the same WebSocket 'update' payload (openOrders +
+            // tradeHistory), so it recalculates live as orders fill or new
+            // sells are placed.
+            renderSellProjections(orders, history) {
+                const tbody = document.getElementById('sellproj-tbody');
+                if (!tbody) return;
+                const rows = projectSellOrders(orders || [], history || []);
+
+                const totalEl = document.getElementById('sellproj-total');
+                const metaEl  = document.getElementById('sellproj-meta');
+
+                if (!rows.length) {
+                    tbody.innerHTML = '<tr><td colspan="8" class="px-6 py-10 text-center text-gray-500">No open sell orders</td></tr>';
+                    if (totalEl) { totalEl.textContent = '$0.00'; totalEl.className = 'text-2xl font-black mono text-gray-500'; }
+                    if (metaEl)  metaEl.textContent = '—';
+                    return;
+                }
+
+                let totalNet = 0, anyBasis = false, totalProceeds = 0;
+                tbody.innerHTML = rows.map(r => {
+                    totalProceeds += r.netProceeds;
+                    if (r.hasBasis) { totalNet += r.netProfit; anyBasis = true; }
+                    const profitTxt = r.hasBasis
+                        ? `${fmtUsd(r.netProfit, 4)}<span class="block text-[10px] ${r.netProfit >= 0 ? 'text-success' : 'text-danger'}">${r.netPct >= 0 ? '+' : ''}${r.netPct.toFixed(2)}%</span>`
+                        : `<span class="text-gray-500">— <span class="text-[10px]">no buy basis</span></span>`;
+                    const profitColor = !r.hasBasis ? 'text-gray-400' : (r.netProfit >= 0 ? 'text-success' : 'text-danger');
+                    const uncovTag = r.uncoveredQty > 1e-8
+                        ? `<span class="block text-[10px] text-amber-400">${r.uncoveredQty.toFixed(4)} uncovered</span>` : '';
+                    return `
+                    <tr class="hover:bg-white/[0.02] transition-colors">
+                        <td class="px-6 py-4 font-bold text-white uppercase">${r.symbol}</td>
+                        <td class="px-6 py-4 mono text-gray-300">${r.sellQty.toFixed(4)}${uncovTag}</td>
+                        <td class="px-6 py-4 mono text-white">${r.sellPrice.toFixed(6)}</td>
+                        <td class="px-6 py-4 mono text-white">${fmtUsd(r.grossAmt, 4)}</td>
+                        <td class="px-6 py-4 mono text-gray-300">${r.hasBasis ? fmtUsd(r.buyCost, 4) : '—'}</td>
+                        <td class="px-6 py-4 mono text-amber-300">${fmtUsd(r.totalFees, 4)}</td>
+                        <td class="px-6 py-4 mono text-gray-200">${fmtUsd(r.netProceeds, 4)}</td>
+                        <td class="px-6 py-4 mono font-bold ${profitColor}">${profitTxt}</td>
+                    </tr>`;
+                }).join('');
+
+                if (totalEl) {
+                    totalEl.textContent = anyBasis ? fmtUsd(totalNet, 2) : '—';
+                    totalEl.className = 'text-2xl font-black mono ' +
+                        (!anyBasis ? 'text-gray-500' : (totalNet >= 0 ? 'text-success' : 'text-danger'));
+                }
+                if (metaEl) {
+                    metaEl.textContent = `${rows.length} sell order${rows.length > 1 ? 's' : ''} · proceeds ${fmtUsd(totalProceeds, 2)}`;
+                }
             },
 
             renderHistory(history) {
@@ -958,6 +1045,137 @@
             }
             trips.sort((a, b) => b.sellTs - a.sellTs);
             return trips;
+        }
+
+        /**
+         * iter142 — Open-position cost basis for live SELL-order projection.
+         *
+         * Runs the SAME LIFO match as matchRoundTrips() but instead of
+         * emitting closed trips it returns the *residual* open-buy stack
+         * per symbol — i.e. the coins you still hold that haven't been
+         * sold yet. Each open limit-SELL order will be matched against
+         * this stack (newest buy first) to recover what it cost you, so
+         * we can project the net profit the moment that order fills.
+         *
+         * Returns: Map<symbol, Array<{qty,cost,fees,firstTs}>> (newest at end).
+         */
+        function computeOpenPositions(groups) {
+            const bySym = new Map();
+            for (const g of groups) {
+                if (!bySym.has(g.symbol)) bySym.set(g.symbol, []);
+                bySym.get(g.symbol).push(g);
+            }
+            const posBySym = new Map();
+            for (const [sym, arr] of bySym) {
+                arr.sort((a, b) => a.lastTime - b.lastTime);
+                const openBuys = [];  // LIFO stack, newest at end
+                for (const g of arr) {
+                    if (g.isBuyer) {
+                        openBuys.push({
+                            qty: g.qty,
+                            cost: g.quoteQty,
+                            fees: g.commissionUsdt,
+                            firstTs: g.firstTime,
+                        });
+                        continue;
+                    }
+                    // SELL: consume newest buys first (mirror matchRoundTrips).
+                    let remaining = g.qty;
+                    while (remaining > 1e-12 && openBuys.length > 0) {
+                        const buy = openBuys[openBuys.length - 1];
+                        if (buy.qty <= 1e-12) { openBuys.pop(); continue; }
+                        const take = Math.min(buy.qty, remaining);
+                        const portion = take / buy.qty;
+                        buy.qty  -= take;
+                        buy.cost -= buy.cost * portion;
+                        buy.fees -= buy.fees * portion;
+                        if (buy.qty <= 1e-12) openBuys.pop();
+                        remaining -= take;
+                    }
+                }
+                posBySym.set(sym, openBuys.filter(b => b.qty > 1e-12));
+            }
+            return posBySym;
+        }
+
+        /**
+         * iter142 — Project fees / proceeds / net profit for every OPEN
+         * limit-SELL order, using the limit price as the (deterministic)
+         * fill price. The buy cost basis is pulled LIFO from the remaining
+         * open-buy stack so multiple sells on one coin don't double-count
+         * the same buys.
+         */
+        function projectSellOrders(orders, history) {
+            const groups = groupByOrder(history);
+            const posBySym = computeOpenPositions(groups);
+            // Clone the per-symbol stacks so we can consume them across
+            // multiple open sells without mutating the source map.
+            const stacks = new Map();
+            for (const [sym, arr] of posBySym) {
+                stacks.set(sym, arr.map(b => ({ ...b })));
+            }
+            const sells = (orders || []).filter(o =>
+                String(o.side).toUpperCase() === 'SELL' &&
+                (parseFloat(o.price) > 0) && (parseFloat(o.quantity) > 0));
+            // Process the order furthest in time first is not required;
+            // sort by symbol then price (lowest first ≈ fills soonest) so
+            // the nearest fill claims the freshest buys.
+            sells.sort((a, b) => (a.symbol === b.symbol)
+                ? parseFloat(a.price) - parseFloat(b.price)
+                : String(a.symbol).localeCompare(String(b.symbol)));
+
+            const rows = [];
+            for (const o of sells) {
+                const sym       = o.symbol;
+                const sellQty   = parseFloat(o.quantity);
+                const sellPrice = parseFloat(o.price);
+                const grossAmt  = sellPrice * sellQty;          // full sell amount
+                const sellFee   = grossAmt * FEE_RATE;          // est. sell-side fee
+                const netProceeds = grossAmt - sellFee;
+
+                // Pull cost basis for as much of this qty as we can cover
+                // from the remaining open buys (newest first = LIFO).
+                const stack = stacks.get(sym) || [];
+                let remaining = sellQty;
+                let buyCost = 0, buyFees = 0, coveredQty = 0;
+                while (remaining > 1e-12 && stack.length > 0) {
+                    const buy = stack[stack.length - 1];
+                    if (buy.qty <= 1e-12) { stack.pop(); continue; }
+                    const take = Math.min(buy.qty, remaining);
+                    const portion = take / buy.qty;
+                    buyCost += buy.cost * portion;
+                    buyFees += buy.fees * portion;
+                    coveredQty += take;
+                    buy.qty  -= take;
+                    buy.cost -= buy.cost * portion;
+                    buy.fees -= buy.fees * portion;
+                    if (buy.qty <= 1e-12) stack.pop();
+                    remaining -= take;
+                }
+                const uncoveredQty = sellQty - coveredQty;
+                const hasBasis = coveredQty > 1e-12;
+
+                // Net profit is only meaningful for the covered portion.
+                const revenueCovered = sellPrice * coveredQty;
+                const sellFeeCovered = revenueCovered * FEE_RATE;
+                const netProfit = hasBasis
+                    ? (revenueCovered - buyCost - buyFees - sellFeeCovered)
+                    : null;
+                const netPct = (hasBasis && (buyCost + buyFees) > 0)
+                    ? (netProfit / (buyCost + buyFees)) * 100
+                    : null;
+
+                rows.push({
+                    symbol: sym,
+                    sellQty, sellPrice,
+                    grossAmt, sellFee, netProceeds,
+                    buyCost, buyFees,
+                    totalFees: buyFees + sellFee,
+                    netProfit, netPct,
+                    hasBasis, uncoveredQty,
+                });
+            }
+            return rows;
         }
 
         function holdStr(buyTs, sellTs) {
