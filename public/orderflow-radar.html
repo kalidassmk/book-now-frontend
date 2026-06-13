@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Order-Flow Rhythm Radar — Live Burst Detector</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: { colors: {
+        bg: '#0b0e11', card: '#1e2329', brand: '#f0b90b', 'brand-hover': '#f8d33a',
+        border: 'rgba(255,255,255,0.08)', success: '#0ecb81', danger: '#f6465d',
+      } } }
+    }
+  </script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #0b0e11; color: #eaecef; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    .glass { background: rgba(30,35,41,0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.08); }
+    .gradient-brand { background: linear-gradient(135deg, #f0b90b 0%, #f8d33a 100%); }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+    @keyframes flash { 0% { background: rgba(14,203,129,0.30); } 100% { background: transparent; } }
+    .flash { animation: flash 1.4s ease-out; }
+    @keyframes pulseDot { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    .pulse-dot { animation: pulseDot 1.4s ease-in-out infinite; }
+    tr.st-BUY     { box-shadow: inset 3px 0 0 #0ecb81; }
+    tr.st-CONFIRM { box-shadow: inset 3px 0 0 #0ecb81; }
+    tr.st-BURST   { box-shadow: inset 3px 0 0 #f0b90b; }
+    tr.st-FADE    { box-shadow: inset 3px 0 0 #f6465d; opacity: .6; }
+    .wallbar { height: 8px; border-radius: 4px; overflow: hidden; display:flex; min-width: 90px; background: rgba(255,255,255,.06); }
+    .wallbar > span { display:block; height:100%; }
+  </style>
+</head>
+<body class="overflow-x-hidden">
+  <main class="p-4 lg:p-8 min-h-screen max-w-[1600px] mx-auto">
+
+    <header class="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
+      <div class="flex items-center gap-3">
+        <div class="w-11 h-11 gradient-brand rounded-xl flex items-center justify-center text-bg font-black text-2xl shadow-lg shadow-brand/20">🌊</div>
+        <div>
+          <h1 class="text-2xl font-bold tracking-tight">Order-Flow <span class="text-brand">Rhythm</span> Radar</h1>
+          <p class="text-xs text-gray-500">5%+ pump-ன் micro-rhythm-ஐ live-ஆ கண்டுபிடிக்குது — burst + breadth + T+1 confirm + whale/wall. Browser-side, trading server-ஐ பாதிக்காது.</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <div class="glass rounded-xl px-4 py-2 flex items-center gap-2">
+          <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-gray-600"></span>
+          <span id="ws-status" class="text-xs font-semibold text-gray-400">Connecting…</span>
+        </div>
+        <div class="glass rounded-xl px-4 py-2 text-center"><p class="text-[10px] text-gray-500 uppercase">Watching</p><p id="coin-count" class="text-sm font-bold mono">—</p></div>
+        <div class="glass rounded-xl px-4 py-2 text-center"><p class="text-[10px] text-gray-500 uppercase">Live deep</p><p id="deep-count" class="text-sm font-bold mono text-brand">0</p></div>
+      </div>
+    </header>
+
+    <!-- Rhythm explainer (Tamil) -->
+    <div class="glass rounded-2xl p-5 mb-6">
+      <h2 class="text-sm font-bold text-brand mb-3 flex items-center gap-2">🌊 Pump-ன் Rhythm (45 நாள் 1m + aggTrade ஆராய்ச்சி)</h2>
+      <div class="grid md:grid-cols-4 gap-3 text-xs text-gray-300">
+        <div class="bg-white/5 rounded-xl p-3"><p class="font-semibold text-white mb-1">1️⃣ அமைதி → திடீர் Burst</p>burst-க்கு முன் எந்த தெளிவான அறிகுறியும் இல்ல. trigger = ஒரே 1m-ல volume <span class="text-success font-bold">≥3×</span>, பச்சை candle.</div>
+        <div class="bg-white/5 rounded-xl p-3"><p class="font-semibold text-white mb-1">2️⃣ Breadth = உண்மையான தடயம்</p>நிஜ pump-ல <span class="text-success font-bold">நிறைய trades</span> (~257) — கூட்டம் வாங்குது. ஒரே பெரிய whale print (few trades) = <span class="text-danger font-bold">fake, fade ஆகும்</span>.</div>
+        <div class="bg-white/5 rounded-xl p-3"><p class="font-semibold text-white mb-1">3️⃣ T+1 உறுதி</p>அடுத்த நிமிடம் பச்சையா இருந்து, buying தொடர்ந்தா (buy ≥55%, vol தாங்கினா) வெற்றி வாய்ப்பு <span class="text-success font-bold">2× அதிகம்</span>.</div>
+        <div class="bg-white/5 rounded-xl p-3"><p class="font-semibold text-white mb-1">4️⃣ Buy wall / Sell wall</p>order book-ல bid (buy wall) ask-ஐ விட பெரிசா இருந்து, sell wall மெலிஞ்சா — continuation. தடித்த sell wall தாங்கினா rejection.</div>
+      </div>
+      <p class="text-[11px] text-gray-500 mt-3">⚠️ உண்மை: raw burst-ல <span class="text-danger">79% fade</span> ஆகுது, 7% மட்டுமே +3% போகுது. அதனால இந்த radar burst-ஐ <b>filter</b> பண்ணி (breadth + T+1 + 1h மொமென்டம் + wall) எவை continuation வாய்ப்பு அதிகம்னு score போடுது. இது timing கருவி — final முடிவு உங்களோடது.</p>
+    </div>
+
+    <div id="loading" class="glass rounded-2xl p-5 mb-6">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-sm font-semibold text-gray-300">Seed klines + risk filter ஏற்றுகிறது… <span id="seed-note" class="text-brand font-normal"></span></span>
+        <span id="seed-pct" class="text-sm font-bold mono text-brand">0%</span>
+      </div>
+      <div class="w-full h-2 bg-white/10 rounded-full overflow-hidden"><div id="seed-bar" class="h-full gradient-brand transition-all duration-200" style="width:0%"></div></div>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-3 mb-4">
+      <span class="text-xs text-gray-500">காட்டு:</span>
+      <button data-filter="active" class="filt px-3 py-1.5 rounded-lg text-xs font-semibold bg-brand/15 text-brand">Live (Burst+)</button>
+      <button data-filter="buy"    class="filt px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/5 text-gray-400">BUY candidate</button>
+      <button data-filter="all"    class="filt px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/5 text-gray-400">அனைத்தும்</button>
+      <div class="flex-1"></div>
+      <label class="flex items-center gap-2 text-xs text-gray-400">🔔 Sound <input id="sound-toggle" type="checkbox" class="accent-brand w-4 h-4"></label>
+      <span class="text-[11px] text-gray-600 mono" id="last-update">—</span>
+    </div>
+
+    <div class="glass rounded-2xl overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-[11px] uppercase tracking-wider text-gray-500 border-b border-white/10">
+              <th class="text-left  px-3 py-3 font-semibold">Rhythm</th>
+              <th class="text-left  px-3 py-3 font-semibold">Coin</th>
+              <th class="text-right px-3 py-3 font-semibold">Price</th>
+              <th class="text-right px-3 py-3 font-semibold">1m vol×</th>
+              <th class="text-right px-3 py-3 font-semibold">Trade<br>breadth×</th>
+              <th class="text-right px-3 py-3 font-semibold">Buy%</th>
+              <th class="text-center px-3 py-3 font-semibold">T+1</th>
+              <th class="text-center px-3 py-3 font-semibold">1h ctx</th>
+              <th class="text-right px-3 py-3 font-semibold">Whale<br>print</th>
+              <th class="text-center px-3 py-3 font-semibold">Buy/Sell wall</th>
+              <th class="text-right px-3 py-3 font-semibold text-brand">Score</th>
+              <th class="text-right px-3 py-3 font-semibold">BUY / TP / STOP</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+      <div id="empty" class="hidden p-10 text-center text-gray-500 text-sm">இன்னும் எந்த coin-ம் burst காட்டல. burst வந்ததும் இங்க தோணும். 🌊</div>
+    </div>
+
+    <div id="excluded-box" class="hidden glass rounded-2xl p-4 mt-6 border-l-2 border-danger/50">
+      <p class="text-xs font-bold text-danger mb-2">🚫 Risk filter — <span id="excluded-n">0</span> coin விலக்கப்பட்டது <span class="text-[10px] font-normal text-gray-600">source: <span id="risk-src">—</span></span></p>
+      <div id="excluded-list" class="flex flex-wrap gap-1.5"></div>
+    </div>
+
+    <p class="text-[11px] text-gray-600 mt-4 leading-relaxed">⚠️ ஆராய்ச்சி கருவி, financial advice அல்ல. Score உயரமா இருந்தாலும் guarantee இல்ல. Risk filter scalper engine-ல இருந்தே (/delisted.html அதே logic).</p>
+  </main>
+
+  <script>
+  /* ════════════════════════════════════════════════════════════════════════
+     ORDER-FLOW RHYTHM RADAR — fully client-side, two-stage live engine.
+     STAGE 1 (wide): @kline_1m + @kline_1h for every active coin → detect the
+       burst rhythm and the 1h momentum context. Cheap (1 msg / candle).
+     STAGE 2 (deep): for the few live candidates, attach @aggTrade + @depth20
+       → measure whale prints, aggressive buy/sell split and buy/sell walls.
+     Rule from 45-day 1m + aggTrade study (/tmp/bt/rhythm*.js):
+       • 79% of raw bursts fade; the separators are TRADE BREADTH (not buy%!),
+         T+1 confirmation, prior-1h momentum and a friendly order book.
+     ════════════════════════════════════════════════════════════════════════ */
+  const $ = id => document.getElementById(id);
+  const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
+
+  // ── thresholds (from the study) ──
+  const VS_GATE   = 3.0;   // 1m volume surge vs 20m base
+  const BUY_GATE  = 60;    // taker buy % on the burst minute
+  const BREADTH   = 3.0;   // trade-count surge vs 20m base  (the real tell)
+  const T1_BUY    = 55;    // T+1 taker buy % to confirm
+  const T1_VS     = 1.2;   // T+1 volume still elevated
+  const RET2_GATE = 4.0, VS1H_GATE = 2.5;   // 1h momentum context (pump-radar rule)
+  const BASE_N    = 20;    // 1m baseline window
+  const MAX_DEEP  = 8;     // concurrent deep (aggTrade+depth) streams
+  const SEED_CONC = 6;
+
+  let PLAYBOOK = {}, SYMBOLS = [], ACTIVE = [];
+  const EXCLUDED = new Map();
+  const S = {};            // per-coin state
+
+  function initState() {
+    for (const sym of SYMBOLS) S[sym] = {
+      vols1m: [], trd1m: [], cur1m: null,           // 1m history + forming
+      closes1h: [], vols1h: [], cur1h: null,        // 1h context
+      price: null, vs1m: null, breadth: null, buy1m: null, green: false,
+      armed: false, ret2: null, vs1h: null,
+      burstT: 0, burst: null,                        // last burst minute info
+      t1: null,                                      // T+1 confirm result: 'PASS'|'FAIL'|null
+      status: 'QUIET',                               // QUIET BURST CONFIRM BUY FADE
+      score: 0, deep: null, lastBurstSeen: 0,
+    };
+  }
+
+  /* ── Risk filter (same source as /delisted.html) ─────────────────────── */
+  async function loadRiskFilters() {
+    try {
+      const d = await (await fetch('/api/v1/scalper/delisted')).json();
+      const br = d.by_reason || {}, at = d.delist_at_ms || {};
+      const add = (list, label, wd) => { for (const s of (list || [])) {
+        if (!PLAYBOOK[s] || EXCLUDED.has(s)) continue;
+        EXCLUDED.set(s, label + (wd && at[s] ? ' ' + new Date(at[s]).toISOString().slice(0,10) : '')); } };
+      add(br.PRE_DELISTING, 'Pre-delisting', true);
+      add(br.MONITORING, 'Monitoring tag', false);
+      add(br.BREAK, 'BREAK / halted', false);
+      add(br.HALT, 'BREAK / halted', false);
+      ACTIVE = SYMBOLS.filter(s => !EXCLUDED.has(s));
+      $('risk-src').textContent = 'scalper engine';
+      return;
+    } catch (e) {}
+    // fallback: Binance direct
+    try {
+      const ex = await (await fetch('https://api.binance.com/api/v3/exchangeInfo')).json();
+      const ok = new Set(); for (const s of ex.symbols) if (s.status === 'TRADING') ok.add(s.symbol);
+      for (const s of SYMBOLS) if (!ok.has(s)) EXCLUDED.set(s, 'BREAK / halted');
+    } catch (e) {}
+    try {
+      const pr = await (await fetch('https://www.binance.com/bapi/asset/v2/public/asset-service/product/get-products')).json();
+      const m = new Map(); for (const p of (pr.data || pr)) m.set(p.s, p);
+      for (const s of SYMBOLS) { const p = m.get(s); if (!p) continue;
+        if (p.pom === true) EXCLUDED.set(s, 'Pre-delisting' + (p.pomt ? ' ' + new Date(p.pomt).toISOString().slice(0,10) : ''));
+        else if ((p.tags || []).includes('Monitoring') && !EXCLUDED.has(s)) EXCLUDED.set(s, 'Monitoring tag'); }
+    } catch (e) {}
+    ACTIVE = SYMBOLS.filter(s => !EXCLUDED.has(s));
+    $('risk-src').textContent = 'Binance (fallback)';
+  }
+  function renderExcluded() {
+    if (!EXCLUDED.size) return;
+    $('excluded-box').classList.remove('hidden');
+    $('excluded-n').textContent = EXCLUDED.size;
+    $('excluded-list').innerHTML = [...EXCLUDED.entries()].sort((a,b)=>a[1].localeCompare(b[1]))
+      .map(([s,r]) => { const c = r.startsWith('Pre') ? 'bg-danger/20 text-danger' : r.startsWith('BREAK') ? 'bg-danger/15 text-danger' : 'bg-amber-500/15 text-amber-400';
+        return `<span class="px-2 py-0.5 rounded-md text-[11px] ${c}">${s.replace('USDT','')} · ${r}</span>`; }).join(' ');
+  }
+
+  /* ── REST seed ───────────────────────────────────────────────────────── */
+  async function seedKlines(sym, interval, limit) {
+    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${interval}&limit=${limit}`);
+    if (!r.ok) throw 0; return r.json();
+  }
+  async function seedCoin(sym) {
+    const st = S[sym];
+    try { // 1m volume + trade-count baseline
+      const k = await seedKlines(sym, '1m', BASE_N + 4);
+      for (let i = 0; i < k.length - 1; i++) { st.vols1m.push(+k[i][5]); st.trd1m.push(+k[i][8]); }
+      const lf = k[k.length - 1]; st.cur1m = { t: lf[0], o:+lf[1], c:+lf[4], v:+lf[5], n:+lf[8], tb:+lf[9] }; st.price = +lf[4];
+    } catch (e) {}
+    try { // 1h context
+      const k = await seedKlines(sym, '1h', 16);
+      for (let i = 0; i < k.length - 1; i++) { st.closes1h.push(+k[i][4]); st.vols1h.push(+k[i][5]); }
+    } catch (e) {}
+    recomputeContext(sym);
+  }
+  async function seedAll() {
+    let done = 0; const q = [...ACTIVE];
+    const worker = async () => { while (q.length) { await seedCoin(q.shift()); done++;
+      const p = Math.round(done / ACTIVE.length * 100); $('seed-pct').textContent = p + '%'; $('seed-bar').style.width = p + '%'; } };
+    await Promise.all(Array.from({ length: SEED_CONC }, worker));
+    $('loading').classList.add('hidden'); render();
+  }
+
+  /* ── 1h momentum context (ARMED) ─────────────────────────────────────── */
+  function recomputeContext(sym) {
+    const st = S[sym], c = st.closes1h, v = st.vols1h;
+    st.ret2 = c.length >= 3 ? (c[c.length-1]/c[c.length-3]-1)*100 : null;
+    if (v.length >= 4) { const last = v[v.length-1]; const m = mean(v.slice(Math.max(0,v.length-13), v.length-1)); st.vs1h = m>0?last/m:null; } else st.vs1h = null;
+    st.armed = st.ret2 != null && st.ret2 >= RET2_GATE && st.vs1h != null && st.vs1h >= VS1H_GATE;
+  }
+
+  /* ── STAGE 1: kline WS ───────────────────────────────────────────────── */
+  let ws1 = null, renderPending = false;
+  function connect1() {
+    ws1 = new WebSocket('wss://stream.binance.com:9443/stream');
+    ws1.onopen = () => { setWs('Live', 'bg-success pulse-dot');
+      const params = []; for (const s of ACTIVE) { const l = s.toLowerCase(); params.push(l+'@kline_1m', l+'@kline_1h'); }
+      for (let i = 0; i < params.length; i += 200) ws1.send(JSON.stringify({ method:'SUBSCRIBE', params: params.slice(i,i+200), id:i })); };
+    ws1.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch { return; } if (m.data && m.data.k) handleKline(m.data); };
+    ws1.onclose = () => { setWs('Reconnecting…','bg-danger'); setTimeout(connect1, 3000); };
+    ws1.onerror = () => { try { ws1.close(); } catch {} };
+  }
+
+  function handleKline(d) {
+    const sym = d.s, k = d.k, st = S[sym]; if (!st) return;
+    if (k.i === '1h') {
+      st.cur1h = { c:+k.c, v:+k.v };
+      if (k.x) { st.closes1h.push(+k.c); st.vols1h.push(+k.v); if (st.closes1h.length>40) st.closes1h.shift(); if (st.vols1h.length>40) st.vols1h.shift(); }
+      recomputeContext(sym); return;
+    }
+    // 1m
+    const cur = { t:k.t, o:+k.o, c:+k.c, v:+k.v, n:+k.n, tb:+k.V };  // V = taker buy base
+    st.cur1m = cur; st.price = cur.c;
+    const baseV = mean(st.vols1m.slice(-BASE_N)) || 1, baseN = mean(st.trd1m.slice(-BASE_N)) || 1;
+    st.vs1m = cur.v / baseV; st.breadth = cur.n / baseN;
+    st.buy1m = cur.v > 0 ? cur.tb / cur.v * 100 : 0; st.green = cur.c > cur.o;
+
+    if (k.x) {   // minute closed
+      // evaluate T+1 confirmation of a prior burst
+      if (st.burst && st.burst.t === cur.t - 60000) {
+        const pass = st.green && st.buy1m >= T1_BUY && st.vs1m >= T1_VS;
+        st.t1 = pass ? 'PASS' : 'FAIL';
+        st.status = pass ? (st.armed ? 'BUY' : 'CONFIRM') : 'FADE';
+        if (pass) { st.entry = cur.c; onConfirm(sym); }
+      }
+      // fresh burst detection on the just-closed minute
+      const isBurst = st.green && st.vs1m >= VS_GATE && st.buy1m >= BUY_GATE && st.breadth >= BREADTH;
+      if (isBurst && st.burst?.t !== cur.t && cur.t - (st.burst?.t||0) > 8*60000) {
+        st.burst = { t: cur.t, vs: st.vs1m, breadth: st.breadth, buy: st.buy1m, price: cur.c };
+        st.t1 = null; st.status = 'BURST'; st.lastBurstSeen = Date.now();
+        ensureDeep();
+      }
+      // push closed candle to baselines
+      st.vols1m.push(cur.v); st.trd1m.push(cur.n);
+      if (st.vols1m.length>40) st.vols1m.shift(); if (st.trd1m.length>40) st.trd1m.shift();
+      // expire stale statuses after 12m of no burst
+      if (st.status !== 'QUIET' && Date.now() - st.lastBurstSeen > 12*60000) { st.status='QUIET'; st.burst=null; st.t1=null; }
+    }
+    computeScore(sym);
+    scheduleRender();
+  }
+
+  /* ── scoring ─────────────────────────────────────────────────────────── */
+  function computeScore(sym) {
+    const st = S[sym]; let sc = 0;
+    if (st.burst) {
+      sc += Math.min(30, (st.breadth||0) / 8 * 30);            // breadth (cap ~8x => full)
+      sc += Math.min(15, ((st.vs1m||0) - 3) / 7 * 15 + 5);      // vol surge
+      if (st.t1 === 'PASS') sc += 25; else if (st.t1 === 'FAIL') sc -= 15;
+      if (st.armed) sc += 18;                                   // 1h momentum context
+      const dp = st.deep;
+      if (dp) {
+        if (dp.wallRatio != null) sc += (dp.wallRatio - 0.5) * 24;   // +/-12 buy vs sell wall
+        if (dp.buyAgg != null && dp.buyAgg > 55) sc += 6;
+      }
+    }
+    st.score = Math.max(0, Math.min(100, Math.round(sc)));
+  }
+
+  /* ── STAGE 2: deep streams (aggTrade + depth) for live candidates ────── */
+  let ws2 = null, deepSet = new Set();
+  function connect2() {
+    ws2 = new WebSocket('wss://stream.binance.com:9443/stream');
+    ws2.onopen = () => { ws2._ready = true; ensureDeep(); };
+    ws2.onmessage = ev => { let m; try { m = JSON.parse(ev.data); } catch { return; } if (m.stream && m.data) handleDeep(m.stream, m.data); };
+    ws2.onclose = () => { ws2._ready = false; setTimeout(connect2, 3000); };
+    ws2.onerror = () => { try { ws2.close(); } catch {} };
+  }
+  // choose which coins deserve deep streams: most recent / highest-score bursts
+  function ensureDeep() {
+    if (!ws2 || !ws2._ready) return;
+    const cands = ACTIVE.filter(s => S[s].status === 'BURST' || S[s].status === 'CONFIRM' || S[s].status === 'BUY')
+      .sort((a, b) => (S[b].lastBurstSeen - S[a].lastBurstSeen)).slice(0, MAX_DEEP);
+    const want = new Set(cands);
+    // unsubscribe coins no longer wanted
+    for (const s of [...deepSet]) if (!want.has(s)) { subDeep(s, 'UNSUBSCRIBE'); deepSet.delete(s); S[s].deep = null; }
+    // subscribe new
+    for (const s of want) if (!deepSet.has(s)) { subDeep(s, 'SUBSCRIBE'); deepSet.add(s);
+      S[s].deep = { buf: [], buyAgg: null, count: 0, maxPrint: 0, wallRatio: null, buyWall: 0, sellWall: 0 }; }
+    $('deep-count').textContent = deepSet.size;
+  }
+  function subDeep(sym, method) {
+    const l = sym.toLowerCase();
+    ws2.send(JSON.stringify({ method, params: [l+'@aggTrade', l+'@depth20@100ms'], id: Date.now()%1e6 }));
+  }
+  function handleDeep(stream, d) {
+    const sym = (d.s || stream.split('@')[0].toUpperCase());
+    const st = S[sym]; if (!st || !st.deep) return;
+    const dp = st.deep;
+    if (stream.endsWith('@aggTrade') || d.e === 'aggTrade') {
+      const notional = (+d.p) * (+d.q), buy = d.m === false; // m=false => aggressive BUY
+      dp.buf.push({ T: d.T, notional, buy });
+      const cut = Date.now() - 30000; while (dp.buf.length && dp.buf[0].T < cut) dp.buf.shift();
+      let b = 0, s = 0, mx = 0; for (const x of dp.buf) { if (x.buy) b += x.notional; else s += x.notional; if (x.notional > mx) mx = x.notional; }
+      dp.buyAgg = (b+s) > 0 ? b/(b+s)*100 : null; dp.count = dp.buf.length; dp.maxPrint = mx;
+    } else { // depth20
+      const bids = d.bids || d.b || [], asks = d.asks || d.a || [];
+      let bw = 0, sw = 0; for (const [p,q] of bids) bw += (+p)*(+q); for (const [p,q] of asks) sw += (+p)*(+q);
+      dp.buyWall = bw; dp.sellWall = sw; dp.wallRatio = (bw+sw) > 0 ? bw/(bw+sw) : null;
+    }
+    computeScore(sym); scheduleRender();
+  }
+
+  /* ── render ──────────────────────────────────────────────────────────── */
+  let filter = 'active';
+  const RANK = { BUY:0, CONFIRM:1, BURST:2, FADE:3, QUIET:4 };
+  function scheduleRender() { if (renderPending) return; renderPending = true; requestAnimationFrame(() => { renderPending = false; render(); }); }
+  function fmtPrice(p){ if(p==null)return '—'; if(p>=1)return p.toFixed(4); if(p>=0.01)return p.toFixed(5); return p.toPrecision(4); }
+  function fmtUsd(v){ if(!v)return '—'; if(v>=1e6)return '$'+(v/1e6).toFixed(1)+'M'; if(v>=1e3)return '$'+(v/1e3).toFixed(1)+'K'; return '$'+v.toFixed(0); }
+  function rhythmBadge(s){
+    const map = { BUY:['bg-success/25 text-success','● BUY'], CONFIRM:['bg-success/20 text-success','✓ CONFIRM'],
+      BURST:['bg-brand/20 text-brand','◐ BURST'], FADE:['bg-danger/15 text-danger','✗ FADE'], QUIET:['bg-white/5 text-gray-500','○ quiet'] };
+    const [c,t] = map[s]||map.QUIET; return `<span class="px-2 py-0.5 rounded-md text-[11px] font-bold ${c}">${t}</span>`;
+  }
+  function wallBar(dp){
+    if (!dp || dp.wallRatio == null) return '<span class="text-gray-600 text-xs">—</span>';
+    const bp = Math.round(dp.wallRatio*100), sp = 100-bp;
+    return `<div class="flex items-center gap-1.5 justify-center"><div class="wallbar" title="buy ${fmtUsd(dp.buyWall)} / sell ${fmtUsd(dp.sellWall)}"><span style="width:${bp}%;background:#0ecb81"></span><span style="width:${sp}%;background:#f6465d"></span></div><span class="text-[10px] mono ${bp>=55?'text-success':bp<=45?'text-danger':'text-gray-400'}">${bp}/${sp}</span></div>`;
+  }
+  function render() {
+    let rows = ACTIVE.map(s => ({ sym:s, st:S[s] }));
+    if (filter === 'buy') rows = rows.filter(r => r.st.status==='BUY'||r.st.status==='CONFIRM');
+    else if (filter === 'active') rows = rows.filter(r => r.st.status!=='QUIET');
+    rows.sort((a,b)=> RANK[a.st.status]!==RANK[b.st.status] ? RANK[a.st.status]-RANK[b.st.status] : b.st.score-a.st.score);
+    if (filter==='all') rows = rows.slice(0, 80);
+    $('coin-count').textContent = ACTIVE.length;
+    $('last-update').textContent = 'updated ' + new Date().toLocaleTimeString();
+    const tb = $('tbody');
+    if (!rows.length) { tb.innerHTML=''; $('empty').classList.remove('hidden'); return; }
+    $('empty').classList.add('hidden');
+    tb.innerHTML = rows.map(({sym,st}) => {
+      const pb = PLAYBOOK[sym] || {}; const dp = st.deep;
+      const entry = st.entry || st.price;
+      const tp1 = entry && pb.t1 ? entry*(1+pb.t1/100) : null, stop = entry && pb.sl ? entry*(1+pb.sl/100) : null;
+      const showTrade = st.status==='BUY' || st.status==='CONFIRM';
+      const t1c = st.t1==='PASS' ? 'text-success' : st.t1==='FAIL' ? 'text-danger' : 'text-gray-600';
+      const t1t = st.t1==='PASS' ? '✓' : st.t1==='FAIL' ? '✗' : '…';
+      return `<tr data-sym="${sym}" class="st-${st.status} border-b border-white/5 hover:bg-white/5">
+        <td class="px-3 py-2.5">${rhythmBadge(st.status)}</td>
+        <td class="px-3 py-2.5 font-semibold">${sym.replace('USDT','')}<span class="text-gray-600 text-xs">/USDT</span></td>
+        <td class="px-3 py-2.5 text-right mono">${fmtPrice(st.price)}</td>
+        <td class="px-3 py-2.5 text-right mono ${st.vs1m>=VS_GATE?'text-success':'text-gray-400'}">${st.vs1m==null?'—':st.vs1m.toFixed(1)+'×'}</td>
+        <td class="px-3 py-2.5 text-right mono font-semibold ${st.breadth>=BREADTH?'text-success':'text-gray-400'}">${st.breadth==null?'—':st.breadth.toFixed(1)+'×'}</td>
+        <td class="px-3 py-2.5 text-right mono ${st.buy1m>=BUY_GATE?'text-success':'text-gray-400'}">${st.buy1m==null?'—':st.buy1m.toFixed(0)+'%'}</td>
+        <td class="px-3 py-2.5 text-center mono ${t1c}">${t1t}</td>
+        <td class="px-3 py-2.5 text-center">${st.armed?'<span class="text-brand text-xs font-bold" title="prior 1h momentum">⚡1h</span>':'<span class="text-gray-700 text-xs">—</span>'}</td>
+        <td class="px-3 py-2.5 text-right mono ${dp&&dp.maxPrint>=5000?'text-brand':'text-gray-400'}">${dp?fmtUsd(dp.maxPrint):'—'}</td>
+        <td class="px-3 py-2.5">${wallBar(dp)}</td>
+        <td class="px-3 py-2.5 text-right mono font-bold ${st.score>=60?'text-success':st.score>=40?'text-brand':'text-gray-500'}">${st.burst?st.score:'—'}</td>
+        <td class="px-3 py-2.5 text-right mono text-xs">${showTrade && entry ? `<span class="text-brand">${fmtPrice(entry)}</span> <span class="text-success">+${pb.t1||'?'}%</span> <span class="text-danger">${pb.sl||'?'}%</span>` : '<span class="text-gray-600">—</span>'}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  /* ── alerts ──────────────────────────────────────────────────────────── */
+  let audioCtx = null;
+  function beep(){ if(!$('sound-toggle').checked)return; try{ audioCtx=audioCtx||new (window.AudioContext||window.webkitAudioContext)(); const o=audioCtx.createOscillator(),g=audioCtx.createGain(); o.connect(g);g.connect(audioCtx.destination); o.frequency.value=880;g.gain.value=0.08;o.start();o.frequency.setValueAtTime(1320,audioCtx.currentTime+0.12);o.stop(audioCtx.currentTime+0.24);}catch{} }
+  function onConfirm(sym){ beep(); requestAnimationFrame(()=>{ const tr=document.querySelector(`tr[data-sym="${sym}"]`); if(tr){tr.classList.remove('flash');void tr.offsetWidth;tr.classList.add('flash');} }); }
+
+  /* ── UI wiring + boot ────────────────────────────────────────────────── */
+  function setWs(t, c){ $('ws-status').textContent = t; $('ws-dot').className = 'w-2.5 h-2.5 rounded-full '+c; }
+  document.querySelectorAll('.filt').forEach(b => b.addEventListener('click', () => {
+    filter = b.dataset.filter;
+    document.querySelectorAll('.filt').forEach(x => x.className='filt px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/5 text-gray-400');
+    b.className='filt px-3 py-1.5 rounded-lg text-xs font-semibold bg-brand/15 text-brand'; render();
+  }));
+  (async () => {
+    $('seed-note').textContent = 'playbook + risk filter…';
+    PLAYBOOK = await (await fetch('/pump-playbook.json')).json();
+    SYMBOLS = Object.keys(PLAYBOOK); initState();
+    await loadRiskFilters(); renderExcluded();
+    $('coin-count').textContent = ACTIVE.length; $('seed-note').textContent = '';
+    connect1(); connect2();
+    await seedAll();
+  })();
+  </script>
+  <script src="/nav.js"></script>
+</body>
+</html>
