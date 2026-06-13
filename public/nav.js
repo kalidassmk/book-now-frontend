@@ -104,6 +104,7 @@ window.bnQuickTradeLinkHtml = function (sym, opts) {
       items: [
         { href: '/coin.html',              label: 'Coin Detail',      icon: '🔬', desc: 'One-stop deep dive — search ANY coin',  highlight: true },
         { href: '/pump-radar.html',        label: 'Pump Radar',       icon: '📡', desc: 'Live 90-day pattern signal (client-side WS) — ARMED/SIGNAL + BUY/TP/STOP', highlight: true },
+        { href: '/orderflow-radar.html',   label: 'Order-Flow Radar', icon: '🌊', desc: 'Live burst rhythm — breadth + T+1 confirm + whale prints & buy/sell walls', highlight: true },
         { href: '/early-pump.html',        label: 'Early Pump',       icon: '🚀', desc: 'Stealth accumulation 0-1%' },
         { href: '/vsp.html',               label: 'Volume Spike (VSP)', icon: '⚡', desc: 'Big PUMP vs DUMP classifier' },
         { href: '/lmc.html',               label: 'Low MCap (LMC)',   icon: '💎', desc: 'Small caps getting unusual volume' },
