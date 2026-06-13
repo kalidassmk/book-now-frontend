@@ -101,8 +101,9 @@
     <div id="excluded-box" class="hidden glass rounded-2xl p-4 mb-6 border-l-2 border-danger/50">
       <p class="text-xs font-bold text-danger mb-2 flex items-center gap-2">
         🚫 Risk filter — <span id="excluded-n">0</span> coin விலக்கப்பட்டது (trade செய்ய பரிந்துரைக்கப்படல)
+        <span class="text-[10px] font-normal text-gray-600">source: <span id="risk-src">—</span></span>
       </p>
-      <p class="text-[11px] text-gray-500 mb-2">Binance-ல இவை <span class="text-danger">Pre-delisting</span> / <span class="text-amber-400">Monitoring tag</span> / <span class="text-danger">BREAK (halted)</span> நிலையில் — அதிக risk, liquidation வாய்ப்பு. live-ஆ Binance-ல இருந்து சரிபார்க்கப்படுது.</p>
+      <p class="text-[11px] text-gray-500 mb-2">இவை <span class="text-danger">Pre-delisting</span> / <span class="text-amber-400">Monitoring tag</span> / <span class="text-danger">BREAK (halted)</span> நிலையில் — அதிக risk. scalper engine block பண்ற அதே coin-கள் (/delisted.html-ல உள்ள அதே logic).</p>
       <div id="excluded-list" class="flex flex-wrap gap-1.5"></div>
     </div>
 
@@ -185,27 +186,51 @@
   const $ = id => document.getElementById(id);
 
   /* ── Risk filter ───────────────────────────────────────────────────────────
-     Exclude coins that are too risky to trade, refreshed live from Binance:
-       • Status BREAK / halted / removed   → /api/v3/exchangeInfo (status != TRADING)
-       • Binance MONITORING tag            → get-products tags includes "Monitoring"
-       • Pre-delisting (scheduled offline)  → get-products pom === true (pomt = date)
-     Both endpoints are public + CORS-enabled, so this stays client-side. */
+     Exclude coins that are too risky to trade. Same three categories the
+     scalper engine already blocks (see /delisted.html):
+       • Pre-delisting (scheduled offline)  → BAPI pom === true (+ delist date)
+       • Binance MONITORING tag             → Binance "under monitoring" flag
+       • Status BREAK / halted              → exchangeInfo.status = BREAK
+     PRIMARY source = the scalper's own endpoint /api/v1/scalper/delisted, so
+     this page stays in lock-step with the rest of the system (single source
+     of truth). If that's unreachable we FALL BACK to deriving the same set
+     directly from Binance's public, CORS-enabled endpoints. */
   async function loadRiskFilters() {
-    // 1. exchangeInfo — which symbols are actually TRADING right now
+    // ── Primary: reuse the scalper's authoritative delisted feed ──────────
+    try {
+      const d = await (await fetch('/api/v1/scalper/delisted')).json();
+      const br = d.by_reason || {}, at = d.delist_at_ms || {};
+      const add = (list, label, withDate) => {
+        for (const sym of (list || [])) {
+          if (!PLAYBOOK[sym] || EXCLUDED.has(sym)) continue;   // priority order: 1st wins
+          let r = label;
+          if (withDate && at[sym]) r += ' ' + new Date(at[sym]).toISOString().slice(0, 10);
+          EXCLUDED.set(sym, r);
+        }
+      };
+      add(br.PRE_DELISTING, 'Pre-delisting', true);  // highest severity first
+      add(br.MONITORING,    'Monitoring tag', false);
+      add(br.BREAK,         'BREAK / halted', false);
+      add(br.HALT,          'BREAK / halted', false);
+      ACTIVE = SYMBOLS.filter(s => !EXCLUDED.has(s));
+      $('risk-src').textContent = 'scalper engine';
+      return;
+    } catch (e) { /* engine offline → derive from Binance directly below */ }
+
+    // ── Fallback: derive the same set straight from Binance public APIs ────
     try {
       const ex = await (await fetch('https://api.binance.com/api/v3/exchangeInfo')).json();
       const tradable = new Set();
       for (const s of ex.symbols) if (s.status === 'TRADING') tradable.add(s.symbol);
       for (const sym of SYMBOLS) if (!tradable.has(sym)) EXCLUDED.set(sym, 'BREAK / halted');
-    } catch (e) { /* if it fails, don't block the radar */ }
-    // 2. get-products — Monitoring tag + pre-delisting marker
+    } catch (e) {}
     try {
       const pr = await (await fetch('https://www.binance.com/bapi/asset/v2/public/asset-service/product/get-products')).json();
       const map = new Map();
       for (const p of (pr.data || pr)) map.set(p.s, p);
       for (const sym of SYMBOLS) {
         const p = map.get(sym); if (!p) continue;
-        if (p.pom === true) {  // pre-offline = scheduled delisting (highest severity)
+        if (p.pom === true) {
           const day = p.pomt ? new Date(p.pomt).toISOString().slice(0, 10) : '';
           EXCLUDED.set(sym, 'Pre-delisting' + (day ? ' ' + day : ''));
         } else if ((p.tags || []).includes('Monitoring') && !EXCLUDED.has(sym)) {
@@ -214,6 +239,7 @@
       }
     } catch (e) {}
     ACTIVE = SYMBOLS.filter(s => !EXCLUDED.has(s));
+    $('risk-src').textContent = 'Binance (fallback)';
   }
 
   function renderExcluded() {
