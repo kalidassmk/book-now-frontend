@@ -89,12 +89,21 @@
     <!-- Loading bar -->
     <div id="loading" class="glass rounded-2xl p-5 mb-6">
       <div class="flex items-center justify-between mb-2">
-        <span class="text-sm font-semibold text-gray-300">Binance-ல இருந்து seed klines load ஆகுது…</span>
+        <span class="text-sm font-semibold text-gray-300">Binance-ல இருந்து seed klines load ஆகுது… <span id="seed-note" class="text-brand font-normal"></span></span>
         <span id="seed-pct" class="text-sm font-bold mono text-brand">0%</span>
       </div>
       <div class="w-full h-2 bg-white/10 rounded-full overflow-hidden">
         <div id="seed-bar" class="h-full gradient-brand transition-all duration-200" style="width:0%"></div>
       </div>
+    </div>
+
+    <!-- Excluded (risky) coins -->
+    <div id="excluded-box" class="hidden glass rounded-2xl p-4 mb-6 border-l-2 border-danger/50">
+      <p class="text-xs font-bold text-danger mb-2 flex items-center gap-2">
+        🚫 Risk filter — <span id="excluded-n">0</span> coin விலக்கப்பட்டது (trade செய்ய பரிந்துரைக்கப்படல)
+      </p>
+      <p class="text-[11px] text-gray-500 mb-2">Binance-ல இவை <span class="text-danger">Pre-delisting</span> / <span class="text-amber-400">Monitoring tag</span> / <span class="text-danger">BREAK (halted)</span> நிலையில் — அதிக risk, liquidation வாய்ப்பு. live-ஆ Binance-ல இருந்து சரிபார்க்கப்படுது.</p>
+      <div id="excluded-list" class="flex flex-wrap gap-1.5"></div>
     </div>
 
     <!-- Controls -->
@@ -170,8 +179,59 @@
   const SEED_CONC   = 6;      // concurrent REST seed fetches
 
   const SYMBOLS = Object.keys(PLAYBOOK);
+  let ACTIVE = SYMBOLS.slice();      // tradable subset after risk filtering
+  const EXCLUDED = new Map();        // sym -> reason (Monitoring / pre-delisting / BREAK)
   const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
   const $ = id => document.getElementById(id);
+
+  /* ── Risk filter ───────────────────────────────────────────────────────────
+     Exclude coins that are too risky to trade, refreshed live from Binance:
+       • Status BREAK / halted / removed   → /api/v3/exchangeInfo (status != TRADING)
+       • Binance MONITORING tag            → get-products tags includes "Monitoring"
+       • Pre-delisting (scheduled offline)  → get-products pom === true (pomt = date)
+     Both endpoints are public + CORS-enabled, so this stays client-side. */
+  async function loadRiskFilters() {
+    // 1. exchangeInfo — which symbols are actually TRADING right now
+    try {
+      const ex = await (await fetch('https://api.binance.com/api/v3/exchangeInfo')).json();
+      const tradable = new Set();
+      for (const s of ex.symbols) if (s.status === 'TRADING') tradable.add(s.symbol);
+      for (const sym of SYMBOLS) if (!tradable.has(sym)) EXCLUDED.set(sym, 'BREAK / halted');
+    } catch (e) { /* if it fails, don't block the radar */ }
+    // 2. get-products — Monitoring tag + pre-delisting marker
+    try {
+      const pr = await (await fetch('https://www.binance.com/bapi/asset/v2/public/asset-service/product/get-products')).json();
+      const map = new Map();
+      for (const p of (pr.data || pr)) map.set(p.s, p);
+      for (const sym of SYMBOLS) {
+        const p = map.get(sym); if (!p) continue;
+        if (p.pom === true) {  // pre-offline = scheduled delisting (highest severity)
+          const day = p.pomt ? new Date(p.pomt).toISOString().slice(0, 10) : '';
+          EXCLUDED.set(sym, 'Pre-delisting' + (day ? ' ' + day : ''));
+        } else if ((p.tags || []).includes('Monitoring') && !EXCLUDED.has(sym)) {
+          EXCLUDED.set(sym, 'Monitoring tag');
+        }
+      }
+    } catch (e) {}
+    ACTIVE = SYMBOLS.filter(s => !EXCLUDED.has(s));
+  }
+
+  function renderExcluded() {
+    const n = EXCLUDED.size;
+    const box = $('excluded-box');
+    if (!n) { box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+    const chips = [...EXCLUDED.entries()]
+      .sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([s, r]) => {
+        const c = r.startsWith('Pre') ? 'bg-danger/20 text-danger'
+                : r.startsWith('BREAK') ? 'bg-danger/15 text-danger'
+                : 'bg-amber-500/15 text-amber-400';
+        return `<span class="px-2 py-0.5 rounded-md text-[11px] font-medium ${c}" title="${r}">${s.replace('USDT', '')} · ${r}</span>`;
+      }).join(' ');
+    $('excluded-list').innerHTML = chips;
+    $('excluded-n').textContent = n;
+  }
 
   // Per-coin live state.
   //  closes1h / vols1h : closed-bar history (oldest→newest)
@@ -220,13 +280,13 @@
 
   async function seedAll() {
     let done = 0;
-    const queue = [...SYMBOLS];
+    const queue = [...ACTIVE];
     async function worker() {
       while (queue.length) {
         const sym = queue.shift();
         await seedCoin(sym);
         done++;
-        const pct = Math.round(done / SYMBOLS.length * 100);
+        const pct = Math.round(done / ACTIVE.length * 100);
         $('seed-pct').textContent = pct + '%';
         $('seed-bar').style.width = pct + '%';
       }
@@ -281,7 +341,7 @@
     ws.onopen = () => {
       setWs('Live', 'bg-success pulse-dot');
       const params = [];
-      for (const sym of SYMBOLS) {
+      for (const sym of ACTIVE) {
         const s = sym.toLowerCase();
         params.push(`${s}@kline_5m`, `${s}@kline_1h`);
       }
@@ -341,7 +401,7 @@
   const col = (v, good) => v == null ? 'text-gray-600' : (good ? 'text-success' : 'text-gray-300');
 
   function render() {
-    const rows = SYMBOLS.map(s => ({ sym: s, st: S[s] }))
+    const rows = ACTIVE.map(s => ({ sym: s, st: S[s] }))
       .filter(r => {
         if (filter === 'signal') return r.st.status === 'SIGNAL';
         if (filter === 'watch')  return r.st.status === 'SIGNAL' || r.st.status === 'ARMED';
@@ -355,9 +415,9 @@
     // when filter=all, cap cold rows so table stays readable
     const shown = (filter === 'all') ? rows.filter((r, i) => r.st.status !== 'COLD' || i < 60) : rows;
 
-    const sigN = SYMBOLS.filter(s => S[s].status === 'SIGNAL').length;
+    const sigN = ACTIVE.filter(s => S[s].status === 'SIGNAL').length;
     $('sig-count').textContent = sigN;
-    $('coin-count').textContent = SYMBOLS.length;
+    $('coin-count').textContent = ACTIVE.length;
     $('last-update').textContent = 'updated ' + new Date().toLocaleTimeString();
 
     const tb = $('tbody');
@@ -422,10 +482,14 @@
 
   /* ── Boot ──────────────────────────────────────────────────────────────── */
   (async () => {
-    $('coin-count').textContent = SYMBOLS.length;
     if (window.lucide) lucide.createIcons();
-    connect();          // start live feed immediately
-    await seedAll();    // backfill history for rule evaluation
+    $('seed-note').textContent = 'Risk filter ஏற்றுகிறது (Monitoring / pre-delisting / BREAK)…';
+    await loadRiskFilters();      // build EXCLUDED + ACTIVE before anything subscribes
+    renderExcluded();
+    $('coin-count').textContent = ACTIVE.length;
+    $('seed-note').textContent = '';
+    connect();                    // start live feed (only ACTIVE coins)
+    await seedAll();              // backfill history for rule evaluation
   })();
   </script>
   <script src="/nav.js"></script>
