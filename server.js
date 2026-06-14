@@ -1688,6 +1688,46 @@ app.get('/api/repricer/signals', async (req, res) => {
     }
 });
 
+// iter168 — Auto Exit Bracket ("away-mode protector") read-only views.
+// The auto_exit_bracket.py subprocess owns the algorithm; these endpoints
+// only surface the intended +2% TP / -2% SL brackets it publishes so the
+// operator can verify the numbers before live OCO selling is enabled.
+const AUTO_EXIT_STATE_KEY = 'AUTO_EXIT:STATE';
+const AUTO_EXIT_STATUS_KEY = 'AUTO_EXIT:STATUS';
+
+app.get('/api/auto-exit/state', async (req, res) => {
+    try {
+        const raw = await redis.hgetall(AUTO_EXIT_STATE_KEY) || {};
+        const out = {};
+        for (const [sym, val] of Object.entries(raw)) {
+            try { out[sym] = JSON.parse(val); } catch { /* skip */ }
+        }
+        const statusRaw = await redis.hget(AUTO_EXIT_STATUS_KEY, 'health');
+        let status = {};
+        try { status = statusRaw ? JSON.parse(statusRaw) : {}; } catch { /* skip */ }
+        res.json({ state: out, status });
+    } catch (err) {
+        res.status(500).json({ error: 'auto-exit state read failed: ' + err.message });
+    }
+});
+
+// Intended-bracket history for a date (default today UTC).
+app.get('/api/auto-exit/signals', async (req, res) => {
+    try {
+        const limit = Math.min(parseInt(req.query.limit, 10) || 500, 5000);
+        let date = String(req.query.date || '').trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            date = new Date().toISOString().slice(0, 10);
+        }
+        const raw = await redis.lrange(`AUTO_EXIT:SIGNALS:${date}`, 0, limit - 1);
+        const rows = [];
+        for (const r of raw) { try { rows.push(JSON.parse(r)); } catch { /* skip */ } }
+        res.json({ date, count: rows.length, signals: rows });
+    } catch (err) {
+        res.status(500).json({ error: 'auto-exit signals read failed: ' + err.message });
+    }
+});
+
 // iter 44 (2026-05-15): Backtest report endpoint.
 // Returns the latest backtest comparison (actual vs iter43+iter38+iter44+iter39
 // simulated) for the dashboard /backtest.html page.

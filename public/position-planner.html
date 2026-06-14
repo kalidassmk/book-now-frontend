@@ -99,6 +99,9 @@
     </div>
     <div id="signals" class="grid gap-6 mb-8"></div>
 
+    <!-- Auto Exit Bracket (away-mode protector) — DRY-RUN preview -->
+    <div id="autoexit" class="hidden mb-6"></div>
+
     <!-- Positions -->
     <div id="positions" class="grid gap-6"></div>
     <div id="empty" class="glass rounded-2xl p-10 text-center text-gray-500 text-sm">
@@ -770,6 +773,8 @@
     const emp=$('empty'); if(emp) emp.classList.toggle('hidden', !held || hp.length>0);
     const sig=$('signals'); if(sig) sig.classList.toggle('hidden', held);
     const sh=$('signals-head'); if(sh) sh.classList.toggle('hidden', held || (SIG.length+checkPositions().length)===0);
+    // Auto Exit Bracket preview only makes sense on the Held tab.
+    const ax=$('autoexit'); if(ax) ax.classList.toggle('hidden', !held);
   }
   // Pick the right card renderer for a LIMIT-type entry (signal or manual check).
   function limitCard(p){
@@ -790,6 +795,65 @@
       if(viewMode==='HELD') render();
     } catch { /* engine may be busy; keep last snapshot */ }
   }
+  /* ── Auto Exit Bracket (away-mode protector) — DRY-RUN preview ─────────────
+     The auto_exit_bracket.py subprocess scans every holding WITHOUT an open
+     sell order and computes a +2% TP / -2% SL bracket from the coin's real
+     BUY cost. Phase 1 places NO orders — this panel only SHOWS the numbers so
+     the operator can verify them before live OCO selling is switched on. */
+  let AUTOEXIT = { state:{}, status:{} };
+  async function loadAutoExit(){
+    try {
+      const r = await getJSON('/api/auto-exit/state');
+      AUTOEXIT.state  = (r && r.state)  || {};
+      AUTOEXIT.status = (r && r.status) || {};
+    } catch { /* keep last known */ }
+    renderAutoExit();
+  }
+  function renderAutoExit(){
+    const host = $('autoexit'); if(!host) return;
+    const rows = Object.values(AUTOEXIT.state||{});
+    // Coins that need a bracket (no sell order yet). Protected ones are summarised only.
+    const need = rows.filter(r => r.situation && r.situation!=='HAS_SELL_ORDER');
+    const protectedN = rows.filter(r => r.situation==='HAS_SELL_ORDER').length;
+    if(!rows.length){
+      host.innerHTML = `<div class="glass rounded-2xl p-4 text-xs text-gray-500">🛡️ Auto Exit Bracket (away-mode) — watcher ஏற்றுகிறது… holdings scan ஆகுது.</div>`;
+      return;
+    }
+    const sitBadge = (s)=>{
+      if(s==='NORMAL')            return `<span class="text-[10px] px-2 py-0.5 rounded-full bg-success/15 text-success">bracket ready</span>`;
+      if(s==='ALREADY_ABOVE_TP')  return `<span class="text-[10px] px-2 py-0.5 rounded-full bg-brand/15 text-brand">already +2%↑ — sell now?</span>`;
+      if(s==='ALREADY_BELOW_SL')  return `<span class="text-[10px] px-2 py-0.5 rounded-full bg-danger/15 text-danger">already −2%↓</span>`;
+      if(s==='NO_COST_BASIS')     return `<span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400">buy price தெரியல</span>`;
+      return `<span class="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-gray-400">${s||''}</span>`;
+    };
+    const rowHtml = (r)=>{
+      const base = String(r.asset||r.symbol||'').replace('USDT','');
+      const noCost = r.situation==='NO_COST_BASIS';
+      const cost = +r.costBasis||0, tp=+r.tpPrice||0, sl=+r.slTrigger||0, live=+r.livePrice||0;
+      return `<div class="px-4 py-3 border-t border-white/5 flex flex-wrap items-center gap-x-5 gap-y-1">
+        <div class="font-bold text-sm min-w-[64px]">${base}<span class="text-gray-600 text-xs">/USDT</span></div>
+        ${sitBadge(r.situation)}
+        ${noCost
+          ? `<div class="text-[11px] text-amber-400">இந்த coin-ஐ எவ்வளவுக்கு வாங்கினீங்கனு record இல்ல — guess பண்ண மாட்டேன். Dashboard-ல buy பண்ணா அல்லது manual-ஆ sell பண்ணுங்க.</div>`
+          : `<div class="text-[11px] text-gray-400">வாங்கின விலை <span class="text-gray-200">${fmtPrice(cost)}</span> <span class="text-gray-600">(${r.costSource==='MY_TRADES'?'Binance trades':'order record'})</span></div>
+             <div class="text-[11px]">live <span class="text-gray-200">${fmtPrice(live)}</span></div>
+             <div class="text-[11px] text-success">🎯 TP +${(+r.tpPct||2)}% → <span class="font-semibold">${fmtPrice(tp)}</span></div>
+             <div class="text-[11px] text-danger">🛑 SL −${(+r.slPct||2)}% → <span class="font-semibold">${fmtPrice(sl)}</span></div>
+             <div class="text-[11px] text-gray-500">qty ${(+r.sellQty||0).toPrecision(4)}</div>`}
+      </div>`;
+    };
+    host.innerHTML = `<div class="glass rounded-2xl overflow-hidden">
+      <div class="px-4 py-3 bg-brand/10 flex flex-wrap items-center justify-between gap-2">
+        <h2 class="text-sm font-bold text-brand flex items-center gap-2">🛡️ Auto Exit Bracket — away-mode protector</h2>
+        <span class="text-[11px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400">DRY-RUN · order இன்னும் போடல</span>
+      </div>
+      <div class="px-4 py-2 text-[11px] text-gray-400 bg-white/[0.02]">
+        Sell order இல்லாத ஒவ்வொரு holding-க்கும், நீங்க வாங்கின விலையில் இருந்து <b>+2% லாபம்</b> / <b>−2% நஷ்டம்</b> bracket கீழே கணக்கிட்டு காட்டுது. இந்த விலைகள் சரியா இருந்தா சொல்லுங்க — அப்பறம் real auto-sell-ஐ on பண்றேன். ${protectedN?`<span class="text-success">${protectedN} coin ஏற்கனவே sell order இருக்கு ✓</span>`:''}
+      </div>
+      ${need.length? need.map(rowHtml).join('') : `<div class="px-4 py-3 text-xs text-gray-500 border-t border-white/5">Sell order இல்லாத holding எதுவும் இல்ல — எல்லாம் protected ✓</div>`}
+    </div>`;
+  }
+
   function normSignal(source, e){
     const sym = String(e.symbol || e.sym || '').toUpperCase();
     if(!sym.endsWith('USDT')) return null;        // limit-buy needs a USDT pair
@@ -1028,6 +1092,8 @@
     setInterval(loadRepricer, 4000);     // poll dry-run trace every 4s
     loadOpenOrders();                    // sell-order status for held coins
     setInterval(loadOpenOrders, 15000);  // refresh open orders every 15s
+    loadAutoExit();                      // away-mode +2%/-2% bracket preview (dry-run)
+    setInterval(loadAutoExit, 15000);    // refresh intended brackets every 15s
     loadTopSignals();                    // top-5 combined signal coins (shown under the ⏳ check tab)
     setInterval(loadTopSignals, 60000);  // refresh signal candidates every 60s
     setMode('HELD');                     // start on the Held tab (only owned coins visible)
