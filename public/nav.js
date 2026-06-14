@@ -73,7 +73,9 @@ window.bnQuickTradeLinkHtml = function (sym, opts) {
   // it sits on the same baseline as text.
   const mark = '<span class="b-mark">B</span>';
   const label = compact ? mark : `${mark} Trade`;
-  return `<a class="bn-quick-link" href="${url}" title="Open ${sym} in BookNow Quick Trade" onclick="event.stopPropagation()">${label}</a>`;
+  // iter148 — open Quick Trade in a NEW tab so the radar/alert page the
+  // operator is monitoring stays put while they trade the signalled coin.
+  return `<a class="bn-quick-link" href="${url}" target="_blank" rel="noopener noreferrer" title="Open ${sym} in BookNow Quick Trade (new tab)" onclick="event.stopPropagation()">${label}</a>`;
 };
 
 (function () {

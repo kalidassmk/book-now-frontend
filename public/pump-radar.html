@@ -459,7 +459,7 @@
       const isSig = st.status === 'SIGNAL';
       return `<tr data-sym="${sym}" class="sig-${st.status} border-b border-white/5 hover:bg-white/5">
         <td class="px-4 py-2.5">${badge(st.status)}</td>
-        <td class="px-3 py-2.5 font-semibold">${sym.replace('USDT','')}<span class="text-gray-600 text-xs">/USDT</span></td>
+        <td class="px-3 py-2.5 font-semibold whitespace-nowrap">${sym.replace('USDT','')}<span class="text-gray-600 text-xs">/USDT</span><span class="ml-2 inline-flex gap-1 align-middle">${window.bnBinanceLinkHtml ? window.bnBinanceLinkHtml(sym, {compact:true}) : ''}</span></td>
         <td class="px-3 py-2.5 text-right mono">${fmtPrice(st.price)}</td>
         <td class="px-3 py-2.5 text-right mono ${col(st.ret2, st.ret2 >= RET2_GATE)}">${st.ret2 == null ? '—' : (st.ret2 >= 0 ? '+' : '') + st.ret2.toFixed(1) + '%'}</td>
         <td class="px-3 py-2.5 text-right mono ${col(st.vs1h, st.vs1h >= VS1H_GATE)}">${st.vs1h == null ? '—' : st.vs1h.toFixed(1) + '×'}</td>
