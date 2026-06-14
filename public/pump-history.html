@@ -104,17 +104,22 @@
   // ── per-page config (pump vs orderflow) ────────────────────────────────
   const SOURCE = 'pump';
   const PAGE = {
+    buysignals: {
+      title: 'Buy Signals <span>History</span>', radar: '/coin.html', radarLabel: 'Coin',
+      note: '📜 <b>Top Buy Signals history</b> — coin.html-ல காட்டப்படும் “🎯 Top 5 Latest Buy Signals” strong-bucket signals மட்டும் (Instant-Pump, PumpRider STRONG/NORMAL, Early-Pump ≥80, VSP BIG_PUMP, LMC EXPLOSIVE_PUMP, CCP CALM_REVERSAL_UP). கடந்த 90 நாட்கள். ஒவ்வொரு signal-க்கும் <b>signal price</b>, <b>price % increase</b>, <b>volume surge</b> காட்டும். <b>Buy/Sell volume</b> அந்த நிமிட Binance candle-ல இருந்து “Enrich” button அழுத்தினா browser-ல load ஆகும். Date / price / %-increase / buy / sell volume வைச்சு filter பண்ணலாம்.',
+    },
     pump: {
       title: 'Pump <span>History</span>', radar: '/pump-radar.html', radarLabel: 'Pump Radar',
-      note: '📜 <b>Pump signal history</b> — கடந்த 90 நாட்களில் pump detectors (PumpRider, LMC, Instant-Pump, VSP, CCP, Early-Pump) + Pump Radar page எழுப்பிய signals. ஒவ்வொரு signal-க்கும் <b>signal price</b>, <b>price % increase</b>, <b>volume surge</b> காட்டும். <b>Buy/Sell volume</b> அந்த நிமிட Binance candle-ல இருந்து “Enrich” button அழுத்தினா browser-ல load ஆகும். Date / price / %-increase / buy / sell volume வைச்சு filter பண்ணலாம்.',
+      note: '📜 <b>Pump Radar history</b> — pump-radar.html page-ல <b>ARMED + SIGNAL</b> நிலைக்கு வந்த coins மட்டும் store ஆகும். கடந்த 90 நாட்கள். ஒவ்வொரு signal-க்கும் <b>signal price</b>, <b>price % increase</b>, <b>volume surge</b> காட்டும். <b>Buy/Sell volume</b> அந்த நிமிட Binance candle-ல இருந்து “Enrich” button அழுத்தினா browser-ல load ஆகும். Date / price / %-increase / buy / sell volume வைச்சு filter பண்ணலாம்.',
     },
     orderflow: {
       title: 'Order Flow <span>History</span>', radar: '/orderflow-radar.html', radarLabel: 'Order Flow Radar',
-      note: '📜 <b>Order-flow signal history</b> — கடந்த 90 நாட்களில் Fast/Virtual Scalper + Order Flow Radar page எழுப்பிய buy-rhythm signals. ஒவ்வொரு signal-க்கும் <b>signal price</b>, <b>price % increase</b>, <b>volume surge</b>, <b>buy/sell volume</b> காட்டும். Order Flow Radar capture-ல buy/sell volume நேரடியா இருக்கும்; மற்ற signals-க்கு “Enrich” button அந்த நிமிட Binance candle-ல இருந்து நிரப்பும்.',
+      note: '📜 <b>Order Flow Radar history</b> — orderflow-radar.html page-ல <b>BUY + CONFIRM</b> candidate நிலைக்கு வந்த coins மட்டும் store ஆகும். கடந்த 90 நாட்கள். ஒவ்வொரு signal-க்கும் <b>signal price</b>, <b>price % increase</b>, <b>volume surge</b>, <b>buy/sell volume</b> காட்டும். Capture-ல buy/sell volume நேரடியா இருக்கும்.',
     },
   };
   const CFG = PAGE[SOURCE];
-  document.title = (SOURCE === 'pump' ? 'Pump' : 'Order Flow') + ' History · BookNow';
+  const TITLE_WORD = SOURCE === 'buysignals' ? 'Buy Signals' : SOURCE === 'pump' ? 'Pump' : 'Order Flow';
+  document.title = TITLE_WORD + ' History · BookNow';
   document.getElementById('title').innerHTML = CFG.title;
   document.getElementById('radarLink').href = CFG.radar;
   document.getElementById('radarLink').textContent = 'Live Radar →';
@@ -127,6 +132,13 @@
   const pad = n => String(n).padStart(2, '0');
   const fmtTime = ts => { const d = new Date(ts); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
   const SRC_LABEL = { pump_rider:'PumpRider', lmc:'LMC', instant_pump:'Instant', vsp:'VSP', ccp:'CCP', early_pump:'EarlyPump', pump_radar:'Radar', fast_scalper:'FastScalp', virtual_scalper:'VirtScalp', orderflow_radar:'Radar' };
+  // For radar pages the source is always "Radar"; the useful info is the status
+  // label (ARMED/SIGNAL/BUY/CONFIRM). For buysignals show the detector name.
+  function srcCell(r) {
+    if (r.source === 'pump_radar' || r.source === 'orderflow_radar')
+      return (r.label || 'Radar').toUpperCase();
+    return SRC_LABEL[r.source] || r.source;
+  }
 
   (function initDates() {
     $('to').value = new Date().toISOString().slice(0, 10);
@@ -181,7 +193,7 @@
       <tr>
         <td>${fmtTime(r.ts)}</td>
         <td class="sym"><a href="/coin-history.html?sym=${r.symbol}" title="Coin history">${r.symbol||'–'}</a></td>
-        <td><span class="src">${SRC_LABEL[r.source]||r.source}</span></td>
+        <td><span class="src">${srcCell(r)}</span></td>
         <td>${fmtPrice(r.price)}</td>
         <td class="${(r.chg_pct||0) >= 0 ? 'pos' : 'neg'}">${r.chg_pct==null?'–':(r.chg_pct>=0?'+':'')+r.chg_pct.toFixed(2)+'%'}</td>
         <td>${r.vol_surge==null?'–':r.vol_surge.toFixed(1)+'×'}</td>
@@ -258,6 +270,10 @@
   $('enrich').addEventListener('click', enrichAll);
   $('sym').addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
   [ 'fBuy', 'fSell' ].forEach(id => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') render(); }));
+  (function preSym() {
+    const s = new URLSearchParams(location.search).get('sym');
+    if (s) $('sym').value = s.trim().toUpperCase();
+  })();
   load();
 </script>
 </body>

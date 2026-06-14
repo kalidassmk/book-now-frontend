@@ -411,8 +411,8 @@
       sym, kind: 'BUY', price: st.entry,
       body: `${sym}: BUY rhythm — burst + T+1 confirm + 1h ARMED. Radar-ஐ திற.`,
     });
-    // iter157 — persist the BUY signal so /orderflow-history.html builds a 90-day history
-    if (st && st.status === 'BUY') {
+    // iter158 — persist BUY + CONFIRM candidates so /orderflow-history.html builds a 90-day history
+    if (st && (st.status === 'BUY' || st.status === 'CONFIRM')) {
       try {
         const c = st.cur1m || {};
         const px = st.entry || c.c;
@@ -422,7 +422,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            source: 'orderflow', symbol: sym, label: 'BUY',
+            source: 'orderflow', symbol: sym, label: st.status,
             ts: Date.now(), price: px,
             chg_pct: st.ret2, vol_surge: st.vs1m, buy_pct: st.buy1m,
             buy_vol: buyUsdt, sell_vol: sellUsdt,

@@ -357,6 +357,9 @@
       st.sigTs = Date.now();
       st.sigPrice = st.price;
       onNewSignal(sym);
+    } else if (next === 'ARMED' && st.status !== 'ARMED') {
+      // iter158 — store fresh ARMED transitions too (pump-history = ARMED+SIGNAL)
+      captureRadar(sym, 'ARMED', Date.now(), st.price);
     }
     if (next !== 'SIGNAL') st.sigPrice = null;
     st.status = next;
@@ -488,21 +491,16 @@
       o.stop(audioCtx.currentTime + 0.24);
     } catch {}
   }
-  function onNewSignal(sym) {
-    beep();
+  // iter158 — persist a pump-radar status (ARMED or SIGNAL) for 90-day history
+  function captureRadar(sym, label, ts, price) {
     const st = S[sym];
-    if (window.BNAlert) BNAlert.notify({
-      sym, kind: 'SIGNAL', price: st && st.sigPrice,
-      body: `${sym}: PUMP SIGNAL — 1h momentum + fresh 5m ignition. Radar-ஐ திற.`,
-    });
-    // iter157 — persist the signal so /pump-history.html builds a 90-day history
     try {
       fetch('/api/history/capture', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          source: 'pump', symbol: sym, label: 'SIGNAL',
-          ts: st && st.sigTs, price: st && st.sigPrice,
+          source: 'pump', symbol: sym, label,
+          ts: ts || Date.now(), price: price != null ? price : (st && st.price),
           chg_pct: st && st.ret2,
           vol_surge: st && st.vs5m,
           buy_pct: st && st.buy5m,
@@ -510,6 +508,16 @@
         keepalive: true,
       }).catch(() => {});
     } catch (_) {}
+  }
+  function onNewSignal(sym) {
+    beep();
+    const st = S[sym];
+    if (window.BNAlert) BNAlert.notify({
+      sym, kind: 'SIGNAL', price: st && st.sigPrice,
+      body: `${sym}: PUMP SIGNAL — 1h momentum + fresh 5m ignition. Radar-ஐ திற.`,
+    });
+    // iter158 — persist the SIGNAL so /pump-history.html builds a 90-day history
+    captureRadar(sym, 'SIGNAL', st && st.sigTs, st && st.sigPrice);
     requestAnimationFrame(() => {
       const tr = document.querySelector(`tr[data-sym="${sym}"]`);
       if (tr) { tr.classList.remove('flash'); void tr.offsetWidth; tr.classList.add('flash'); }
