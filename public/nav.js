@@ -115,6 +115,18 @@ window.bnQuickTradeLinkHtml = function (sym, opts) {
         { href: '/bounce-watch.html',      label: 'Bounce Watch',     icon: '⤴️', desc: 'Oversold reversal candidates' },
       ],
     },
+    // iter159 — '📜 History' top-level menu grouping the three signal-history
+    // pages so they live under ONE header menu (matches each page's live concept).
+    {
+      key: 'history',
+      label: 'History',
+      icon: '📜',
+      items: [
+        { href: '/coin-history.html',      label: 'Buy Signals History', icon: '🎯', desc: 'Coin Detail “Top 5 Latest Buy Signals” — strong BUY candidates, 90-day date/price/volume filters', highlight: true },
+        { href: '/pump-history.html',      label: 'Pump Radar History',  icon: '📡', desc: 'Pump Radar ARMED + SIGNAL captures — 90-day filterable history' },
+        { href: '/orderflow-history.html', label: 'Order Flow History',  icon: '🌊', desc: 'Order-Flow Radar BUY + CONFIRM candidates — 90-day filterable history' },
+      ],
+    },
     // iter122 — '💱 Spot Order' top-level menu.  Previously the manual
     // Trade History + Round Trips + NET P&L dashboard (/premium.html)
     // lived under 'Bots' as 'Premium', which mis-tagged it — those
