@@ -75,6 +75,7 @@
   </div>
 
   <div class="filters">
+    <div class="field"><label>Source</label><select id="fSource"><option value="">All sources</option></select></div>
     <div class="field"><label>Min signal price</label><input id="fPrice" type="number" step="any" placeholder="any" /></div>
     <div class="field"><label>Min % increase</label><input id="fChg" type="number" step="any" placeholder="any" /></div>
     <div class="field"><label>Min buy vol (USDT)</label><input id="fBuy" type="number" step="any" placeholder="enrich first" /></div>
@@ -143,6 +144,17 @@
       return (r.label || 'Radar').toUpperCase();
     return SRC_LABEL[r.source] || r.source;
   }
+  // group rows by what the Source column displays (detector name / radar status)
+  const sourceKey = r => srcCell(r) || '';
+  // rebuild the Source dropdown from the sources actually present in the data
+  function populateSourceFilter() {
+    const sel = $('fSource');
+    const cur = sel.value;
+    const keys = [...new Set(ALL.map(sourceKey))].filter(Boolean).sort();
+    sel.innerHTML = '<option value="">All sources</option>' +
+      keys.map(k => `<option value="${k}">${k}</option>`).join('');
+    sel.value = keys.includes(cur) ? cur : '';
+  }
   // "vs Signal" cell — % move from signal price to current price + ✅/❌
   function diffCell(r) {
     if (r.diff_pct == null) return '<span style="color:var(--muted)">—</span>';
@@ -198,6 +210,7 @@
       ALL = data.events || [];
       $('loading').textContent = ALL.length + ' signals · fetching live prices…';
       await fillNowPrices(true);
+      populateSourceFilter();
       $('loading').textContent = ALL.length + ' signals';
       render();
     } catch (e) {
@@ -209,7 +222,9 @@
   function filtered() {
     const fb = parseFloat($('fBuy').value);
     const fs = parseFloat($('fSell').value);
+    const src = $('fSource').value;
     return ALL.filter(r =>
+      (!src || sourceKey(r) === src) &&
       (isNaN(fb) || (r.buy_vol  != null && r.buy_vol  >= fb)) &&
       (isNaN(fs) || (r.sell_vol != null && r.sell_vol >= fs))
     );
@@ -313,6 +328,7 @@
 
   $('load').addEventListener('click', load);
   $('apply').addEventListener('click', render);
+  $('fSource').addEventListener('change', render);
   $('enrich').addEventListener('click', enrichAll);
   $('refreshPrice').addEventListener('click', async () => {
     if (!ALL.length) return;
