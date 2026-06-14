@@ -179,6 +179,10 @@
   const VS5M_GATE   = 3.0;    // fresh 5m volume surge
   const BASE_1H     = 12;     // 1h baseline bars for vol avg
   const BASE_5M     = 20;     // 5m baseline bars for vol avg
+  // iter165 — SIGNAL quality gates (taker-buy dominant + anti blow-off + anti chase)
+  const BUY5M_GATE  = 55.0;   // min taker-buy % on the 5m ignition candle (buy-dominant)
+  const VS5M_BLOWOFF= 12.0;   // 5m vol surge ≥ this = parabolic blow-off → no fresh SIGNAL
+  const RET2_CHASE  = 18.0;   // prior 1h move ≥ this = already extended → no fresh SIGNAL
   const SEED_CONC   = 6;      // concurrent REST seed fetches
 
   const SYMBOLS = Object.keys(PLAYBOOK);
@@ -348,7 +352,12 @@
     }
     // status
     const armed = st.ret2 != null && st.ret2 >= RET2_GATE && st.vs1h != null && st.vs1h >= VS1H_GATE;
-    const ignite = st.green5m && st.vs5m != null && st.vs5m >= VS5M_GATE;
+    // iter165 — SIGNAL needs taker-buy dominant ignition, and must reject blow-off / chasing
+    const takerOk = st.buy5m != null && st.buy5m >= BUY5M_GATE;
+    const blowoff = st.vs5m != null && st.vs5m >= VS5M_BLOWOFF;
+    const chase   = st.ret2 != null && st.ret2 >= RET2_CHASE;
+    const ignite = st.green5m && st.vs5m != null && st.vs5m >= VS5M_GATE
+                   && takerOk && !blowoff && !chase;
     let next = 'COLD';
     if (armed && ignite) next = 'SIGNAL';
     else if (armed) next = 'ARMED';
