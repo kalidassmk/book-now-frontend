@@ -74,11 +74,11 @@
           <label class="block text-[11px] text-gray-400 mb-1">Coin (e.g. LTCUSDT)</label>
           <input id="in-sym" type="text" placeholder="e.g. LTC" class="w-full mono uppercase" autocomplete="off">
         </div>
-        <div>
+        <div id="wrap-entry">
           <label id="lbl-entry" class="block text-[11px] text-gray-400 mb-1">Avg buy price ($)</label>
           <input id="in-entry" type="number" step="any" placeholder="price போடுங்க" class="w-full mono">
         </div>
-        <div>
+        <div id="wrap-qty">
           <label class="block text-[11px] text-gray-400 mb-1">Quantity (optional)</label>
           <input id="in-qty" type="number" step="any" placeholder="qty (optional)" class="w-full mono">
         </div>
@@ -240,6 +240,103 @@
     return { lv, res, sup, reward, risk, rr, distLive, score, verdict, reasons };
   }
 
+  /* ── order-flow pressure (passive book imbalance near price) ─────────────── */
+  // buy% = bid notional within band ÷ (bid+ask notional within band). >55% = buyers heavier.
+  function orderFlow(sym, px, band){
+    const S = STAT[sym]; if(!S||!S.ready||px==null) return null;
+    band = band || 0.01;
+    const lo = px*(1-band), hi = px*(1+band);
+    const bidN = S.bids.filter(b=>b[0]>=lo).reduce((s,b)=>s+b[0]*b[1],0);
+    const askN = S.asks.filter(a=>a[0]<=hi).reduce((s,a)=>s+a[0]*a[1],0);
+    const tot = bidN+askN; if(tot<=0) return null;
+    const buyPct = bidN/tot*100;
+    return { bidN, askN, buyPct, lean: buyPct>=58?'buy':buyPct<=42?'sell':'balanced' };
+  }
+
+  /* ── suggest the best limit-buy prices from order book + structure ───────── */
+  function suggestLimits(sym, px){
+    const S = STAT[sym]; if(!S||!S.ready||px==null) return [];
+    const cands = [];
+    const push = (label, price, note) => { if(price>0 && price <= px*1.0008) cands.push({label, price, note}); };
+    // 1) bid walls below price — buy INTO a real support
+    walls(S.bids).filter(w=>w.p < px).sort((a,b)=>b.p-a.p).slice(0,3)
+      .forEach((w,i)=> push(i===0?'Top bid wall':'Bid wall', w.p, `$${fmtUsd(w.n)} buy wall`));
+    // 2) structural supports
+    if(S.sma20>0 && S.sma20<px) push('SMA20', S.sma20, '20-day avg');
+    if(S.sma50>0 && S.sma50<px) push('SMA50', S.sma50, '50-day avg');
+    if(S.lo7>0  && S.lo7<px)   push('7d low', S.lo7, 'recent floor');
+    if(S.lo30>0 && S.lo30<px)  push('30d low', S.lo30, 'major floor');
+    // 3) volatility dips
+    push('−0.5×ATR', px - S.atr*0.5, 'shallow dip');
+    push('−1×ATR',  px - S.atr,     'volatility dip');
+    push('−0.5%',   px*0.995,       'just below market');
+    // dedup within 0.3%
+    const ded=[]; for(const c of cands.sort((a,b)=>b.price-a.price)){ if(!ded.some(d=>Math.abs(d.price/c.price-1)<0.003)) ded.push(c); }
+    // assess + rank: score desc, then closer to price (more fillable)
+    return ded.map(c=>{ const a=buyAssessment(sym,c.price,px); return a?{...c, a, score:a.score, rr:a.rr, dist:(c.price/px-1)*100}:null; })
+              .filter(Boolean)
+              .sort((a,b)=> b.score-a.score || (Math.abs(a.price-px)-Math.abs(b.price-px)))
+              .slice(0,5);
+  }
+
+  /* ── limit-buy SUGGEST card (coin only → we pick the price) ──────────────── */
+  function limitSuggestCardHtml(p, S, px, base, icons){
+    const sugg = suggestLimits(p.sym, px);
+    const best = sugg[0] || null;
+    p._track = best ? best.price : null;           // price we watch for the fill alert (runtime only)
+    const flow = orderFlow(p.sym, px, 0.01);
+    const reached = px!=null && best && px<=best.price;
+    const rows = sugg.map((s,i)=>{
+      const v = s.a.verdict;
+      return `<tr class="${i===0?'lvl-next':''} border-b border-white/5">
+        <td class="px-3 py-2 text-gray-300">${i===0?'⭐ ':''}${s.label}<div class="text-[10px] text-gray-600">${s.note||''}</div></td>
+        <td class="px-3 py-2 text-right mono text-brand font-semibold">$${fmtPrice(s.price)}</td>
+        <td class="px-3 py-2 text-right mono ${s.dist<0?'text-success':'text-gray-400'}">${s.dist>=0?'+':''}${s.dist.toFixed(2)}%</td>
+        <td class="px-3 py-2 text-right mono ${s.rr>=2?'text-success':s.rr>=1?'text-brand':'text-danger'}">${s.rr==null?'—':s.rr.toFixed(2)}</td>
+        <td class="px-3 py-2 text-right mono font-bold ${v.c}">${s.score}</td>
+        <td class="px-3 py-2 text-right"><span class="text-[10px] px-1.5 py-0.5 rounded ${v.bg} ${v.c} font-semibold whitespace-nowrap">${v.t.replace(/ [✅⚠️❌]/,'')}</span></td>
+      </tr>`;
+    }).join('') || `<tr><td colspan="6" class="px-3 py-4 text-gray-600 text-center">Live விலைக்கு கீழ தெளிவான support இல்ல — dip-க்கு காத்திருங்க.</td></tr>`;
+    const flowBar = flow ? `
+      <div class="px-5 py-3 border-b border-white/5">
+        <div class="flex items-center justify-between text-[11px] mb-1">
+          <span class="text-success font-semibold">🟢 Buy ${flow.buyPct.toFixed(0)}%</span>
+          <span class="text-gray-500">±1% order-flow (book pressure) · ${flow.lean==='buy'?'<span class=\"text-success\">வாங்கறவங்க அதிகம்</span>':flow.lean==='sell'?'<span class=\"text-danger\">விக்கறவங்க அதிகம்</span>':'<span class=\"text-gray-400\">balance</span>'}</span>
+          <span class="text-danger font-semibold">Sell ${(100-flow.buyPct).toFixed(0)}% 🔴</span>
+        </div>
+        <div class="h-2 rounded-full overflow-hidden bg-danger/40 flex"><div class="bg-success" style="width:${flow.buyPct.toFixed(1)}%"></div></div>
+      </div>` : '';
+    return `<div class="glass rounded-2xl overflow-hidden" data-card="${p.id}">
+      <div class="p-5 flex flex-wrap items-center gap-x-6 gap-y-3 justify-between border-b border-white/5">
+        <div class="flex items-center gap-3">
+          <span class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-brand/15 text-brand">⏳ LIMIT BUY · auto-suggest</span>
+          <div class="font-bold text-xl whitespace-nowrap">${base}<span class="text-gray-600 text-sm">/USDT</span></div>
+          <span class="inline-flex gap-1">${icons}</span>
+        </div>
+        <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">Live</p><p class="text-lg font-bold mono" data-live="${p.sym}">$${fmtPrice(px)}</p></div>
+        <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">⭐ Best limit @</p><p class="text-lg font-bold mono text-brand">${best?'$'+fmtPrice(best.price):'—'}</p></div>
+        <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">Best score</p><p class="text-2xl font-black mono ${best?best.a.verdict.c:''}">${best?best.score:'—'}</p></div>
+        <button onclick="removePos('${p.id}')" class="text-gray-500 hover:text-danger text-sm self-start">✕</button>
+      </div>
+      ${best?`<div class="px-5 py-3 ${best.a.verdict.bg} border-b border-white/5 flex flex-wrap items-center gap-x-4 gap-y-1">
+        <span class="font-bold ${best.a.verdict.c}">${best.a.verdict.t}</span>
+        <span class="text-xs text-gray-400">${best.label} @ $${fmtPrice(best.price)} (${best.dist.toFixed(2)}%) · R:R <b class="${best.rr>=2?'text-success':best.rr>=1?'text-brand':'text-danger'}">${best.rr==null?'—':best.rr.toFixed(2)}</b>${best.a.res?` · reward → $${fmtPrice(best.a.res.price)}`:''}${best.a.sup?` · risk → $${fmtPrice(best.a.sup.price)}`:''}</span>
+        ${reached?'<span class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-success/20 text-success">✅ Best limit reach ஆச்சு</span>':''}
+      </div>`:''}
+      ${flowBar}
+      <div>
+        <p class="px-4 py-2 text-xs font-bold text-brand">📋 Suggested limit buy prices (order book + structure)</p>
+        <table class="w-full text-xs"><thead class="text-[10px] text-gray-500 uppercase">
+          <tr><th class="px-3 py-1.5 text-left">Level</th><th class="px-3 py-1.5 text-right">விலை</th><th class="px-3 py-1.5 text-right">Live-ல் இருந்து</th><th class="px-3 py-1.5 text-right">R:R</th><th class="px-3 py-1.5 text-right">Score</th><th class="px-3 py-1.5 text-right">Verdict</th></tr>
+        </thead><tbody>${rows}</tbody></table>
+      </div>
+      <div class="px-5 py-2 text-[11px] text-gray-500">
+        ATR(1d) $${fmtPrice(S.atr)} · SMA20 $${fmtPrice(S.sma20)} · SMA50 $${fmtPrice(S.sma50)} · 30d $${fmtPrice(S.lo30)}–$${fmtPrice(S.hi30)}
+        <span class="block mt-1 text-gray-600">⭐ = top pick. எந்த level உங்க risk-க்கு ஏத்தது-ன்னு நீங்க decide பண்ணுங்க — இது objective data மட்டுமே.</span>
+      </div>
+    </div>`;
+  }
+
   function levelTable(rows, E, qty, title, titleCol, nextPx){
     const body = rows.map(t=>{
       const dpl = (t.price/E-1)*100, usd = qty ? (t.price-E)*qty : null;
@@ -321,7 +418,7 @@
         <p class="text-gray-500 text-sm mt-3">${S&&S.err?('Data load ஆகல: '+S.err):'Data ஏற்றுகிறது…'}</p>
       </div>`;
     }
-    if (p.type === 'LIMIT') return limitCardHtml(p, S, px, base, icons);
+    if (p.type === 'LIMIT') return p.suggest ? limitSuggestCardHtml(p, S, px, base, icons) : limitCardHtml(p, S, px, base, icons);
     const pl = px!=null ? (px/E-1)*100 : null;
     const plUsd = (px!=null && qty) ? (px-E)*qty : null;
     const be = E*1.001;
@@ -400,8 +497,11 @@
     document.querySelectorAll(`[data-live="${sym}"]`).forEach(el=>el.textContent = '$'+fmtPrice(px));
     POS.filter(p=>p.sym===sym).forEach(p=>{
       if (p.type === 'LIMIT'){
-        const d = (p.entry/px-1)*100;       // limit vs live
-        document.querySelectorAll(`[data-dist="${sym}"]`).forEach(el=>{ el.textContent=(d>=0?'+':'')+d.toFixed(2)+'%'; el.className='text-lg font-bold mono '+(d<0?'text-success':'text-danger'); });
+        const L = p.suggest ? p._track : p.entry;   // suggest mode tracks the top-pick price
+        if (L!=null){
+          const d = (L/px-1)*100;                   // limit vs live
+          document.querySelectorAll(`[data-dist="${sym}"]`).forEach(el=>{ el.textContent=(d>=0?'+':'')+d.toFixed(2)+'%'; el.className='text-lg font-bold mono '+(d<0?'text-success':'text-danger'); });
+        }
         checkAlert(p, px); return;
       }
       const pl = (px/p.entry-1)*100;
@@ -416,7 +516,8 @@
     const S = STAT[p.sym]; if(!S||!S.ready) return;
     const a = ALERTED[p.id] = ALERTED[p.id] || {};
     if (p.type === 'LIMIT'){
-      if (!a.fill && px<=p.entry){ a.fill=true; fireAlert(p, px, 'LIMIT FILL', `${p.sym.replace('USDT','')} limit $${fmtPrice(p.entry)} reach ஆச்சு — order fill ஆகலாம். வாங்கினா "Held"-ஆ மாத்துங்க.`); }
+      const L = p.suggest ? p._track : p.entry;     // suggest mode watches the top-pick price
+      if (L!=null && !a.fill && px<=L){ a.fill=true; fireAlert(p, px, 'LIMIT FILL', `${p.sym.replace('USDT','')} suggested limit $${fmtPrice(L)} reach ஆச்சு — நல்ல buy zone. வாங்கினா holdings-ல தானா வரும்.`); }
       return;
     }
     const be = p.entry*1.001;
@@ -463,9 +564,11 @@
     const held = m==='HELD';
     $('tab-held').className  = 'ptab px-3 py-1.5 rounded-lg text-xs font-semibold '+(held?'bg-brand/15 text-brand':'bg-white/5 text-gray-400');
     $('tab-limit').className = 'ptab px-3 py-1.5 rounded-lg text-xs font-semibold '+(held?'bg-white/5 text-gray-400':'bg-brand/15 text-brand');
-    $('lbl-entry').textContent = held ? 'Avg buy price ($)' : 'Limit buy price ($)';
+    // LIMIT mode = auto-suggest: user gives ONLY the coin; we pull price + order book + flow.
+    $('wrap-entry').classList.toggle('hidden', !held);
+    $('wrap-qty').classList.toggle('hidden', !held);
     $('form-hint').textContent = held ? 'வாங்கின position-ஐ track பண்ணு — live P/L + sell targets.'
-                                      : 'போடப்போற limit buy சரியான விலையா-னு check பண்ணு — support/R:R + buy score.';
+                                      : 'Coin மட்டும் போடுங்க — current price + order book + order-flow வச்சு best limit buy price-ஐ நாங்க suggest பண்றோம்.';
   }
   async function addPos(){
     const raw = $('in-sym').value;
@@ -475,7 +578,8 @@
     $('form-err').classList.add('hidden');
     const stripped = String(raw||'').toUpperCase().replace(/[^A-Z0-9]/g,'');   // LTC/USDT, LTC_USDT, LTC USDT → LTCUSDT ; LTC → LTC
     if (!stripped) return err('Coin symbol போடுங்க (e.g. LTC, LTCUSDT, LTC/USDT).', 'in-sym');
-    if (!(entry>0)) return err(formMode==='LIMIT' ? 'Limit buy price field காலியா இருக்கு — price போடுங்க.' : 'Avg buy price field காலியா இருக்கு — price போடுங்க.', 'in-entry');
+    // HELD needs an avg buy price; LIMIT auto-suggests so price is optional (ignored if blank).
+    if (formMode==='HELD' && !(entry>0)) return err('Avg buy price field காலியா இருக்கு — price போடுங்க.', 'in-entry');
     // build candidate symbols (flexible input) and probe Binance until one resolves
     const QUOTES = ['USDT','FDUSD','USDC','BUSD','TUSD','BTC','ETH','BNB'];
     const hasQuote = QUOTES.some(q => stripped.endsWith(q) && stripped.length > q.length);
@@ -488,7 +592,10 @@
     if (!sym) return err(`"${raw.trim()}" Binance-ல கிடைக்கல. Coin சரிபாருங்க (USDT pair வேணும், e.g. LTC).`);
     if (POS.some(p=>p.sym===sym && p.type===formMode)) { /* allow duplicates; user may track multiple buys */ }
     const id = sym+'-'+Date.now();
-    POS.push({ id, sym, entry, qty: qty>0?qty:null, type: formMode });
+    if (formMode==='LIMIT' && !(entry>0))
+      POS.push({ id, sym, entry:null, qty:null, type:'LIMIT', suggest:true });   // auto-suggest limit buy from order book/flow
+    else
+      POS.push({ id, sym, entry, qty: qty>0?qty:null, type: formMode });
     savePos(POS);
     $('in-sym').value=''; $('in-entry').value=''; $('in-qty').value='';
     await refreshStat(sym);
