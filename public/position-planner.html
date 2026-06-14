@@ -947,9 +947,17 @@
       try{ const tr=await (await fetch(`/api/v1/binance/trade-history?symbol=${sym}`)).json(); avg=avgCostFromTrades(tr); }catch{}
       autos.push({ id:'auto-'+sym, sym, entry: avg!=null?avg:px, qty:h.qty, type:'HELD', auto:true, noCost: avg==null });
     }
-    // merge: keep manual LIMIT + manual HELD whose sym isn't auto-pulled; replace all autos
+    // Reconcile against REAL holdings: this page mirrors what you actually own.
+    // Drop stale manual entries for coins you no longer hold (e.g. EDEN left over
+    // in localStorage from an old check). Keep manual entries only when their coin
+    // is in the current Binance balance, then (re)build the auto holdings.
     const autoSyms = new Set(autos.map(a=>a.sym));
-    POS = POS.filter(p=>!p.auto).filter(p=>!(p.type==='HELD' && autoSyms.has(p.sym))).concat(autos);
+    const heldSyms = new Set(holds.map(h=>h.asset+'USDT'));
+    POS = POS
+      .filter(p=>!p.auto)                                    // drop previous autos (rebuilt below)
+      .filter(p=>heldSyms.has(p.sym))                        // drop coins you don't hold anymore
+      .filter(p=>!(p.type==='HELD' && autoSyms.has(p.sym)))  // avoid duplicate HELD the auto covers
+      .concat(autos);
     savePos(POS);
     setSync(autos.length ? `${autos.length} holding${autos.length>1?'s':''} pulled ✓` : 'Holdings இல்ல (USDT மட்டும்)', false);
     await Promise.all([...autoSyms].map(refreshStat));
