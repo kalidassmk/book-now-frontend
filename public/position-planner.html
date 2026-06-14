@@ -873,7 +873,12 @@
     if(!(v>0)||!(ctx.price>0)) return;
     if(ctx.freeUsdt!=null && v>ctx.freeUsdt+1e-9) return;
     const qty=v/ctx.price;
-    const offsetPct=(ctx.price/ctx.live-1)*100;
+    // offsetPct = % BELOW current price that the engine should place the limit.
+    // Engine computes limit = current * (1 - offsetPct/100), so for a dip-buy
+    // (ctx.price below ctx.live) this MUST be positive. (Bugfix: previously
+    // (price/live-1) gave a NEGATIVE value → engine placed ABOVE market →
+    // the limit filled instantly at current price instead of the dip.)
+    const offsetPct=((ctx.live-ctx.price)/ctx.live)*100;
     const btn=$('buy-confirm'), err=$('buy-err');
     btn.disabled=true; btn.textContent='Placing…'; err.classList.add('hidden');
     try {
