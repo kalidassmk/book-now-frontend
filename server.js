@@ -101,6 +101,14 @@ const positions = new Map();   // symbol → { buyPrice, qty, buyTime, target, s
 const tradeLog = [];          // all completed/active trades
 let totalPnL = 0;
 const USDT_INR_RATE = 92; // Approximate rate for decision making
+// iter156 — the operator trades USDC / FDUSD pairs manually now, so the
+// Spot Movers feed surfaces those quotes too (not just USDT). These are
+// the spot quote currencies we expose. Data comes from the WS ticker
+// cache (all pairs already), so widening this adds NO Binance REST load.
+const SPOT_QUOTES = ['USDT', 'USDC', 'FDUSD'];
+const isSpotQuotePair = (sym) =>
+    !!sym && SPOT_QUOTES.some(q => sym.endsWith(q) && sym.length > q.length)
+    && !sym.includes('UPUSDT') && !sym.includes('DOWNUSDT');
 const tradeStatusMap = new Map(); // Track symbol -> status to detect execution
 const analysisCache = new Map(); // symbol → { high2m, low2m, avg2m, vol30dAvg, vol7dAvg, lastUpdated }
 const activeLimitOrders = new Map(); // symbol → { orderId, symbol, side, limitPrice, qty, status, time }
@@ -6850,7 +6858,7 @@ app.get('/api/spot-tickers', async (req, res) => {
             // Pull from binance-worker's WebSocket cache (no Binance REST call).
             const cached = binanceWorker.getAllTickers24h();
             const tickers = cached
-                .filter(t => t.symbol && t.symbol.endsWith('USDT'))
+                .filter(t => isSpotQuotePair(t.symbol))
                 .map(t => {
                     const open = parseFloat(t.openPrice);
                     const last = parseFloat(t.lastPrice);
@@ -6877,8 +6885,7 @@ app.get('/api/spot-tickers', async (req, res) => {
             const cached = binanceWorker.getAllTickers24h() || [];
             const minVolM = parseFloat(req.query.min_vol_m || '2');
             const eligible = cached
-                .filter(t => t.symbol && t.symbol.endsWith('USDT'))
-                .filter(t => !t.symbol.includes('UPUSDT') && !t.symbol.includes('DOWNUSDT'))
+                .filter(t => isSpotQuotePair(t.symbol))
                 .filter(t => parseFloat(t.quoteVolume || 0) >= minVolM * 1e6)
                 .map(t => t.symbol);
 
@@ -6902,7 +6909,7 @@ app.get('/api/spot-tickers', async (req, res) => {
                 })
             ));
             const tickers = results.flat()
-                .filter(t => t && t.symbol && t.symbol.endsWith('USDT'))
+                .filter(t => t && isSpotQuotePair(t.symbol))
                 .map(t => ({
                     symbol: t.symbol,
                     price:  parseFloat(t.lastPrice),

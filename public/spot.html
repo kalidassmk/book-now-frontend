@@ -282,14 +282,26 @@ function fmtVolume(v) {
     return v.toFixed(0);
 }
 
+// iter156 — multi-quote: Spot Movers now lists USDT / USDC / FDUSD pairs.
+const SPOT_QUOTES = ["USDT", "USDC", "FDUSD"];
+function quoteOf(sym) {
+    const s = (sym || "").toUpperCase();
+    for (const q of SPOT_QUOTES) if (s.endsWith(q) && s.length > q.length) return q;
+    return "";
+}
+function baseOf(sym) {
+    const q = quoteOf(sym);
+    return q ? (sym || "").slice(0, -q.length) : (sym || "");
+}
+
 function render() {
     const minVolUsdt = minVolMUsdt * 1e6;
     const filter = filterTerm.trim().toUpperCase();
 
     // Filter for leveraged-token noise + volume floor + name match
     let rows = tickers.filter(t => {
-        if (!t.symbol || !t.symbol.endsWith("USDT")) return false;
-        const base = t.symbol.replace("USDT", "");
+        if (!quoteOf(t.symbol)) return false;
+        const base = baseOf(t.symbol);
         if (/UP$|DOWN$|BULL$|BEAR$|3L$|3S$/.test(base)) return false;
         if (t.volume == null || t.volume < minVolUsdt) return false;
         if (filter && !t.symbol.includes(filter)) return false;
@@ -321,12 +333,13 @@ function render() {
         tbody.innerHTML = rows.map(t => {
             const change = t.change;
             const changeClass = change == null ? "mute" : (change >= 0 ? "pos" : "neg");
-            const base = t.symbol.replace("USDT", "");
+            const base = baseOf(t.symbol);
+            const quote = quoteOf(t.symbol);
             const activeCls = (selectedSymbol === t.symbol) ? " active" : "";
             return `<tr>
                 <td class="symbol">
                   <span class="ticker">${base}</span>
-                  <span class="quote">/USDT</span>
+                  <span class="quote">/${quote}</span>
                 </td>
                 <td class="num">${fmtPrice(t.price)}</td>
                 <td class="num change-cell ${changeClass}">${fmtPct(change)}</td>
@@ -379,7 +392,7 @@ async function openAnalysis(symbol) {
     selectedSymbol = symbol;
     const panel = document.getElementById("analysisPanel");
     panel.classList.add("open");
-    document.getElementById("apTitle").textContent = symbol.replace("USDT", "/USDT");
+    document.getElementById("apTitle").textContent = baseOf(symbol) + "/" + quoteOf(symbol);
     document.getElementById("apSubtitle").textContent = "Loading…";
     document.getElementById("apStats").innerHTML = "";
     document.getElementById("apChart").innerHTML = "";
