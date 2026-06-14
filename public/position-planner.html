@@ -410,9 +410,11 @@
 
   /* ── render ────────────────────────────────────────────────────────────── */
   function render(){
-    $('empty').classList.toggle('hidden', POS.length>0);
+    // Held tab content = only coins you actually own. Each card shows its
+    // open limit-sell-order status (or a warning if none is placed yet).
     const host = $('positions');
-    host.innerHTML = POS.map(p => cardHtml(p)).join('');
+    host.innerHTML = heldPositions().map(p => cardHtml(p)).join('');
+    applyView();
   }
 
   function cardHtml(p){
@@ -483,6 +485,10 @@
         <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">Breakeven</p><p class="text-lg font-bold mono text-gray-300">$${fmtPrice(be)}<span class="text-[10px] text-gray-600"> (${bePl>=0?'+':''}${bePl.toFixed(2)}%)</span></p></div>
         ${auto ? '' : `<button onclick="removePos('${p.id}')" class="text-gray-500 hover:text-danger text-sm self-start">✕</button>`}
       </div>
+      <!-- sell-order status: is there an open limit SELL order for this held coin? -->
+      ${(()=>{ const so=sellOrdersFor(sym); return so.length
+        ? `<div class="px-5 py-2 text-[11px] bg-success/10 text-success border-b border-white/5">🟢 Limit sell order ${so.length>1?`(${so.length}) `:''}இருக்கு: ${so.map(o=>`${(+o.origQty).toPrecision(4)} @ $${fmtPrice(+o.price)}`).join(' · ')}</div>`
+        : `<div class="px-5 py-2 text-[11px] bg-danger/10 text-danger border-b border-white/5">⚠️ Sell order இல்ல — இந்த coin வாங்கியாச்சு, ஆனா limit sell போடல. கீழே 🎯 Sell targets-ல ஒரு விலை பாத்து Binance-ல sell order போடுங்க.</div>`; })()}
       <!-- two tables -->
       <div class="grid md:grid-cols-2 gap-px bg-white/5">
         <div class="bg-card/60">
@@ -575,6 +581,7 @@
   let formMode = 'HELD';                              // 'HELD' | 'LIMIT'
   function setMode(m){
     formMode = m;
+    viewMode = m;                                  // tab also switches the visible section
     const held = m==='HELD';
     $('tab-held').className  = 'ptab px-3 py-1.5 rounded-lg text-xs font-semibold '+(held?'bg-brand/15 text-brand':'bg-white/5 text-gray-400');
     $('tab-limit').className = 'ptab px-3 py-1.5 rounded-lg text-xs font-semibold '+(held?'bg-white/5 text-gray-400':'bg-brand/15 text-brand');
@@ -583,6 +590,9 @@
     $('wrap-qty').classList.toggle('hidden', !held);
     $('form-hint').textContent = held ? 'வாங்கின position-ஐ track பண்ணு — live P/L + sell targets.'
                                       : 'Coin மட்டும் போடுங்க — current price + order book + order-flow வச்சு best limit buy price-ஐ நாங்க suggest பண்றோம்.';
+    applyView();
+    if(held){ loadOpenOrders(); }                  // refresh sell-order status when viewing holdings
+    else if(!SIG.length){ loadTopSignals(); }      // lazily pull top-5 signals when first opening the check tab
   }
   async function addPos(){
     const raw = $('in-sym').value;
@@ -747,7 +757,39 @@
   // limit-buy-check cards (same auto-suggest card as a manual limit). These are
   // NOT persisted — they refresh from the feeds.
   let SIG = [];                                   // signal pseudo-positions (runtime only)
+  let viewMode = 'HELD';                          // which tab's content is visible: 'HELD' | 'LIMIT'
+  let OPEN_ORDERS = {};                           // sym → [open Binance orders] (for sell-order status)
   function allPos(){ return POS.concat(SIG); }
+  function heldPositions(){ return POS.filter(p=>p.type==='HELD'); }
+  function checkPositions(){ return POS.filter(p=>p.type==='LIMIT'); }
+  // Toggle which section is visible based on the active tab.
+  function applyView(){
+    const held = viewMode==='HELD';
+    const hp = heldPositions();
+    const pos=$('positions'); if(pos) pos.classList.toggle('hidden', !held);
+    const emp=$('empty'); if(emp) emp.classList.toggle('hidden', !held || hp.length>0);
+    const sig=$('signals'); if(sig) sig.classList.toggle('hidden', held);
+    const sh=$('signals-head'); if(sh) sh.classList.toggle('hidden', held || (SIG.length+checkPositions().length)===0);
+  }
+  // Pick the right card renderer for a LIMIT-type entry (signal or manual check).
+  function limitCard(p){
+    const S=STAT[p.sym], px=LIVE[p.sym];
+    const base=p.sym.replace('USDT','').replace('FDUSD','').replace('USDC','');
+    const icons = window.bnBinanceLinkHtml ? window.bnBinanceLinkHtml(p.sym,{compact:true}) : '';
+    if(!S||!S.ready) return `<div class="glass rounded-2xl p-5" data-card="${p.id}"><div class="font-bold text-lg">${base}<span class="text-gray-600 text-sm">/USDT</span></div><p class="text-gray-500 text-sm mt-2">Signal data ஏற்றுகிறது…</p></div>`;
+    return p.suggest ? limitSuggestCardHtml(p,S,px,base,icons) : limitCardHtml(p,S,px,base,icons);
+  }
+  // Open limit-SELL orders for a held coin (from /api/v1/orders/open).
+  function sellOrdersFor(sym){ return (OPEN_ORDERS[sym]||[]).filter(o=>String(o.side||'').toUpperCase()==='SELL'); }
+  async function loadOpenOrders(){
+    try {
+      const arr = await getJSON('/api/v1/orders/open');
+      const m={};
+      (Array.isArray(arr)?arr:[]).forEach(o=>{ const s=String(o.symbol||'').toUpperCase(); if(!s) return; (m[s]=m[s]||[]).push(o); });
+      OPEN_ORDERS = m;
+      if(viewMode==='HELD') render();
+    } catch { /* engine may be busy; keep last snapshot */ }
+  }
   function normSignal(source, e){
     const sym = String(e.symbol || e.sym || '').toUpperCase();
     if(!sym.endsWith('USDT')) return null;        // limit-buy needs a USDT pair
@@ -795,17 +837,11 @@
     resubscribe();
   }
   function renderSignals(){
+    // Check tab content = top-5 auto signal coins + any manual limit-buy checks.
     const host = $('signals'); if(!host) return;
-    const head = $('signals-head');
-    if(!SIG.length){ host.innerHTML=''; if(head) head.classList.add('hidden'); return; }
-    if(head) head.classList.remove('hidden');
-    host.innerHTML = SIG.map(p=>{
-      const S=STAT[p.sym], px=LIVE[p.sym];
-      const base=p.sym.replace('USDT','').replace('FDUSD','').replace('USDC','');
-      const icons = window.bnBinanceLinkHtml ? window.bnBinanceLinkHtml(p.sym,{compact:true}) : '';
-      if(!S||!S.ready) return `<div class="glass rounded-2xl p-5" data-card="${p.id}"><div class="font-bold text-lg">${base}<span class="text-gray-600 text-sm">/USDT</span></div><p class="text-gray-500 text-sm mt-2">Signal data ஏற்றுகிறது…</p></div>`;
-      return limitSuggestCardHtml(p, S, px, base, icons);
-    }).join('');
+    const items = checkPositions().concat(SIG);   // manual checks first, then auto top-5
+    host.innerHTML = items.map(p=>limitCard(p)).join('');
+    applyView();
   }
 
   /* ── Real LIMIT BUY (manual click → USDT modal → confirm) ────────────────── */
@@ -955,13 +991,14 @@
     const heldSyms = new Set(holds.map(h=>h.asset+'USDT'));
     POS = POS
       .filter(p=>!p.auto)                                    // drop previous autos (rebuilt below)
-      .filter(p=>heldSyms.has(p.sym))                        // drop coins you don't hold anymore
+      .filter(p=> p.type!=='HELD' || heldSyms.has(p.sym))    // drop stale HELD you don't own (keep manual LIMIT checks)
       .filter(p=>!(p.type==='HELD' && autoSyms.has(p.sym)))  // avoid duplicate HELD the auto covers
       .concat(autos);
     savePos(POS);
     setSync(autos.length ? `${autos.length} holding${autos.length>1?'s':''} pulled ✓` : 'Holdings இல்ல (USDT மட்டும்)', false);
     await Promise.all([...autoSyms].map(refreshStat));
-    render(); resubscribe();
+    render(); renderSignals(); resubscribe();
+    loadOpenOrders();        // refresh sell-order status for the newly-synced holdings
     syncing=false;
   }
   window.syncHoldings = syncHoldings;
@@ -989,11 +1026,11 @@
     setInterval(syncHoldings, 120000);   // re-sync every 2 min (qty/avg refresh from account)
     loadRepricer();          // Buy Re-pricer watchlist + live chase-down trace
     setInterval(loadRepricer, 4000);     // poll dry-run trace every 4s
-    // NOTE: auto top-5 signal coins display removed by request — this page now
-    // shows ONLY coins the user actually holds (bought). SIG stays empty so the
-    // 🔥 signal section never renders. Manual "Limit buy check" tab still works.
-    SIG = [];
-    renderSignals();         // hides the (now empty) signal section
+    loadOpenOrders();                    // sell-order status for held coins
+    setInterval(loadOpenOrders, 15000);  // refresh open orders every 15s
+    loadTopSignals();                    // top-5 combined signal coins (shown under the ⏳ check tab)
+    setInterval(loadTopSignals, 60000);  // refresh signal candidates every 60s
+    setMode('HELD');                     // start on the Held tab (only owned coins visible)
   })();
   </script>
   <script src="/alert-kit.js"></script>
