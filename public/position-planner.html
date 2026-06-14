@@ -267,7 +267,12 @@
   function suggestLimits(sym, px){
     const S = STAT[sym]; if(!S||!S.ready||px==null) return [];
     const cands = [];
-    const push = (label, price, note) => { if(price>0 && price <= px*1.0008) cands.push({label, price, note}); };
+    // Cap suggested dips at ~2% below live price so they actually FILL.
+    // Deeper structural supports (30d low / SMA50) can sit -20%..-35% below
+    // market and never fill, so we drop anything past MAXDIP.
+    const MAXDIP = 0.02;
+    const FLOOR  = px * (1 - MAXDIP);
+    const push = (label, price, note) => { if(price>0 && price <= px*1.0008 && price >= FLOOR) cands.push({label, price, note}); };
     // 1) bid walls below price — buy INTO a real support
     walls(S.bids).filter(w=>w.p < px).sort((a,b)=>b.p-a.p).slice(0,3)
       .forEach((w,i)=> push(i===0?'Top bid wall':'Bid wall', w.p, `$${fmtUsd(w.n)} buy wall`));
