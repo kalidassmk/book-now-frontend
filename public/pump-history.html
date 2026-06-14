@@ -18,6 +18,10 @@
   header h1 span { color:var(--accent); }
   a.back { color:var(--muted); text-decoration:none; font-size:13px; padding:6px 12px; border:1px solid var(--border); border-radius:8px; }
   a.back:hover { color:var(--text); background:var(--panel2); }
+  .histnav { display:flex; gap:4px; padding:3px; background:var(--panel2); border:1px solid var(--border); border-radius:10px; }
+  .histnav a { color:var(--muted); text-decoration:none; font-size:13px; padding:6px 14px; border-radius:7px; white-space:nowrap; }
+  .histnav a:hover { color:var(--text); background:var(--panel); }
+  .histnav a.active { color:#1a1400; background:var(--accent); font-weight:700; }
   main { padding:24px; max-width:1500px; margin:0 auto; }
   .note { font-size:12px; color:var(--muted); line-height:1.6; margin:0 0 18px; padding:12px 16px; background:var(--panel); border:1px solid var(--border); border-radius:10px; }
   .controls, .filters { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; margin-bottom:14px; }
@@ -55,6 +59,11 @@
 <header>
   <div class="left">
     <h1 id="title">Pump <span>History</span></h1>
+    <nav class="histnav" id="histnav">
+      <a href="/coin-history.html" data-src="buysignals">Buy Signals</a>
+      <a href="/pump-history.html" data-src="pump">Pump</a>
+      <a href="/orderflow-history.html" data-src="orderflow">Order Flow</a>
+    </nav>
     <span id="loading" style="font-size:12px;color:var(--muted);"></span>
   </div>
   <div style="display:flex; gap:10px;">
@@ -127,6 +136,10 @@
   document.getElementById('title').innerHTML = CFG.title;
   document.getElementById('radarLink').href = CFG.radar;
   document.getElementById('radarLink').textContent = 'Live Radar →';
+  // highlight the current page in the shared history nav
+  document.querySelectorAll('#histnav a').forEach(a => {
+    if (a.dataset.src === SOURCE) a.classList.add('active');
+  });
   const NOTE_LIVE = '<br>💹 <b>Now Price</b> + <b>vs Signal</b>: signal price-க்கும் இப்போதைய Binance live price-க்கும் உள்ள % difference. <b>✅</b> = prediction வேலை செஞ்சது (signal-க்கு அப்புறம் விலை மேல போச்சு), <b>❌</b> = போகல. மேல உள்ள “↻ Live price” button அழுத்தினா மறுபடி புதுப்பிக்கும். (இது signal நேரத்திலிருந்து இதுவரைக்கும் உள்ள move — short-term entry-க்கு அப்புறம் என்ன ஆச்சுனு காட்டுது.)';
   const NOTE_DISCLAIMER = '<br><i>இது objective technical data மட்டும் — investment advice இல்ல. நான் licensed financial advisor இல்ல.</i>';
   document.getElementById('note').innerHTML = CFG.note + NOTE_LIVE + NOTE_DISCLAIMER;
