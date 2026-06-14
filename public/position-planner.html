@@ -802,7 +802,7 @@
   }
   /* ── Auto Exit Bracket (away-mode protector) — DRY-RUN preview ─────────────
      The auto_exit_bracket.py subprocess scans every holding WITHOUT an open
-     sell order and computes a +2% TP / -2% SL bracket from the coin's real
+     sell order and computes a +30% TP / -4% SL bracket from the coin's real
      BUY cost. Phase 1 places NO orders — this panel only SHOWS the numbers so
      the operator can verify them before live OCO selling is switched on. */
   let AUTOEXIT = { state:{}, status:{} };
@@ -824,10 +824,11 @@
       host.innerHTML = `<div class="glass rounded-2xl p-4 text-xs text-gray-500">🛡️ Auto Exit Bracket (away-mode) — watcher ஏற்றுகிறது… holdings scan ஆகுது.</div>`;
       return;
     }
-    const sitBadge = (s)=>{
+    const sitBadge = (s, r)=>{
+      const tp=(+r.tpPct||30), sl=(+r.slPct||4);
       if(s==='NORMAL')            return `<span class="text-[10px] px-2 py-0.5 rounded-full bg-success/15 text-success">bracket ready</span>`;
-      if(s==='ALREADY_ABOVE_TP')  return `<span class="text-[10px] px-2 py-0.5 rounded-full bg-brand/15 text-brand">already +2%↑ — sell now?</span>`;
-      if(s==='ALREADY_BELOW_SL')  return `<span class="text-[10px] px-2 py-0.5 rounded-full bg-danger/15 text-danger">already −2%↓</span>`;
+      if(s==='ALREADY_ABOVE_TP')  return `<span class="text-[10px] px-2 py-0.5 rounded-full bg-brand/15 text-brand">already +${tp}%↑ — sell now?</span>`;
+      if(s==='ALREADY_BELOW_SL')  return `<span class="text-[10px] px-2 py-0.5 rounded-full bg-danger/15 text-danger">already −${sl}%↓</span>`;
       if(s==='NO_COST_BASIS')     return `<span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400">buy price தெரியல</span>`;
       return `<span class="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-gray-400">${s||''}</span>`;
     };
@@ -837,13 +838,13 @@
       const cost = +r.costBasis||0, tp=+r.tpPrice||0, sl=+r.slTrigger||0, live=+r.livePrice||0;
       return `<div class="px-4 py-3 border-t border-white/5 flex flex-wrap items-center gap-x-5 gap-y-1">
         <div class="font-bold text-sm min-w-[64px]">${base}<span class="text-gray-600 text-xs">/USDT</span></div>
-        ${sitBadge(r.situation)}
+        ${sitBadge(r.situation, r)}
         ${noCost
           ? `<div class="text-[11px] text-amber-400">இந்த coin-ஐ எவ்வளவுக்கு வாங்கினீங்கனு record இல்ல — guess பண்ண மாட்டேன். Dashboard-ல buy பண்ணா அல்லது manual-ஆ sell பண்ணுங்க.</div>`
           : `<div class="text-[11px] text-gray-400">வாங்கின விலை <span class="text-gray-200">${fmtPrice(cost)}</span> <span class="text-gray-600">(${r.costSource==='MY_TRADES'?'Binance trades':'order record'})</span></div>
              <div class="text-[11px]">live <span class="text-gray-200">${fmtPrice(live)}</span></div>
-             <div class="text-[11px] text-success">🎯 TP +${(+r.tpPct||2)}% → <span class="font-semibold">${fmtPrice(tp)}</span></div>
-             <div class="text-[11px] text-danger">🛑 SL −${(+r.slPct||2)}% → <span class="font-semibold">${fmtPrice(sl)}</span></div>
+             <div class="text-[11px] text-success">🎯 TP +${(+r.tpPct||30)}% → <span class="font-semibold">${fmtPrice(tp)}</span></div>
+             <div class="text-[11px] text-danger">🛑 SL −${(+r.slPct||4)}% → <span class="font-semibold">${fmtPrice(sl)}</span></div>
              <div class="text-[11px] text-gray-500">qty ${(+r.sellQty||0).toPrecision(4)}</div>`}
       </div>`;
     };
@@ -853,7 +854,7 @@
         <span class="text-[11px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400">DRY-RUN · order இன்னும் போடல</span>
       </div>
       <div class="px-4 py-2 text-[11px] text-gray-400 bg-white/[0.02]">
-        Sell order இல்லாத ஒவ்வொரு holding-க்கும், நீங்க வாங்கின விலையில் இருந்து <b>+2% லாபம்</b> / <b>−2% நஷ்டம்</b> bracket கீழே கணக்கிட்டு காட்டுது. இந்த விலைகள் சரியா இருந்தா சொல்லுங்க — அப்பறம் real auto-sell-ஐ on பண்றேன். ${protectedN?`<span class="text-success">${protectedN} coin ஏற்கனவே sell order இருக்கு ✓</span>`:''}
+        Sell order இல்லாத ஒவ்வொரு holding-க்கும், நீங்க வாங்கின விலையில் இருந்து <b>+30% லாபம்</b> / <b>−4% நஷ்டம்</b> bracket கீழே கணக்கிட்டு காட்டுது. இந்த விலைகள் சரியா இருந்தா சொல்லுங்க — அப்பறம் real auto-sell-ஐ on பண்றேன். ${protectedN?`<span class="text-success">${protectedN} coin ஏற்கனவே sell order இருக்கு ✓</span>`:''}
       </div>
       ${need.length? need.map(rowHtml).join('') : `<div class="px-4 py-3 text-xs text-gray-500 border-t border-white/5">Sell order இல்லாத holding எதுவும் இல்ல — எல்லாம் protected ✓</div>`}
     </div>`;
@@ -1097,7 +1098,7 @@
     setInterval(loadRepricer, 4000);     // poll dry-run trace every 4s
     loadOpenOrders();                    // sell-order status for held coins
     setInterval(loadOpenOrders, 15000);  // refresh open orders every 15s
-    loadAutoExit();                      // away-mode +2%/-2% bracket preview (dry-run)
+    loadAutoExit();                      // away-mode +30%/-4% bracket preview (dry-run)
     setInterval(loadAutoExit, 15000);    // refresh intended brackets every 15s
     loadTopSignals();                    // top-5 combined signal coins (shown under the ⏳ check tab)
     setInterval(loadTopSignals, 60000);  // refresh signal candidates every 60s
