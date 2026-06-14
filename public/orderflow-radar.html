@@ -47,6 +47,7 @@
         </div>
       </div>
       <div class="flex items-center gap-3">
+        <a href="/orderflow-history.html" class="glass rounded-xl px-4 py-2 text-xs font-semibold text-gray-300 hover:text-white">📜 History</a>
         <div class="glass rounded-xl px-4 py-2 flex items-center gap-2">
           <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-gray-600"></span>
           <span id="ws-status" class="text-xs font-semibold text-gray-400">Connecting…</span>
@@ -410,6 +411,26 @@
       sym, kind: 'BUY', price: st.entry,
       body: `${sym}: BUY rhythm — burst + T+1 confirm + 1h ARMED. Radar-ஐ திற.`,
     });
+    // iter157 — persist the BUY signal so /orderflow-history.html builds a 90-day history
+    if (st && st.status === 'BUY') {
+      try {
+        const c = st.cur1m || {};
+        const px = st.entry || c.c;
+        const buyUsdt  = (c.tb != null && px) ? c.tb * px : null;
+        const sellUsdt = (c.v != null && c.tb != null && px) ? (c.v - c.tb) * px : null;
+        fetch('/api/history/capture', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            source: 'orderflow', symbol: sym, label: 'BUY',
+            ts: Date.now(), price: px,
+            chg_pct: st.ret2, vol_surge: st.vs1m, buy_pct: st.buy1m,
+            buy_vol: buyUsdt, sell_vol: sellUsdt,
+          }),
+          keepalive: true,
+        }).catch(() => {});
+      } catch (_) {}
+    }
     requestAnimationFrame(()=>{ const tr=document.querySelector(`tr[data-sym="${sym}"]`); if(tr){tr.classList.remove('flash');void tr.offsetWidth;tr.classList.add('flash');} });
   }
 

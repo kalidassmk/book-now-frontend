@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Coin History · BookNow</title>
+<style>
+  :root {
+    --bg:#0b0e14; --panel:#141925; --panel2:#1b2130; --border:#232b3d;
+    --text:#e6e9f0; --muted:#8a93a6; --green:#16c784; --red:#ea3943;
+    --amber:#f0b90b; --blue:#4b9fff;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 24px; border-bottom:1px solid var(--border); background:var(--panel); position:sticky; top:0; z-index:10; }
+  header .left { display:flex; align-items:center; gap:16px; }
+  header h1 { font-size:17px; margin:0; font-weight:600; }
+  header h1 span { color:var(--blue); }
+  a.back { color:var(--muted); text-decoration:none; font-size:13px; padding:6px 12px; border:1px solid var(--border); border-radius:8px; }
+  a.back:hover { color:var(--text); background:var(--panel2); }
+  main { padding:24px; max-width:1400px; margin:0 auto; }
+  .note { font-size:12px; color:var(--muted); line-height:1.6; margin:0 0 18px; padding:12px 16px; background:var(--panel); border:1px solid var(--border); border-radius:10px; }
+  .controls { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; margin-bottom:14px; }
+  .field { display:flex; flex-direction:column; gap:4px; }
+  .field label { font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
+  .field input, .field select { background:var(--panel2); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:8px 10px; font-size:13px; font-family:inherit; }
+  .field input:focus, .field select:focus { outline:none; border-color:var(--blue); }
+  button.go { background:var(--blue); color:#06223f; border:none; border-radius:8px; padding:9px 18px; font-weight:700; font-size:13px; cursor:pointer; }
+  button.go:hover { filter:brightness(1.08); }
+  button.go:disabled { opacity:.5; cursor:not-allowed; }
+  .filters { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; margin-bottom:16px; padding:12px 16px; background:var(--panel); border:1px solid var(--border); border-radius:10px; }
+  .filters .field input { width:130px; }
+  .summary { display:flex; flex-wrap:wrap; gap:18px; margin-bottom:14px; font-size:13px; }
+  .summary .chip { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:8px 14px; }
+  .summary .chip b { color:var(--text); font-variant-numeric:tabular-nums; }
+  .summary .chip .k { color:var(--muted); margin-right:8px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  thead th { position:sticky; top:56px; background:var(--panel2); color:var(--muted); text-align:right; padding:9px 12px; font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.5px; border-bottom:1px solid var(--border); cursor:pointer; user-select:none; white-space:nowrap; }
+  thead th:first-child, tbody td:first-child { text-align:left; }
+  thead th.sorted::after { content:" ▾"; color:var(--blue); }
+  thead th.sorted.asc::after { content:" ▴"; }
+  tbody td { text-align:right; padding:8px 12px; border-bottom:1px solid var(--border); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  tbody tr:hover { background:var(--panel); }
+  .pos { color:var(--green); } .neg { color:var(--red); }
+  .green-row { box-shadow:inset 3px 0 0 var(--green); }
+  .empty { text-align:center; color:var(--muted); padding:40px; }
+  .err { color:#ffb3b8; }
+  .bar { height:5px; background:var(--panel2); border-radius:3px; overflow:hidden; display:inline-block; width:60px; vertical-align:middle; margin-left:6px; }
+  .bar > i { display:block; height:100%; background:var(--green); }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>Coin <span>History</span></h1>
+    <span id="loading" style="font-size:12px;color:var(--muted);"></span>
+  </div>
+  <div style="display:flex; gap:10px;">
+    <a class="back" href="/coin.html">Coin Detail →</a>
+    <a class="back" href="/">← Dashboard</a>
+  </div>
+</header>
+<main>
+  <p class="note">
+    📜 <b>Coin order-flow history</b> — ஒரு coin-ஓட கடந்த நாட்களின் per-candle வரலாறு.
+    ஒவ்வொரு candle-க்கும் <b>signal price</b> (close), <b>buy volume</b> (taker-buy USDT),
+    <b>sell volume</b>, <b>price % increase</b> (candle-ல open→close மாற்றம்) காட்டும்.
+    கீழே உள்ள filters-ஆல date, price, buy/sell volume, %-increase வைச்சு filter பண்ணலாம்.
+    Data நேரடியா Binance public klines-ல இருந்து உங்க browser-ல load ஆகுது (production trade load இல்ல).
+    <br><i>இது objective technical data மட்டும் — investment advice இல்ல. நான் licensed financial advisor இல்ல.</i>
+  </p>
+
+  <div class="controls">
+    <div class="field">
+      <label>Symbol</label>
+      <input id="sym" value="BTCUSDT" style="width:140px; text-transform:uppercase;" />
+    </div>
+    <div class="field">
+      <label>Candle</label>
+      <select id="interval">
+        <option value="1m">1 min</option>
+        <option value="5m" selected>5 min</option>
+        <option value="15m">15 min</option>
+        <option value="1h">1 hour</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>From</label>
+      <input id="from" type="date" />
+    </div>
+    <div class="field">
+      <label>To</label>
+      <input id="to" type="date" />
+    </div>
+    <button class="go" id="load">Load history</button>
+  </div>
+
+  <div class="filters">
+    <div class="field"><label>Min signal price</label><input id="fPrice" type="number" step="any" placeholder="any" /></div>
+    <div class="field"><label>Min buy vol (USDT)</label><input id="fBuy" type="number" step="any" placeholder="any" /></div>
+    <div class="field"><label>Min sell vol (USDT)</label><input id="fSell" type="number" step="any" placeholder="any" /></div>
+    <div class="field"><label>Min % increase</label><input id="fChg" type="number" step="any" placeholder="any" /></div>
+    <div class="field"><label>&nbsp;</label><button class="go" id="apply" style="background:var(--panel2);color:var(--text);border:1px solid var(--border);">Apply filters</button></div>
+  </div>
+
+  <div class="summary" id="summary"></div>
+  <table>
+    <thead>
+      <tr>
+        <th data-k="t">Date / Time</th>
+        <th data-k="price">Price</th>
+        <th data-k="open">Open</th>
+        <th data-k="chg">% Change</th>
+        <th data-k="buy">Buy Vol (USDT)</th>
+        <th data-k="sell">Sell Vol (USDT)</th>
+        <th data-k="buyPct">Buy %</th>
+        <th data-k="trades">Trades</th>
+      </tr>
+    </thead>
+    <tbody id="rows"><tr><td class="empty" colspan="8">Symbol + date range குடுத்து “Load history” அழுத்துங்க.</td></tr></tbody>
+  </table>
+</main>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const fmtUsd = v => v == null ? '–' : (v >= 1e9 ? (v/1e9).toFixed(2)+'B' : v >= 1e6 ? (v/1e6).toFixed(2)+'M' : v >= 1e3 ? (v/1e3).toFixed(1)+'K' : v.toFixed(0));
+  const fmtPrice = v => v == null ? '–' : (v >= 1 ? v.toFixed(4) : v.toPrecision(5));
+  const pad = n => String(n).padStart(2, '0');
+  function fmtTime(ts) {
+    const d = new Date(ts);
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  // default date range: last 3 days
+  (function initDates() {
+    const today = new Date();
+    const from = new Date(Date.now() - 3 * 86400000);
+    $('to').value = today.toISOString().slice(0, 10);
+    $('from').value = from.toISOString().slice(0, 10);
+    // accept ?sym=BTCUSDT from history-page links → prefill + auto-load
+    const qs = new URLSearchParams(location.search);
+    const qsym = (qs.get('sym') || '').toUpperCase();
+    if (qsym) { $('sym').value = qsym; setTimeout(() => load(), 0); }
+  })();
+
+  let ALL = [];           // all candles loaded
+  let sortKey = 't', sortAsc = false;
+
+  async function fetchKlines(sym, interval, startMs, endMs) {
+    // Binance: max 1000 per call → loop forward
+    const out = [];
+    let cur = startMs;
+    let guard = 0;
+    while (cur < endMs && guard++ < 200) {
+      const url = `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${interval}&startTime=${cur}&endTime=${endMs}&limit=1000`;
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('Binance ' + r.status + ' — symbol சரியா இருக்கா?');
+      const ks = await r.json();
+      if (!ks.length) break;
+      for (const k of ks) out.push(k);
+      const lastOpen = ks[ks.length - 1][0];
+      if (ks.length < 1000) break;
+      cur = lastOpen + 1;
+    }
+    return out;
+  }
+
+  function candleRow(k) {
+    const open = +k[1], close = +k[4];
+    const totalQuote = +k[7];
+    const buyQuote = +k[10];
+    const sellQuote = totalQuote - buyQuote;
+    return {
+      t: k[0],
+      price: close,
+      open,
+      chg: open > 0 ? (close - open) / open * 100 : 0,
+      buy: buyQuote,
+      sell: sellQuote,
+      buyPct: totalQuote > 0 ? buyQuote / totalQuote * 100 : 0,
+      trades: +k[8],
+    };
+  }
+
+  async function load() {
+    const sym = $('sym').value.trim().toUpperCase();
+    const interval = $('interval').value;
+    const startMs = Date.parse($('from').value + 'T00:00:00');
+    const endMs = Date.parse($('to').value + 'T23:59:59');
+    if (!sym || isNaN(startMs) || isNaN(endMs)) { $('loading').textContent = 'Symbol + dates குடுங்க'; return; }
+    $('load').disabled = true;
+    $('loading').textContent = 'Loading…';
+    $('rows').innerHTML = '<tr><td class="empty" colspan="8">Loading…</td></tr>';
+    try {
+      const ks = await fetchKlines(sym, interval, startMs, endMs);
+      ALL = ks.map(candleRow);
+      $('loading').textContent = ALL.length + ' candles';
+      render();
+    } catch (e) {
+      $('rows').innerHTML = `<tr><td class="empty err" colspan="8">${e.message}</td></tr>`;
+      $('loading').textContent = '';
+      $('summary').innerHTML = '';
+    } finally {
+      $('load').disabled = false;
+    }
+  }
+
+  function filtered() {
+    const fp = parseFloat($('fPrice').value);
+    const fb = parseFloat($('fBuy').value);
+    const fs = parseFloat($('fSell').value);
+    const fc = parseFloat($('fChg').value);
+    return ALL.filter(r =>
+      (isNaN(fp) || r.price >= fp) &&
+      (isNaN(fb) || r.buy   >= fb) &&
+      (isNaN(fs) || r.sell  >= fs) &&
+      (isNaN(fc) || r.chg   >= fc)
+    );
+  }
+
+  function render() {
+    let rows = filtered();
+    rows.sort((a, b) => {
+      const d = (a[sortKey] ?? 0) - (b[sortKey] ?? 0);
+      return sortAsc ? d : -d;
+    });
+    const tb = $('rows');
+    if (!rows.length) { tb.innerHTML = '<tr><td class="empty" colspan="8">இந்த filter-க்கு candle இல்ல.</td></tr>'; renderSummary(rows); return; }
+    const maxVol = Math.max(...rows.map(r => Math.max(r.buy, r.sell)), 1);
+    tb.innerHTML = rows.slice(0, 1500).map(r => `
+      <tr class="${r.chg >= 0 ? 'green-row' : ''}">
+        <td>${fmtTime(r.t)}</td>
+        <td>${fmtPrice(r.price)}</td>
+        <td>${fmtPrice(r.open)}</td>
+        <td class="${r.chg >= 0 ? 'pos' : 'neg'}">${r.chg >= 0 ? '+' : ''}${r.chg.toFixed(2)}%</td>
+        <td class="pos">${fmtUsd(r.buy)}<span class="bar"><i style="width:${(r.buy/maxVol*100).toFixed(0)}%"></i></span></td>
+        <td class="neg">${fmtUsd(r.sell)}<span class="bar"><i style="width:${(r.sell/maxVol*100).toFixed(0)}%;background:var(--red)"></i></span></td>
+        <td>${r.buyPct.toFixed(0)}%</td>
+        <td>${r.trades}</td>
+      </tr>`).join('');
+    renderSummary(rows);
+  }
+
+  function renderSummary(rows) {
+    const tBuy = rows.reduce((s, r) => s + r.buy, 0);
+    const tSell = rows.reduce((s, r) => s + r.sell, 0);
+    const tot = tBuy + tSell;
+    const buyPct = tot > 0 ? tBuy / tot * 100 : 0;
+    const ups = rows.filter(r => r.chg > 0).length;
+    $('summary').innerHTML = `
+      <div class="chip"><span class="k">Candles</span><b>${rows.length}</b></div>
+      <div class="chip"><span class="k">Total Buy</span><b class="pos">${fmtUsd(tBuy)}</b></div>
+      <div class="chip"><span class="k">Total Sell</span><b class="neg">${fmtUsd(tSell)}</b></div>
+      <div class="chip"><span class="k">Buy %</span><b class="${buyPct>=50?'pos':'neg'}">${buyPct.toFixed(1)}%</b></div>
+      <div class="chip"><span class="k">Green candles</span><b>${ups}/${rows.length}</b></div>`;
+  }
+
+  document.querySelectorAll('thead th').forEach(th => th.addEventListener('click', () => {
+    const k = th.dataset.k;
+    if (sortKey === k) sortAsc = !sortAsc; else { sortKey = k; sortAsc = false; }
+    document.querySelectorAll('thead th').forEach(x => x.classList.remove('sorted', 'asc'));
+    th.classList.add('sorted'); if (sortAsc) th.classList.add('asc');
+    render();
+  }));
+
+  $('load').addEventListener('click', load);
+  $('apply').addEventListener('click', render);
+  $('sym').addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
+  [ 'fPrice', 'fBuy', 'fSell', 'fChg' ].forEach(id => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') render(); }));
+</script>
+</body>
+</html>

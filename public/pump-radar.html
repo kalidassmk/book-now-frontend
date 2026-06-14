@@ -48,6 +48,7 @@
         </div>
       </div>
       <div class="flex items-center gap-3">
+        <a href="/pump-history.html" class="glass rounded-xl px-4 py-2 text-xs font-semibold text-gray-300 hover:text-white">📜 History</a>
         <div class="glass rounded-xl px-4 py-2 flex items-center gap-2">
           <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-gray-600"></span>
           <span id="ws-status" class="text-xs font-semibold text-gray-400">Connecting…</span>
@@ -494,6 +495,21 @@
       sym, kind: 'SIGNAL', price: st && st.sigPrice,
       body: `${sym}: PUMP SIGNAL — 1h momentum + fresh 5m ignition. Radar-ஐ திற.`,
     });
+    // iter157 — persist the signal so /pump-history.html builds a 90-day history
+    try {
+      fetch('/api/history/capture', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source: 'pump', symbol: sym, label: 'SIGNAL',
+          ts: st && st.sigTs, price: st && st.sigPrice,
+          chg_pct: st && st.ret2,
+          vol_surge: st && st.vs5m,
+          buy_pct: st && st.buy5m,
+        }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch (_) {}
     requestAnimationFrame(() => {
       const tr = document.querySelector(`tr[data-sym="${sym}"]`);
       if (tr) { tr.classList.remove('flash'); void tr.offsetWidth; tr.classList.add('flash'); }

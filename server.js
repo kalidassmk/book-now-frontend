@@ -3422,6 +3422,174 @@ app.get('/api/alerts/feed', async (req, res) => {
     }
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// iter157 fe — SIGNAL HISTORY (date-filterable) for the 3 history pages
+//   • POST /api/history/capture   — pump-radar.html / orderflow-radar.html
+//        push their COLD→ARMED→SIGNAL / BURST→CONFIRM→BUY transitions so a
+//        server-side, multi-day history accrues (the radar pages are
+//        otherwise 100% browser-side and persist nothing).
+//        Keys: PUMP_RADAR:SIGNALS:<date>  /  ORDERFLOW_RADAR:SIGNALS:<date>
+//        90-day retention + ltrim cap (operator chose 90d; cap keeps the
+//        t3.micro RAM bounded).
+//   • GET  /api/history/signals   — merge the browser-captured signals with
+//        the backend-generated detector signals (already persisted: pump =
+//        PUMP_RIDER/LMC/INSTANT_PUMP/VSP/CCP/EARLY_PUMP, orderflow =
+//        FAST_SCALPER/VIRTUAL_SCALPER) across a date range, normalise to a
+//        common shape, apply server-side filters (date/symbol/price/%chg),
+//        return newest-first. Buy/sell volume is enriched client-side from
+//        Binance klines (browser IP) so the production trade-IP weight
+//        budget is never touched.
+// ─────────────────────────────────────────────────────────────────────────
+const HISTORY_RETENTION_SEC = 90 * 24 * 60 * 60;   // operator chose 90 days
+const HISTORY_DAY_CAP = 2000;                      // ltrim cap per day key
+
+function historyDateList(from, to) {
+    // inclusive UTC date list (YYYY-MM-DD), newest→oldest, capped at 92 days
+    const out = [];
+    const day = 86400000;
+    let end = to ? Date.parse(to + 'T00:00:00Z') : Date.now();
+    let start = from ? Date.parse(from + 'T00:00:00Z') : (end - 13 * day);
+    if (isNaN(end)) end = Date.now();
+    if (isNaN(start)) start = end - 13 * day;
+    if (start > end) { const t = start; start = end; end = t; }
+    const maxStart = end - 91 * day;
+    if (start < maxStart) start = maxStart;
+    for (let t = end; t >= start; t -= day) {
+        out.push(new Date(t).toISOString().slice(0, 10));
+    }
+    return out;
+}
+
+function normHistEvent(kind, ev) {
+    const num = (x) => (x == null || x === '' || isNaN(+x)) ? null : +x;
+    const f = ev.features || {};
+    const price = num(ev.price ?? ev.last_price ?? ev.trigger_close ??
+                      ev.trigger_price ?? ev.signal_price ?? f.current_price);
+    let chg_pct = num(ev.chg_pct ?? ev.price_change_pct ?? ev.price_chg_pct ??
+                      ev.chg_5m_pct ?? ev.chg_5m ?? ev.flash_price_chg_pct ??
+                      ev.ret2 ?? ev.chg_24h_pct ?? ev.pos_24h_pct);
+    const vol_surge = num(ev.vol_surge ?? ev.vol_surge_x ?? ev.surge_5m ??
+                          ev.vol_surge_5m ?? ev.vs5m ?? ev.vs1m ??
+                          (ev.entry && ev.entry.vol_5m_mult));
+    return {
+        ts: ev.ts,
+        date: ev.ts ? new Date(ev.ts).toISOString().slice(0, 10) : null,
+        source: kind,
+        symbol: ev.symbol,
+        price,
+        chg_pct,
+        vol_surge,
+        buy_vol:  num(ev.buy_vol ?? ev.buy_usdt ?? ev.vol_delta_usd),
+        sell_vol: num(ev.sell_vol ?? ev.sell_usdt),
+        buy_pct:  num(ev.buy_pct ?? ev.buy5m ?? ev.buy1m),
+        score:    num(ev.score ?? ev.pts),
+        label:    ev.label || ev.tier || ev.rule_label || ev.source || null,
+    };
+}
+
+// source → [ {client, key} ] map of which detector lists feed each page
+function historyKeySpec(source) {
+    if (source === 'orderflow') {
+        return [
+            ['redis', 'FAST_SCALPER:DETECTIONS',    'fast_scalper'],
+            ['redis', 'VIRTUAL_SCALPER:DETECTIONS', 'virtual_scalper'],
+            ['redis', 'ORDERFLOW_RADAR:SIGNALS',    'orderflow_radar'],
+        ];
+    }
+    // default: pump
+    return [
+        ['redis',        'PUMP_RIDER:DETECTIONS',   'pump_rider'],
+        ['redis',        'LMC:DETECTIONS',          'lmc'],
+        ['redis',        'INSTANT_PUMP:DETECTIONS', 'instant_pump'],
+        ['redis',        'VSP:DETECTIONS',          'vsp'],
+        ['redis',        'CCP:DETECTIONS',          'ccp'],
+        ['redisAnalyse', 'EARLY_PUMP:DETECTIONS',   'early_pump'],
+        ['redis',        'PUMP_RADAR:SIGNALS',      'pump_radar'],
+    ];
+}
+
+app.post('/api/history/capture', async (req, res) => {
+    try {
+        const b = req.body || {};
+        const source = (b.source === 'orderflow') ? 'orderflow' : 'pump';
+        const symbol = String(b.symbol || '').toUpperCase();
+        if (!symbol) return res.status(400).json({ error: 'symbol required' });
+        const ts = Number.isFinite(+b.ts) ? +b.ts : Date.now();
+        const ev = {
+            ts, symbol,
+            label: b.label || b.signal || 'SIGNAL',
+            price: b.price != null ? +b.price : null,
+            chg_pct: b.chg_pct != null ? +b.chg_pct : null,
+            vol_surge: b.vol_surge != null ? +b.vol_surge : null,
+            buy_pct: b.buy_pct != null ? +b.buy_pct : null,
+            buy_vol: b.buy_vol != null ? +b.buy_vol : null,
+            sell_vol: b.sell_vol != null ? +b.sell_vol : null,
+        };
+        const date = new Date(ts).toISOString().slice(0, 10);
+        const key = (source === 'orderflow' ? 'ORDERFLOW_RADAR:SIGNALS:' : 'PUMP_RADAR:SIGNALS:') + date;
+        // de-dupe: skip if same symbol+label captured in the last 45s
+        try {
+            const tail = await redis.lrange(key, -8, -1);
+            for (const r of tail) {
+                const p = JSON.parse(r);
+                if (p.symbol === symbol && (p.label || '') === (ev.label || '') &&
+                    Math.abs((p.ts || 0) - ts) < 45000) {
+                    return res.json({ ok: true, deduped: true });
+                }
+            }
+        } catch (_) {}
+        await redis.rpush(key, JSON.stringify(ev));
+        await redis.ltrim(key, -HISTORY_DAY_CAP, -1);
+        await redis.expire(key, HISTORY_RETENTION_SEC);
+        res.json({ ok: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/history/signals', async (req, res) => {
+    try {
+        const source = (req.query.source === 'orderflow') ? 'orderflow' : 'pump';
+        const dates = historyDateList(req.query.from, req.query.to);
+        const symbol = req.query.symbol ? String(req.query.symbol).toUpperCase() : null;
+        const minPrice  = req.query.minPrice  != null ? +req.query.minPrice  : null;
+        const minChgPct = req.query.minChgPct != null ? +req.query.minChgPct : null;
+        const limit = Math.min(parseInt(req.query.limit || '1000', 10), 5000);
+        const spec = historyKeySpec(source);
+        const events = [];
+
+        for (const date of dates) {
+            for (const [clientName, keyBase, kind] of spec) {
+                const client = clientName === 'redisAnalyse' ? redisAnalyse : redis;
+                let raw;
+                try { raw = await client.lrange(`${keyBase}:${date}`, 0, -1); }
+                catch (_) { continue; }
+                for (const r of raw) {
+                    let ev; try { ev = JSON.parse(r); } catch (_) { continue; }
+                    if (!ev || !ev.ts) continue;
+                    const n = normHistEvent(kind, ev);
+                    if (!n.symbol) continue;
+                    if (symbol && n.symbol !== symbol) continue;
+                    if (minPrice  != null && !(n.price  != null && n.price  >= minPrice))  continue;
+                    if (minChgPct != null && !(n.chg_pct != null && n.chg_pct >= minChgPct)) continue;
+                    events.push(n);
+                }
+            }
+        }
+        events.sort((a, b) => b.ts - a.ts);
+        res.json({
+            generated_at: Date.now(),
+            source,
+            from: dates[dates.length - 1] || null,
+            to: dates[0] || null,
+            count: events.length,
+            events: events.slice(0, limit),
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // iter 16 fe (2026-05-15): Pattern Backtest
 // Replays every detection from BOUNCE:DETECTIONS and EARLY_PUMP:DETECTIONS
 // against actual 1m klines. Simulates the bot's iter43 strategy:
