@@ -140,6 +140,7 @@
   const BUY_GATE  = 60;    // taker buy % on the burst minute
   const BREADTH   = 3.0;   // trade-count surge vs 20m base  (the real tell)
   const T1_BUY    = 55;    // T+1 taker buy % to confirm
+  const VS_BLOWOFF= 15.0;  // iter165 — 1m vol surge ≥ this = climax blow-off → skip fresh BURST
   const T1_VS     = 1.2;   // T+1 volume still elevated
   const RET2_GATE = 4.0, VS1H_GATE = 2.5;   // 1h momentum context (pump-radar rule)
   const BASE_N    = 20;    // 1m baseline window
@@ -273,7 +274,7 @@
         if (pass) { st.entry = cur.c; onConfirm(sym); }
       }
       // fresh burst detection on the just-closed minute
-      const isBurst = st.green && st.vs1m >= VS_GATE && st.buy1m >= BUY_GATE && st.breadth >= BREADTH;
+      const isBurst = st.green && st.vs1m >= VS_GATE && st.vs1m < VS_BLOWOFF && st.buy1m >= BUY_GATE && st.breadth >= BREADTH;
       if (isBurst && st.burst?.t !== cur.t && cur.t - (st.burst?.t||0) > 8*60000) {
         st.burst = { t: cur.t, vs: st.vs1m, breadth: st.breadth, buy: st.buy1m, price: cur.c };
         st.t1 = null; st.status = 'BURST'; st.lastBurstSeen = Date.now();
