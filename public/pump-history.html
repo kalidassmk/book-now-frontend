@@ -70,6 +70,7 @@
     <div class="field"><label>To</label><input id="to" type="date" /></div>
     <div class="field"><label>Symbol (optional)</label><input id="sym" placeholder="e.g. PEPEUSDT" style="width:150px; text-transform:uppercase;" /></div>
     <button class="go" id="load">Load history</button>
+    <button class="go ghost" id="refreshPrice" title="Re-fetch current Binance price + recompute vs-signal difference">↻ Live price</button>
     <button class="go ghost" id="enrich" title="Fill buy/sell volume from Binance klines (browser)">Enrich buy/sell vol</button>
   </div>
 
@@ -89,6 +90,8 @@
         <th data-k="symbol">Symbol</th>
         <th data-k="source">Source</th>
         <th data-k="price">Signal Price</th>
+        <th data-k="now_price">Now Price</th>
+        <th data-k="diff_pct">vs Signal</th>
         <th data-k="chg_pct">% Change</th>
         <th data-k="vol_surge">Vol Surge</th>
         <th data-k="buy_vol">Buy Vol (USDT)</th>
@@ -96,7 +99,7 @@
         <th data-k="score">Score</th>
       </tr>
     </thead>
-    <tbody id="rows"><tr><td class="empty" colspan="9">Date range குடுத்து “Load history” அழுத்துங்க.</td></tr></tbody>
+    <tbody id="rows"><tr><td class="empty" colspan="11">Date range குடுத்து “Load history” அழுத்துங்க.</td></tr></tbody>
   </table>
 </main>
 
@@ -123,8 +126,9 @@
   document.getElementById('title').innerHTML = CFG.title;
   document.getElementById('radarLink').href = CFG.radar;
   document.getElementById('radarLink').textContent = 'Live Radar →';
+  const NOTE_LIVE = '<br>💹 <b>Now Price</b> + <b>vs Signal</b>: signal price-க்கும் இப்போதைய Binance live price-க்கும் உள்ள % difference. <b>✅</b> = prediction வேலை செஞ்சது (signal-க்கு அப்புறம் விலை மேல போச்சு), <b>❌</b> = போகல. மேல உள்ள “↻ Live price” button அழுத்தினா மறுபடி புதுப்பிக்கும். (இது signal நேரத்திலிருந்து இதுவரைக்கும் உள்ள move — short-term entry-க்கு அப்புறம் என்ன ஆச்சுனு காட்டுது.)';
   const NOTE_DISCLAIMER = '<br><i>இது objective technical data மட்டும் — investment advice இல்ல. நான் licensed financial advisor இல்ல.</i>';
-  document.getElementById('note').innerHTML = CFG.note + NOTE_DISCLAIMER;
+  document.getElementById('note').innerHTML = CFG.note + NOTE_LIVE + NOTE_DISCLAIMER;
 
   const $ = id => document.getElementById(id);
   const fmtUsd = v => v == null ? '–' : (v >= 1e9 ? (v/1e9).toFixed(2)+'B' : v >= 1e6 ? (v/1e6).toFixed(2)+'M' : v >= 1e3 ? (v/1e3).toFixed(1)+'K' : (+v).toFixed(0));
@@ -138,6 +142,37 @@
     if (r.source === 'pump_radar' || r.source === 'orderflow_radar')
       return (r.label || 'Radar').toUpperCase();
     return SRC_LABEL[r.source] || r.source;
+  }
+  // "vs Signal" cell — % move from signal price to current price + ✅/❌
+  function diffCell(r) {
+    if (r.diff_pct == null) return '<span style="color:var(--muted)">—</span>';
+    const up = r.diff_pct >= 0;
+    return `${up ? '✅' : '❌'} ${up ? '+' : ''}${r.diff_pct.toFixed(2)}%`;
+  }
+
+  // ── live current price (one Binance call returns every symbol) ──────────
+  const nowPx = { ts: 0, map: null };
+  async function fetchNowPrices() {
+    try {
+      const resp = await fetch('https://api.binance.com/api/v3/ticker/price');
+      if (!resp.ok) return null;
+      const arr = await resp.json();
+      const map = new Map();
+      for (const t of arr) map.set(t.symbol, +t.price);
+      nowPx.ts = Date.now(); nowPx.map = map;
+      return map;
+    } catch (_) { return null; }
+  }
+  async function fillNowPrices(force) {
+    let map = nowPx.map;
+    if (force || !map || Date.now() - nowPx.ts > 20000) map = await fetchNowPrices();
+    if (!map) return;
+    for (const r of ALL) {
+      const np = map.get(r.symbol);
+      if (np == null) continue;
+      r.now_price = np;
+      if (r.price != null && r.price > 0) r.diff_pct = (np - r.price) / r.price * 100;
+    }
   }
 
   (function initDates() {
@@ -155,16 +190,18 @@
     const fp = parseFloat($('fPrice').value); if (!isNaN(fp)) params.set('minPrice', fp);
     const fc = parseFloat($('fChg').value);   if (!isNaN(fc)) params.set('minChgPct', fc);
     $('load').disabled = true; $('loading').textContent = 'Loading…';
-    $('rows').innerHTML = '<tr><td class="empty" colspan="9">Loading…</td></tr>';
+    $('rows').innerHTML = '<tr><td class="empty" colspan="11">Loading…</td></tr>';
     try {
       const r = await fetch('/api/history/signals?' + params.toString());
       if (!r.ok) throw new Error('server ' + r.status);
       const data = await r.json();
       ALL = data.events || [];
+      $('loading').textContent = ALL.length + ' signals · fetching live prices…';
+      await fillNowPrices(true);
       $('loading').textContent = ALL.length + ' signals';
       render();
     } catch (e) {
-      $('rows').innerHTML = `<tr><td class="empty err" colspan="9">${e.message}</td></tr>`;
+      $('rows').innerHTML = `<tr><td class="empty err" colspan="11">${e.message}</td></tr>`;
       $('loading').textContent = ''; $('summary').innerHTML = '';
     } finally { $('load').disabled = false; }
   }
@@ -188,13 +225,15 @@
       return sortAsc ? d : -d;
     });
     const tb = $('rows');
-    if (!rows.length) { tb.innerHTML = '<tr><td class="empty" colspan="9">இந்த filter-க்கு signal இல்ல.</td></tr>'; renderSummary(rows); return; }
+    if (!rows.length) { tb.innerHTML = '<tr><td class="empty" colspan="11">இந்த filter-க்கு signal இல்ல.</td></tr>'; renderSummary(rows); return; }
     tb.innerHTML = rows.slice(0, 2000).map(r => `
       <tr>
         <td>${fmtTime(r.ts)}</td>
         <td class="sym"><a href="/coin-history.html?sym=${r.symbol}" title="Coin history">${r.symbol||'–'}</a></td>
         <td><span class="src">${srcCell(r)}</span></td>
         <td>${fmtPrice(r.price)}</td>
+        <td>${r.now_price==null?'<span style="color:var(--muted)">—</span>':fmtPrice(r.now_price)}</td>
+        <td class="${r.diff_pct==null?'':(r.diff_pct>=0?'pos':'neg')}">${diffCell(r)}</td>
         <td class="${(r.chg_pct||0) >= 0 ? 'pos' : 'neg'}">${r.chg_pct==null?'–':(r.chg_pct>=0?'+':'')+r.chg_pct.toFixed(2)+'%'}</td>
         <td>${r.vol_surge==null?'–':r.vol_surge.toFixed(1)+'×'}</td>
         <td class="pos">${r.buy_vol==null?'<span style="color:var(--muted)">—</span>':fmtUsd(r.buy_vol)}</td>
@@ -209,10 +248,17 @@
     const syms = new Set(rows.map(r => r.symbol)).size;
     const avgChg = rows.filter(r => r.chg_pct != null);
     const m = avgChg.length ? avgChg.reduce((s, r) => s + r.chg_pct, 0) / avgChg.length : 0;
+    // prediction outcome — signal price vs current live price
+    const withNow = rows.filter(r => r.diff_pct != null);
+    const won = withNow.filter(r => r.diff_pct > 0).length;
+    const winRate = withNow.length ? won / withNow.length * 100 : 0;
+    const avgDiff = withNow.length ? withNow.reduce((s, r) => s + r.diff_pct, 0) / withNow.length : 0;
     $('summary').innerHTML = `
       <div class="chip"><span class="k">Signals</span><b>${rows.length}</b></div>
       <div class="chip"><span class="k">Coins</span><b>${syms}</b></div>
       <div class="chip"><span class="k">Avg % move</span><b class="${m>=0?'pos':'neg'}">${m>=0?'+':''}${m.toFixed(2)}%</b></div>
+      <div class="chip"><span class="k">Prediction worked</span><b class="${winRate>=50?'pos':'neg'}">${withNow.length?`${won}/${withNow.length} (${winRate.toFixed(0)}%)`:'–'}</b></div>
+      <div class="chip"><span class="k">Avg since-signal</span><b class="${avgDiff>=0?'pos':'neg'}">${withNow.length?`${avgDiff>=0?'+':''}${avgDiff.toFixed(2)}%`:'–'}</b></div>
       <div class="chip"><span class="k">Buy/sell vol filled</span><b>${enriched}/${rows.length}</b></div>`;
   }
 
@@ -268,6 +314,13 @@
   $('load').addEventListener('click', load);
   $('apply').addEventListener('click', render);
   $('enrich').addEventListener('click', enrichAll);
+  $('refreshPrice').addEventListener('click', async () => {
+    if (!ALL.length) return;
+    $('refreshPrice').disabled = true; $('loading').textContent = 'Refreshing live prices…';
+    await fillNowPrices(true);
+    $('loading').textContent = ALL.length + ' signals';
+    $('refreshPrice').disabled = false; render();
+  });
   $('sym').addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
   [ 'fBuy', 'fSell' ].forEach(id => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') render(); }));
   (function preSym() {
