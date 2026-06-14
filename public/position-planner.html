@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Position Planner — Live Sell-Target Analysis</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: { colors: {
+        bg: '#0b0e11', card: '#1e2329', brand: '#f0b90b', 'brand-hover': '#f8d33a',
+        border: 'rgba(255,255,255,0.08)', success: '#0ecb81', danger: '#f6465d',
+      } } }
+    }
+  </script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #0b0e11; color: #eaecef; }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    .glass { background: rgba(30,35,41,0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.08); }
+    .gradient-brand { background: linear-gradient(135deg, #f0b90b 0%, #f8d33a 100%); }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+    @keyframes flash { 0% { background: rgba(14,203,129,0.30); } 100% { background: transparent; } }
+    .flash { animation: flash 1.2s ease-out; }
+    @keyframes pulseDot { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    .pulse-dot { animation: pulseDot 1.4s ease-in-out infinite; }
+    input, select { background:#0b0e11; border:1px solid rgba(255,255,255,.12); border-radius:10px; padding:8px 10px; color:#eaecef; }
+    input:focus, select:focus { outline:none; border-color:#f0b90b; }
+    .lvl-next { box-shadow: inset 3px 0 0 #f0b90b; background: rgba(240,185,11,.06); }
+  </style>
+</head>
+<body class="overflow-x-hidden">
+  <main class="p-4 lg:p-8 min-h-screen max-w-[1400px] mx-auto">
+
+    <!-- Header -->
+    <header class="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
+      <div>
+        <div class="flex items-center gap-3">
+          <div class="w-11 h-11 gradient-brand rounded-xl flex items-center justify-center text-bg font-black text-2xl shadow-lg shadow-brand/20">💼</div>
+          <div>
+            <h1 class="text-2xl font-bold tracking-tight">Position <span class="text-brand">Planner</span></h1>
+            <p class="text-xs text-gray-500">வாங்கின coin-ஐ சேர் → live P/L + sell target + support levels. உங்க browser-ல இருந்தே Binance — trading server-ஐ பாதிக்காது.</p>
+          </div>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <div class="glass rounded-xl px-4 py-2 flex items-center gap-2">
+          <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-gray-600"></span>
+          <span id="ws-status" class="text-xs font-semibold text-gray-400">—</span>
+        </div>
+        <div id="bn-alert-slot"></div>
+      </div>
+    </header>
+
+    <!-- Add-position form -->
+    <div class="glass rounded-2xl p-5 mb-6">
+      <h2 class="text-sm font-bold text-brand mb-3 flex items-center gap-2">➕ Position சேர்</h2>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
+        <div>
+          <label class="block text-[11px] text-gray-400 mb-1">Coin (e.g. LTCUSDT)</label>
+          <input id="in-sym" type="text" placeholder="LTCUSDT" class="w-full mono uppercase" autocomplete="off">
+        </div>
+        <div>
+          <label class="block text-[11px] text-gray-400 mb-1">Avg buy price ($)</label>
+          <input id="in-entry" type="number" step="any" placeholder="44.5256" class="w-full mono">
+        </div>
+        <div>
+          <label class="block text-[11px] text-gray-400 mb-1">Quantity (optional)</label>
+          <input id="in-qty" type="number" step="any" placeholder="10" class="w-full mono">
+        </div>
+        <div class="flex gap-2">
+          <button id="btn-add" class="flex-1 gradient-brand text-bg font-bold rounded-xl px-4 py-2 text-sm hover:brightness-110 transition">சேர்</button>
+        </div>
+        <div class="text-[11px] text-gray-500 lg:text-right">
+          Positions browser-ல (localStorage) சேமிக்கப்படும். தானா live update ஆகும்.
+        </div>
+      </div>
+      <p id="form-err" class="text-xs text-danger mt-2 hidden"></p>
+    </div>
+
+    <!-- Positions -->
+    <div id="positions" class="grid gap-6"></div>
+    <div id="empty" class="glass rounded-2xl p-10 text-center text-gray-500 text-sm">
+      இன்னும் position இல்லை. மேலே coin + avg buy price சேர்த்து தொடங்குங்க. 💼
+    </div>
+
+    <!-- Methodology (Tamil) -->
+    <div class="glass rounded-2xl p-5 mt-8 text-xs text-gray-400 leading-relaxed">
+      <h3 class="text-sm font-bold text-brand mb-2">📐 எப்படி கணக்கிடுது</h3>
+      <div class="grid md:grid-cols-2 gap-4">
+        <div>
+          <p class="text-white font-semibold mb-1">Sell targets (மேல எங்க விக்கலாம்)</p>
+          • <b>Breakeven</b> = entry + ~0.1% fee.<br>
+          • <b>Ask walls</b> = order book-ல மேலே இருக்கற பெரிய விற்பனை சுவர்கள் (median-ஐ விட ≥3× பெரிசு) — விலை இங்க தடைபடும்.<br>
+          • <b>SMA20 / SMA50</b> = 20/50-நாள் சராசரி; pump-கள் இங்க reject ஆகும்.<br>
+          • <b>+ATR</b> = தினசரி சராசரி range வைச்சு projected target.
+        </div>
+        <div>
+          <p class="text-white font-semibold mb-1">Support (கீழ எங்க தாங்கும் / risk)</p>
+          • <b>Bid walls</b> = கீழே இருக்கற பெரிய வாங்கும் சுவர்கள்.<br>
+          • <b>7d / 30d low</b> = சமீபத்திய தளம்; உடைஞ்சா trend மோசம்.<br>
+          • <b>−ATR</b> = கீழ்நோக்கி எதிர்பார்க்கும் range.<br>
+          <span class="text-gray-500">⚠️ இது objective technical data மட்டுமே — personal financial advice இல்லை. முடிவு உங்களோடது.</span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+  /* ── helpers ───────────────────────────────────────────────────────────── */
+  const $ = id => document.getElementById(id);
+  const mean = a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : 0;
+  function median(a){ if(!a.length) return 0; const b=[...a].sort((x,y)=>x-y); const m=b.length>>1; return b.length%2?b[m]:(b[m-1]+b[m])/2; }
+  function getJSON(u){ return fetch(u).then(r=>{ if(!r.ok) throw new Error(r.status); return r.json(); }); }
+  function fmtPrice(p){ if(p==null||isNaN(p)) return '—'; const a=Math.abs(p); return a>=100?p.toFixed(2):a>=1?p.toFixed(3):a>=0.01?p.toFixed(5):p.toPrecision(4); }
+  function fmtUsd(n){ if(n==null||isNaN(n)) return '—'; const a=Math.abs(n); if(a>=1e6) return (n/1e6).toFixed(2)+'M'; if(a>=1e3) return (n/1e3).toFixed(1)+'k'; return n.toFixed(0); }
+  function pctCol(p){ return p>0?'text-success':p<0?'text-danger':'text-gray-300'; }
+
+  /* ── persistent positions ──────────────────────────────────────────────── */
+  const LS_KEY = 'bn_positions';
+  function loadPos(){ try { return JSON.parse(localStorage.getItem(LS_KEY)||'[]'); } catch { return []; } }
+  function savePos(arr){ localStorage.setItem(LS_KEY, JSON.stringify(arr)); }
+  let POS = loadPos();                 // [{id,sym,entry,qty}]
+  const STAT = {};                     // sym -> {atr,sma20,sma50,hi7,lo7,hi30,lo30,bids,asks,ready}
+  const LIVE = {};                     // sym -> last price
+  const ALERTED = {};                  // id -> {be:false, tp1:false}
+
+  /* ── static analysis (klines + depth) ──────────────────────────────────── */
+  async function refreshStat(sym){
+    try {
+      const [kl, depth] = await Promise.all([
+        getJSON(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=1d&limit=60`),
+        getJSON(`https://api.binance.com/api/v3/depth?symbol=${sym}&limit=1000`),
+      ]);
+      const k = kl.map(r=>({o:+r[1],h:+r[2],l:+r[3],c:+r[4]}));
+      const trs=[]; for(let i=1;i<k.length;i++){ const c=k[i],p=k[i-1]; trs.push(Math.max(c.h-c.l,Math.abs(c.h-p.c),Math.abs(c.l-p.c))); }
+      const atr = mean(trs.slice(-14));
+      const sma = n => mean(k.slice(-n).map(x=>x.c));
+      const r7=k.slice(-7), r30=k.slice(-30);
+      STAT[sym] = {
+        atr, sma20: sma(20), sma50: sma(50),
+        hi7: Math.max(...r7.map(x=>x.h)), lo7: Math.min(...r7.map(x=>x.l)),
+        hi30: Math.max(...r30.map(x=>x.h)), lo30: Math.min(...r30.map(x=>x.l)),
+        bids: depth.bids.map(b=>[+b[0],+b[1]]),
+        asks: depth.asks.map(a=>[+a[0],+a[1]]),
+        ready: true,
+      };
+      if (LIVE[sym]==null) LIVE[sym] = +k[k.length-1].c;
+    } catch(e){ STAT[sym] = STAT[sym] || { ready:false, err:String(e.message||e) }; }
+  }
+
+  // wall = order-book level whose notional is >=3x the median notional
+  function walls(levels){
+    if(!levels||!levels.length) return [];
+    const notion = levels.map(l=>l[0]*l[1]);
+    const med = median(notion) || 1;
+    return levels.map((l,i)=>({p:l[0], q:l[1], n:notion[i]}))
+      .filter(w=>w.n >= 3*med)
+      .sort((a,b)=>b.n-a.n);
+  }
+
+  // Build resistance (sell) ladder above current price, and support ladder below
+  function buildLevels(sym, P){
+    const S = STAT[sym]; if(!S||!S.ready) return null;
+    const dedup = (arr) => {                 // drop levels within 0.35% of a kept one
+      const out=[]; for(const x of arr){ if(!out.some(o=>Math.abs(o.price/x.price-1)<0.0035)) out.push(x); } return out;
+    };
+    // ── resistance / sell targets ──  (ignore spread-hugging walls < 0.2% away)
+    let up = [];
+    walls(S.asks).filter(w=>w.p>P*1.002).sort((a,b)=>a.p-b.p).slice(0,3)
+      .forEach(w=> up.push({ label:'Ask wall', price:w.p, note:`$${fmtUsd(w.n)} sell wall` }));
+    if (S.sma20 > P) up.push({ label:'SMA20', price:S.sma20, note:'20-day avg' });
+    if (S.sma50 > P) up.push({ label:'SMA50', price:S.sma50, note:'50-day avg' });
+    [1,2].forEach(m => up.push({ label:`+${m}×ATR`, price:P + S.atr*m, note:'volatility target' }));
+    if (S.hi30 > P) up.push({ label:'30d high', price:S.hi30, note:'recent ceiling' });
+    up = dedup(up.sort((a,b)=>a.price-b.price)).slice(0,6);
+    // ── support / risk ──
+    let dn = [];
+    walls(S.bids).filter(w=>w.p<P*0.998).sort((a,b)=>b.p-a.p).slice(0,3)
+      .forEach(w=> dn.push({ label:'Bid wall', price:w.p, note:`$${fmtUsd(w.n)} buy wall` }));
+    if (S.lo7 < P) dn.push({ label:'7d low', price:S.lo7, note:'recent floor' });
+    if (S.lo30 < P) dn.push({ label:'30d low', price:S.lo30, note:'major floor' });
+    dn.push({ label:'−1×ATR', price:P - S.atr, note:'volatility risk' });
+    dn = dedup(dn.sort((a,b)=>b.price-a.price)).slice(0,4);
+    return { up, dn };
+  }
+
+  /* ── render ────────────────────────────────────────────────────────────── */
+  function render(){
+    $('empty').classList.toggle('hidden', POS.length>0);
+    const host = $('positions');
+    host.innerHTML = POS.map(p => cardHtml(p)).join('');
+  }
+
+  function cardHtml(p){
+    const sym = p.sym, S = STAT[sym];
+    const px = LIVE[sym];
+    const E = p.entry, qty = p.qty;
+    const base = sym.replace('USDT','').replace('FDUSD','').replace('USDC','');
+    const icons = window.bnBinanceLinkHtml ? window.bnBinanceLinkHtml(sym, {compact:true}) : '';
+    if (!S || !S.ready){
+      return `<div class="glass rounded-2xl p-5" data-card="${p.id}">
+        <div class="flex items-center justify-between">
+          <div class="font-bold text-lg">${base}<span class="text-gray-600 text-sm">/USDT</span></div>
+          <button onclick="removePos('${p.id}')" class="text-gray-500 hover:text-danger text-sm">✕ நீக்கு</button>
+        </div>
+        <p class="text-gray-500 text-sm mt-3">${S&&S.err?('Data load ஆகல: '+S.err):'Data ஏற்றுகிறது…'}</p>
+      </div>`;
+    }
+    const pl = px!=null ? (px/E-1)*100 : null;
+    const plUsd = (px!=null && qty) ? (px-E)*qty : null;
+    const be = E*1.001;
+    const lv = buildLevels(sym, px!=null?px:E) || {up:[],dn:[]};
+
+    const upRows = lv.up.map(t=>{
+      const tpl = (t.price/E-1)*100;
+      const usd = qty ? (t.price-E)*qty : null;
+      const isNext = px!=null && t.price>px;   // first one above price gets highlighted by CSS below via index
+      return { t, tpl, usd };
+    });
+    // mark the first target strictly above current price as "next"
+    let nextIdx = upRows.findIndex(r=>px!=null && r.t.price>px);
+
+    const upHtml = upRows.map((r,i)=>`
+      <tr class="${i===nextIdx?'lvl-next':''} border-b border-white/5">
+        <td class="px-3 py-2 text-gray-300">${r.t.label}<div class="text-[10px] text-gray-600">${r.t.note||''}</div></td>
+        <td class="px-3 py-2 text-right mono">$${fmtPrice(r.t.price)}</td>
+        <td class="px-3 py-2 text-right mono ${pctCol(r.tpl)}">${r.tpl>=0?'+':''}${r.tpl.toFixed(2)}%</td>
+        <td class="px-3 py-2 text-right mono ${pctCol(r.usd)}">${r.usd==null?'—':(r.usd>=0?'+$':'-$')+fmtUsd(Math.abs(r.usd))}</td>
+      </tr>`).join('') || `<tr><td colspan="4" class="px-3 py-3 text-gray-600 text-center">விலைக்கு மேல குறிப்பிடத்தக்க resistance இல்லை</td></tr>`;
+
+    const dnHtml = lv.dn.map(t=>{
+      const dpl = (t.price/E-1)*100;
+      const usd = qty ? (t.price-E)*qty : null;
+      return `<tr class="border-b border-white/5">
+        <td class="px-3 py-2 text-gray-300">${t.label}<div class="text-[10px] text-gray-600">${t.note||''}</div></td>
+        <td class="px-3 py-2 text-right mono">$${fmtPrice(t.price)}</td>
+        <td class="px-3 py-2 text-right mono ${pctCol(dpl)}">${dpl.toFixed(2)}%</td>
+        <td class="px-3 py-2 text-right mono ${pctCol(usd)}">${usd==null?'—':(usd>=0?'+$':'-$')+fmtUsd(Math.abs(usd))}</td>
+      </tr>`;
+    }).join('') || `<tr><td colspan="4" class="px-3 py-3 text-gray-600 text-center">—</td></tr>`;
+
+    const bePl = (be/E-1)*100;
+
+    return `<div class="glass rounded-2xl overflow-hidden" data-card="${p.id}">
+      <!-- top summary -->
+      <div class="p-5 flex flex-wrap items-center gap-x-6 gap-y-3 justify-between border-b border-white/5">
+        <div class="flex items-center gap-3">
+          <div class="font-bold text-xl whitespace-nowrap">${base}<span class="text-gray-600 text-sm">/USDT</span></div>
+          <span class="inline-flex gap-1">${icons}</span>
+        </div>
+        <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">Live</p><p class="text-lg font-bold mono" data-live="${sym}">$${fmtPrice(px)}</p></div>
+        <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">Avg buy</p><p class="text-lg font-bold mono">$${fmtPrice(E)}</p></div>
+        <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">P/L %</p><p class="text-lg font-bold mono ${pctCol(pl)}" data-pl="${sym}">${pl==null?'—':(pl>=0?'+':'')+pl.toFixed(2)+'%'}</p></div>
+        <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">P/L $</p><p class="text-lg font-bold mono ${pctCol(plUsd)}" data-plusd="${sym}">${plUsd==null?(qty?'—':'add qty'):(plUsd>=0?'+$':'-$')+fmtUsd(Math.abs(plUsd))}</p></div>
+        <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">Breakeven</p><p class="text-lg font-bold mono text-gray-300">$${fmtPrice(be)}<span class="text-[10px] text-gray-600"> (${bePl>=0?'+':''}${bePl.toFixed(2)}%)</span></p></div>
+        <button onclick="removePos('${p.id}')" class="text-gray-500 hover:text-danger text-sm self-start">✕</button>
+      </div>
+      <!-- two tables -->
+      <div class="grid md:grid-cols-2 gap-px bg-white/5">
+        <div class="bg-card/60">
+          <p class="px-4 py-2 text-xs font-bold text-success">🎯 Sell targets (மேல)</p>
+          <table class="w-full text-xs"><thead class="text-[10px] text-gray-500 uppercase">
+            <tr><th class="px-3 py-1.5 text-left">Level</th><th class="px-3 py-1.5 text-right">விலை</th><th class="px-3 py-1.5 text-right">P/L%</th><th class="px-3 py-1.5 text-right">P/L$</th></tr>
+          </thead><tbody>${upHtml}</tbody></table>
+        </div>
+        <div class="bg-card/60">
+          <p class="px-4 py-2 text-xs font-bold text-danger">🛡️ Support / risk (கீழ)</p>
+          <table class="w-full text-xs"><thead class="text-[10px] text-gray-500 uppercase">
+            <tr><th class="px-3 py-1.5 text-left">Level</th><th class="px-3 py-1.5 text-right">விலை</th><th class="px-3 py-1.5 text-right">P/L%</th><th class="px-3 py-1.5 text-right">P/L$</th></tr>
+          </thead><tbody>${dnHtml}</tbody></table>
+        </div>
+      </div>
+      <div class="px-5 py-2 text-[11px] text-gray-500">
+        ATR(1d) $${fmtPrice(S.atr)} · SMA20 $${fmtPrice(S.sma20)} · SMA50 $${fmtPrice(S.sma50)} · 30d $${fmtPrice(S.lo30)}–$${fmtPrice(S.hi30)}
+        ${px!=null && S.sma20>px && S.sma50>px ? '· <span class="text-danger">விலை இரு MA-க்கும் கீழே (resistance கனம்)</span>' : ''}
+      </div>
+    </div>`;
+  }
+
+  /* ── live price patch (cheap DOM update without full re-render) ─────────── */
+  function patchLive(sym){
+    const px = LIVE[sym];
+    document.querySelectorAll(`[data-live="${sym}"]`).forEach(el=>el.textContent = '$'+fmtPrice(px));
+    POS.filter(p=>p.sym===sym).forEach(p=>{
+      const pl = (px/p.entry-1)*100;
+      const plUsd = p.qty ? (px-p.entry)*p.qty : null;
+      document.querySelectorAll(`[data-pl="${sym}"]`).forEach(el=>{ el.textContent=(pl>=0?'+':'')+pl.toFixed(2)+'%'; el.className='text-lg font-bold mono '+pctCol(pl); });
+      document.querySelectorAll(`[data-plusd="${sym}"]`).forEach(el=>{ el.textContent= plUsd==null?(p.qty?'—':'add qty'):(plUsd>=0?'+$':'-$')+fmtUsd(Math.abs(plUsd)); el.className='text-lg font-bold mono '+pctCol(plUsd); });
+      checkAlert(p, px);
+    });
+  }
+
+  function checkAlert(p, px){
+    const S = STAT[p.sym]; if(!S||!S.ready) return;
+    const a = ALERTED[p.id] = ALERTED[p.id] || {};
+    const be = p.entry*1.001;
+    if (!a.be && px>=be){ a.be=true; fireAlert(p, px, 'BREAKEVEN', `${p.sym.replace('USDT','')} breakeven $${fmtPrice(be)} reach ஆச்சு (+${((px/p.entry-1)*100).toFixed(1)}%)`); }
+    // first ask wall above entry = TP1
+    const tp1 = walls(S.asks).filter(w=>w.p>p.entry).sort((x,y)=>x.p-y.p)[0];
+    if (tp1 && !a.tp1 && px>=tp1.p){ a.tp1=true; fireAlert(p, px, 'TP1', `${p.sym.replace('USDT','')} TP1 $${fmtPrice(tp1.p)} reach ஆச்சு (+${((px/p.entry-1)*100).toFixed(1)}%)`); }
+  }
+  function fireAlert(p, px, kind, body){
+    if (window.BNAlert) BNAlert.notify({ sym:p.sym, kind, price:px, body });
+    const card = document.querySelector(`[data-card="${p.id}"]`);
+    if (card){ card.classList.remove('flash'); void card.offsetWidth; card.classList.add('flash'); }
+  }
+
+  /* ── websocket: live last price for every position symbol ───────────────── */
+  let ws=null;
+  function wsParams(){ return [...new Set(POS.map(p=>p.sym.toLowerCase()))].map(s=>`${s}@ticker`); }
+  function connect(){
+    const params = wsParams();
+    if (!params.length){ setWs('No positions','bg-gray-600'); return; }
+    ws = new WebSocket('wss://stream.binance.com:9443/stream');
+    ws.onopen = () => {
+      setWs('Live','bg-success pulse-dot');
+      ws.send(JSON.stringify({ method:'SUBSCRIBE', params, id:1 }));
+    };
+    ws.onmessage = ev => {
+      let m; try { m=JSON.parse(ev.data); } catch { return; }
+      if (!m.data || !m.data.s || m.data.c==null) return;
+      const sym=m.data.s; LIVE[sym]=+m.data.c; patchLive(sym);
+    };
+    ws.onclose = () => { setWs('Reconnecting…','bg-danger'); setTimeout(connect,3000); };
+    ws.onerror = () => { try{ws.close();}catch{} };
+  }
+  function resubscribe(){
+    if (ws && ws.readyState===1){ try{ ws.close(); }catch{} }   // onclose triggers reconnect with fresh params
+    else connect();
+  }
+  function setWs(t,c){ $('ws-status').textContent=t; $('ws-dot').className='w-2.5 h-2.5 rounded-full '+c; }
+
+  /* ── add / remove ──────────────────────────────────────────────────────── */
+  async function addPos(){
+    const sym = $('in-sym').value.trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
+    const entry = parseFloat($('in-entry').value);
+    const qty = parseFloat($('in-qty').value);
+    const err = (m)=>{ const e=$('form-err'); e.textContent=m; e.classList.remove('hidden'); };
+    $('form-err').classList.add('hidden');
+    if (!sym) return err('Coin symbol போடுங்க (e.g. LTCUSDT).');
+    if (!(entry>0)) return err('சரியான avg buy price போடுங்க.');
+    // validate symbol exists by probing the ticker
+    try { const t = await getJSON(`https://api.binance.com/api/v3/ticker/price?symbol=${sym}`); LIVE[sym]=+t.price; }
+    catch { return err(`${sym} Binance-ல கிடைக்கல. Symbol சரிபாருங்க (USDT pair).`); }
+    const id = sym+'-'+Date.now();
+    POS.push({ id, sym, entry, qty: qty>0?qty:null });
+    savePos(POS);
+    $('in-sym').value=''; $('in-entry').value=''; $('in-qty').value='';
+    await refreshStat(sym);
+    render();
+    resubscribe();
+  }
+  function removePos(id){
+    POS = POS.filter(p=>p.id!==id); savePos(POS); delete ALERTED[id];
+    render(); resubscribe();
+  }
+  window.removePos = removePos;
+
+  /* ── periodic refresh of static analysis (walls move) ──────────────────── */
+  setInterval(async () => {
+    const syms = [...new Set(POS.map(p=>p.sym))];
+    for (const s of syms) await refreshStat(s);
+    if (syms.length) render();
+  }, 20000);
+
+  /* ── boot ──────────────────────────────────────────────────────────────── */
+  $('btn-add').addEventListener('click', addPos);
+  ['in-sym','in-entry','in-qty'].forEach(id => $(id).addEventListener('keydown', e=>{ if(e.key==='Enter') addPos(); }));
+  (async () => {
+    render();
+    const syms = [...new Set(POS.map(p=>p.sym))];
+    await Promise.all(syms.map(refreshStat));
+    render();
+    connect();
+  })();
+  </script>
+  <script src="/alert-kit.js"></script>
+  <script src="/nav.js"></script>
+</body>
+</html>

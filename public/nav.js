@@ -96,6 +96,7 @@ window.bnQuickTradeLinkHtml = function (sym, opts) {
         { href: '/active-monitors.html',   label: 'Active Monitors',  icon: '🎛️', desc: 'Currently held positions' },
         { href: '/pending-monitor.html',   label: 'Pending Buys',     icon: '⏳', desc: 'Limit orders waiting to fill' },
         { href: '/spot.html',              label: 'Spot Tickers',     icon: '📋', desc: 'Top movers + volume leaders' },
+        { href: '/position-planner.html',  label: 'Position Planner', icon: '💼', desc: 'Coin வாங்கின பின் live P/L + sell targets + support (client-side WS)', highlight: true },
         { href: '/metrics.html',           label: 'Metrics',          icon: '📈', desc: 'Aggregate trade stats' },
       ],
     },
