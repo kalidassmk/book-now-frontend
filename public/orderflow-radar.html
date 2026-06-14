@@ -385,7 +385,7 @@
       const t1t = st.t1==='PASS' ? '✓' : st.t1==='FAIL' ? '✗' : '…';
       return `<tr data-sym="${sym}" class="st-${st.status} border-b border-white/5 hover:bg-white/5">
         <td class="px-3 py-2.5">${rhythmBadge(st.status)}</td>
-        <td class="px-3 py-2.5 font-semibold">${sym.replace('USDT','')}<span class="text-gray-600 text-xs">/USDT</span></td>
+        <td class="px-3 py-2.5 font-semibold whitespace-nowrap">${sym.replace('USDT','')}<span class="text-gray-600 text-xs">/USDT</span><span class="ml-2 inline-flex gap-1 align-middle">${window.bnBinanceLinkHtml ? window.bnBinanceLinkHtml(sym, {compact:true}) : ''}</span></td>
         <td class="px-3 py-2.5 text-right mono">${fmtPrice(st.price)}</td>
         <td class="px-3 py-2.5 text-right mono ${st.vs1m>=VS_GATE?'text-success':'text-gray-400'}">${st.vs1m==null?'—':st.vs1m.toFixed(1)+'×'}</td>
         <td class="px-3 py-2.5 text-right mono font-semibold ${st.breadth>=BREADTH?'text-success':'text-gray-400'}">${st.breadth==null?'—':st.breadth.toFixed(1)+'×'}</td>
