@@ -26,6 +26,8 @@
     @keyframes flash { 0% { background: rgba(14,203,129,0.30); } 100% { background: transparent; } }
     .flash { animation: flash 1.2s ease-out; }
     @keyframes pulseDot { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #sync-spin { display: inline-block; }
     .pulse-dot { animation: pulseDot 1.4s ease-in-out infinite; }
     input, select { background:#0b0e11; border:1px solid rgba(255,255,255,.12); border-radius:10px; padding:8px 10px; color:#eaecef; }
     input:focus, select:focus { outline:none; border-color:#f0b90b; }
@@ -42,11 +44,15 @@
           <div class="w-11 h-11 gradient-brand rounded-xl flex items-center justify-center text-bg font-black text-2xl shadow-lg shadow-brand/20">💼</div>
           <div>
             <h1 class="text-2xl font-bold tracking-tight">Position <span class="text-brand">Planner</span></h1>
-            <p class="text-xs text-gray-500">வாங்கின coin-ஐ சேர் → live P/L + sell target + support levels. உங்க browser-ல இருந்தே Binance — trading server-ஐ பாதிக்காது.</p>
+            <p class="text-xs text-gray-500">உங்க Binance holdings auto-pull → avg buy + live P/L + sell target + support. Manual-ஆ type பண்ண வேணாம். <span class="text-gray-600">(Live price உங்க browser-ல இருந்து; holdings+avg cost உங்க account-ல இருந்து.)</span></p>
           </div>
         </div>
       </div>
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-3 flex-wrap">
+        <button id="btn-sync" class="glass rounded-xl px-4 py-2 flex items-center gap-2 text-xs font-semibold text-brand hover:brightness-125 transition" title="உங்க Binance account-ல இருந்து holdings-ஐ auto pull பண்ணு">
+          <span id="sync-spin">🔄</span><span id="sync-label">Binance holdings pull</span>
+        </button>
+        <span id="sync-status" class="text-[11px] text-gray-500"></span>
         <div class="glass rounded-xl px-4 py-2 flex items-center gap-2">
           <span id="ws-dot" class="w-2.5 h-2.5 rounded-full bg-gray-600"></span>
           <span id="ws-status" class="text-xs font-semibold text-gray-400">—</span>
@@ -89,7 +95,7 @@
     <!-- Positions -->
     <div id="positions" class="grid gap-6"></div>
     <div id="empty" class="glass rounded-2xl p-10 text-center text-gray-500 text-sm">
-      இன்னும் position இல்லை. மேலே coin + avg buy price சேர்த்து தொடங்குங்க. 💼
+      <span id="empty-msg">உங்க Binance account-ல holdings எதுவும் இல்ல (USDT மட்டும்). Coin வாங்கினா இங்க தானா வரும். 💼<br><span class="text-gray-600 text-xs">அல்லது மேலே manual-ஆ ஒரு coin / limit-buy சேர்க்கலாம்.</span></span>
     </div>
 
     <!-- Methodology (Tamil) -->
@@ -131,7 +137,7 @@
   /* ── persistent positions ──────────────────────────────────────────────── */
   const LS_KEY = 'bn_positions';
   function loadPos(){ try { return JSON.parse(localStorage.getItem(LS_KEY)||'[]'); } catch { return []; } }
-  function savePos(arr){ localStorage.setItem(LS_KEY, JSON.stringify(arr)); }
+  function savePos(arr){ localStorage.setItem(LS_KEY, JSON.stringify(arr.filter(p=>!p.auto))); }  // auto (Binance-pulled) holdings are not persisted — they are re-pulled live
   let POS = loadPos();                 // [{id,sym,entry,qty}]
   const STAT = {};                     // sym -> {atr,sma20,sma50,hi7,lo7,hi30,lo30,bids,asks,ready}
   const LIVE = {};                     // sym -> last price
@@ -304,6 +310,8 @@
     const E = p.entry, qty = p.qty;
     const base = sym.replace('USDT','').replace('FDUSD','').replace('USDC','');
     const icons = window.bnBinanceLinkHtml ? window.bnBinanceLinkHtml(sym, {compact:true}) : '';
+    const auto = !!p.auto;
+    const autoBadge = auto ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-brand/15 text-brand font-semibold" title="உங்க Binance account-ல இருந்து auto pull">⟲ Binance</span>` : '';
     if (!S || !S.ready){
       return `<div class="glass rounded-2xl p-5" data-card="${p.id}">
         <div class="flex items-center justify-between">
@@ -355,13 +363,14 @@
         <div class="flex items-center gap-3">
           <div class="font-bold text-xl whitespace-nowrap">${base}<span class="text-gray-600 text-sm">/USDT</span></div>
           <span class="inline-flex gap-1">${icons}</span>
+          ${autoBadge}
         </div>
         <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">Live</p><p class="text-lg font-bold mono" data-live="${sym}">$${fmtPrice(px)}</p></div>
         <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">Avg buy</p><p class="text-lg font-bold mono">$${fmtPrice(E)}</p></div>
         <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">P/L %</p><p class="text-lg font-bold mono ${pctCol(pl)}" data-pl="${sym}">${pl==null?'—':(pl>=0?'+':'')+pl.toFixed(2)+'%'}</p></div>
         <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">P/L $</p><p class="text-lg font-bold mono ${pctCol(plUsd)}" data-plusd="${sym}">${plUsd==null?(qty?'—':'add qty'):(plUsd>=0?'+$':'-$')+fmtUsd(Math.abs(plUsd))}</p></div>
         <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">Breakeven</p><p class="text-lg font-bold mono text-gray-300">$${fmtPrice(be)}<span class="text-[10px] text-gray-600"> (${bePl>=0?'+':''}${bePl.toFixed(2)}%)</span></p></div>
-        <button onclick="removePos('${p.id}')" class="text-gray-500 hover:text-danger text-sm self-start">✕</button>
+        ${auto ? '' : `<button onclick="removePos('${p.id}')" class="text-gray-500 hover:text-danger text-sm self-start">✕</button>`}
       </div>
       <!-- two tables -->
       <div class="grid md:grid-cols-2 gap-px bg-white/5">
@@ -498,6 +507,69 @@
   window.markBought = markBought;
   window.removePos = removePos;
 
+  /* ── auto-pull holdings from the user's Binance account (via backend) ────── */
+  // Backend (booknow) already authenticates to Binance for trading. We reuse its
+  // read endpoints so the user never types anything:
+  //   GET /api/wallet/balances              → spot balances (cached in Redis, no Binance weight)
+  //   GET /api/v1/binance/trade-history?symbol=X → signed myTrades → avg buy (cost basis)
+  const STABLES = new Set(['USDT','FDUSD','USDC','BUSD','TUSD','DAI','USDP','EUR','TRY','BRL']);
+  function setSync(msg, spinning){
+    const s=$('sync-status'); if(s) s.textContent = msg||'';
+    const sp=$('sync-spin'); if(sp) sp.style.animation = spinning ? 'spin 1s linear infinite' : '';
+  }
+  // moving-average cost basis of the CURRENTLY held quantity, from full trade history
+  function avgCostFromTrades(trades){
+    if(!Array.isArray(trades) || !trades.length) return null;
+    const ts = trades.slice().sort((a,b)=>(+a.time)-(+b.time));
+    let q=0, avg=0;
+    for(const t of ts){
+      const price=+t.price, amt=+t.qty;
+      if(!(price>0)||!(amt>0)) continue;
+      const buy = (t.isBuyer===true) || (t.side==='BUY');
+      if(buy){ avg=(avg*q + price*amt)/(q+amt); q+=amt; }
+      else   { q-=amt; if(q<=1e-9){ q=0; avg=0; } }
+    }
+    return avg>0 ? avg : null;
+  }
+  async function fetchHoldings(){
+    const r = await fetch('/api/wallet/balances');
+    if(!r.ok) throw new Error('balances HTTP '+r.status);
+    const data = await r.json();
+    const arr = Array.isArray(data) ? data : (data && Array.isArray(data.balances) ? data.balances : []);
+    return arr.map(b=>({
+      asset: (b.asset||b.a||'').toUpperCase(),
+      qty: (+(b.free||b.f||0)) + (+(b.locked||b.l||0)),
+    })).filter(b=>b.asset && !STABLES.has(b.asset) && b.qty>0);
+  }
+  let syncing=false;
+  async function syncHoldings(){
+    if(syncing) return; syncing=true;
+    setSync('Binance holdings ஏற்றுகிறது…', true);
+    let holds;
+    try { holds = await fetchHoldings(); }
+    catch(e){ setSync('Holdings fetch fail: '+(e.message||e), false); syncing=false; return; }
+    // resolve each asset → USDT pair, compute avg cost, build auto positions
+    const autos=[];
+    for(const h of holds){
+      const sym = h.asset+'USDT';
+      // skip dust: ignore positions worth < $1 (need a price; use last ticker)
+      let px=null; try{ const t=await getJSON(`https://api.binance.com/api/v3/ticker/price?symbol=${sym}`); px=+t.price; LIVE[sym]=px; }catch{ continue; } // not a USDT pair → skip
+      if(px*h.qty < 1) continue;
+      let avg=null;
+      try{ const tr=await (await fetch(`/api/v1/binance/trade-history?symbol=${sym}`)).json(); avg=avgCostFromTrades(tr); }catch{}
+      autos.push({ id:'auto-'+sym, sym, entry: avg!=null?avg:px, qty:h.qty, type:'HELD', auto:true, noCost: avg==null });
+    }
+    // merge: keep manual LIMIT + manual HELD whose sym isn't auto-pulled; replace all autos
+    const autoSyms = new Set(autos.map(a=>a.sym));
+    POS = POS.filter(p=>!p.auto).filter(p=>!(p.type==='HELD' && autoSyms.has(p.sym))).concat(autos);
+    savePos(POS);
+    setSync(autos.length ? `${autos.length} holding${autos.length>1?'s':''} pulled ✓` : 'Holdings இல்ல (USDT மட்டும்)', false);
+    await Promise.all([...autoSyms].map(refreshStat));
+    render(); resubscribe();
+    syncing=false;
+  }
+  window.syncHoldings = syncHoldings;
+
   /* ── periodic refresh of static analysis (walls move) ──────────────────── */
   setInterval(async () => {
     const syms = [...new Set(POS.map(p=>p.sym))];
@@ -509,6 +581,7 @@
   $('btn-add').addEventListener('click', addPos);
   $('tab-held').addEventListener('click', ()=>setMode('HELD'));
   $('tab-limit').addEventListener('click', ()=>setMode('LIMIT'));
+  $('btn-sync').addEventListener('click', syncHoldings);
   ['in-sym','in-entry','in-qty'].forEach(id => $(id).addEventListener('keydown', e=>{ if(e.key==='Enter') addPos(); }));
   (async () => {
     render();
@@ -516,6 +589,8 @@
     await Promise.all(syms.map(refreshStat));
     render();
     connect();
+    syncHoldings();          // auto-pull the user's real Binance holdings on load
+    setInterval(syncHoldings, 120000);   // re-sync every 2 min (qty/avg refresh from account)
   })();
   </script>
   <script src="/alert-kit.js"></script>
