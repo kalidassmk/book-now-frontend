@@ -3488,24 +3488,46 @@ function normHistEvent(kind, ev) {
 }
 
 // source → [ {client, key} ] map of which detector lists feed each page
+//   pump        → ONLY pump-radar.html ARMED+SIGNAL captures
+//   orderflow   → ONLY orderflow-radar.html BUY+CONFIRM captures
+//   buysignals  → coin.html "Top 5 Latest Buy Signals" detectors (strong bucket)
 function historyKeySpec(source) {
     if (source === 'orderflow') {
         return [
-            ['redis', 'FAST_SCALPER:DETECTIONS',    'fast_scalper'],
-            ['redis', 'VIRTUAL_SCALPER:DETECTIONS', 'virtual_scalper'],
-            ['redis', 'ORDERFLOW_RADAR:SIGNALS',    'orderflow_radar'],
+            ['redis', 'ORDERFLOW_RADAR:SIGNALS', 'orderflow_radar'],
+        ];
+    }
+    if (source === 'buysignals') {
+        return [
+            ['redis',        'PUMP_RIDER:DETECTIONS',     'pump_rider'],
+            ['redis',        'INSTANT_PUMP:DETECTIONS',   'instant_pump'],
+            ['redis',        'LMC:DETECTIONS',            'lmc'],
+            ['redis',        'VSP:DETECTIONS',            'vsp'],
+            ['redis',        'CCP:DETECTIONS',            'ccp'],
+            ['redisAnalyse', 'EARLY_PUMP:DETECTIONS',     'early_pump'],
         ];
     }
     // default: pump
     return [
-        ['redis',        'PUMP_RIDER:DETECTIONS',   'pump_rider'],
-        ['redis',        'LMC:DETECTIONS',          'lmc'],
-        ['redis',        'INSTANT_PUMP:DETECTIONS', 'instant_pump'],
-        ['redis',        'VSP:DETECTIONS',          'vsp'],
-        ['redis',        'CCP:DETECTIONS',          'ccp'],
-        ['redisAnalyse', 'EARLY_PUMP:DETECTIONS',   'early_pump'],
-        ['redis',        'PUMP_RADAR:SIGNALS',      'pump_radar'],
+        ['redis', 'PUMP_RADAR:SIGNALS', 'pump_radar'],
     ];
+}
+
+// Strong-bucket BUY filter — ported from coin.html categorize() so that the
+// buysignals history mirrors exactly the "🎯 Top 5 Latest Buy Signals" panel.
+function isStrongBuy(kind, ev) {
+    const lbl = String(ev.label || ev.tier || ev.rule_label || '').toUpperCase();
+    const tier = String(ev.tier || '').toUpperCase();
+    const score = +(ev.score ?? ev.pts ?? 0);
+    switch (kind) {
+        case 'instant_pump': return true;
+        case 'pump_rider':   return tier === 'STRONG' || tier === 'NORMAL';
+        case 'early_pump':   return score >= 80;
+        case 'vsp':          return lbl.startsWith('BIG_PUMP');
+        case 'lmc':          return lbl === 'EXPLOSIVE_PUMP';
+        case 'ccp':          return lbl === 'CALM_REVERSAL_UP';
+        default:             return false;   // fast_scalper / virtual_scalper = watch, not strong
+    }
 }
 
 app.post('/api/history/capture', async (req, res) => {
@@ -3549,7 +3571,8 @@ app.post('/api/history/capture', async (req, res) => {
 
 app.get('/api/history/signals', async (req, res) => {
     try {
-        const source = (req.query.source === 'orderflow') ? 'orderflow' : 'pump';
+        const q = req.query.source;
+        const source = (q === 'orderflow' || q === 'buysignals') ? q : 'pump';
         const dates = historyDateList(req.query.from, req.query.to);
         const symbol = req.query.symbol ? String(req.query.symbol).toUpperCase() : null;
         const minPrice  = req.query.minPrice  != null ? +req.query.minPrice  : null;
@@ -3567,6 +3590,7 @@ app.get('/api/history/signals', async (req, res) => {
                 for (const r of raw) {
                     let ev; try { ev = JSON.parse(r); } catch (_) { continue; }
                     if (!ev || !ev.ts) continue;
+                    if (source === 'buysignals' && !isStrongBuy(kind, ev)) continue;
                     const n = normHistEvent(kind, ev);
                     if (!n.symbol) continue;
                     if (symbol && n.symbol !== symbol) continue;
