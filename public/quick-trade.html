@@ -442,7 +442,7 @@
     <!-- iter131 — Wallet strip: USDT free + base-asset held, polled every 10s -->
     <div class="wallet-strip" title="Your free spot balances">
       <span>💰</span>
-      <span>USDT</span><span class="v free" id="ws-usdt">—</span>
+      <span id="ws-quote-label">USDT</span><span class="v free" id="ws-usdt">—</span>
       <span>·</span>
       <span id="ws-base-asset">—</span><span class="v held" id="ws-base">—</span>
     </div>
@@ -518,7 +518,7 @@
             <div class="field-label"><span>Price</span><span id="best-bid-hint" style="cursor:pointer">best bid → tap</span></div>
             <div class="field-input">
               <input id="f-price" type="number" step="any" placeholder="0.0000" inputmode="decimal" />
-              <span class="unit" id="f-price-unit">USDT</span>
+              <span class="unit quote-unit" id="f-price-unit">USDT</span>
             </div>
           </div>
           <div class="field">
@@ -529,10 +529,10 @@
             </div>
           </div>
           <div class="field">
-            <div class="field-label"><span>Total</span><span class="unit">USDT</span></div>
+            <div class="field-label"><span>Total</span><span class="unit quote-unit">USDT</span></div>
             <div class="field-input">
               <input id="f-total" type="number" step="any" placeholder="0" inputmode="decimal" />
-              <span class="unit">USDT</span>
+              <span class="unit quote-unit">USDT</span>
             </div>
           </div>
           <!-- iter131 — TOP row: fixed USDT amounts for scaling-in batches
@@ -909,9 +909,12 @@ function updateButtonLabel(){
   btn.className = 'submit-btn ' + (S.side === 'BUY' ? 'buy' : 'sell');
 }
 function updateUnits(){
-  const base = S.symbol.endsWith('USDT') ? S.symbol.slice(0, -4) : S.symbol;
+  const base = baseAsset();
+  const quote = quoteAsset();
   $('f-qty-unit').textContent = base;
   $('f-qty-unit2').textContent = base;
+  // iter155 — quote-currency labels (Price / Total units) track the pair.
+  document.querySelectorAll('.quote-unit').forEach(el => el.textContent = quote);
 }
 
 // ── Sync price ↔ qty ↔ total ────────────────────────────────────────
@@ -962,24 +965,35 @@ async function fetchWallet(){
     const body = await r.json();
     const arr = (body && body.balances) || [];
     const base = baseAsset();
-    const u = arr.find(b => (b.asset || '').toUpperCase() === 'USDT');
+    // iter155 — fund BUY from the pair's actual quote asset (USDT/USDC/FDUSD).
+    const u = arr.find(b => (b.asset || '').toUpperCase() === quoteAsset());
     const x = arr.find(b => (b.asset || '').toUpperCase() === base);
-    S.usdtFree = parseFloat((u && u.free) || 0) || 0;
+    S.usdtFree = parseFloat((u && u.free) || 0) || 0;   // quote-asset free
     S.baseFree = parseFloat((x && x.free) || 0) || 0;
     renderWalletStrip();
     renderWalletHint();
   } catch(_) {}
 }
 
+// iter155 — multi-quote support. The operator now trades USDC / FDUSD
+// pairs manually, not just USDT. QUOTES is the recognised quote-asset
+// list (longest-first so FDUSD is matched before the shorter USD quotes).
+const QUOTES = ['FDUSD','USDC','USDT','BUSD','TUSD','BTC','BNB','ETH'];
+function quoteAsset(){
+  const s = (S.symbol || '').toUpperCase();
+  for (const q of QUOTES) {
+    if (s.endsWith(q) && s.length > q.length) return q;
+  }
+  return 'USDT';
+}
 function baseAsset(){
   const s = (S.symbol || '').toUpperCase();
-  for (const q of ['USDT','USDC','FDUSD','BUSD','BTC','BNB','ETH']) {
-    if (s.endsWith(q) && s.length > q.length) return s.slice(0, -q.length);
-  }
-  return s;
+  const q = quoteAsset();
+  return (s.endsWith(q) && s.length > q.length) ? s.slice(0, -q.length) : s;
 }
 
 function renderWalletStrip(){
+  const ql = $('ws-quote-label'); if (ql) ql.textContent = quoteAsset();
   $('ws-usdt').textContent = '$' + (S.usdtFree || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   $('ws-base-asset').textContent = baseAsset();
   $('ws-base').textContent = (S.baseFree || 0).toLocaleString(undefined, { maximumFractionDigits: 6 });
@@ -991,7 +1005,7 @@ function renderWalletHint(){
   if (!txt) return;
   const base = baseAsset();
   if (S.side === 'BUY') {
-    txt.innerHTML = `USDT free: <span class="hint-val free">$${(S.usdtFree || 0).toFixed(2)}</span>`;
+    txt.innerHTML = `${quoteAsset()} free: <span class="hint-val free">$${(S.usdtFree || 0).toFixed(2)}</span>`;
     if (pct) {
       const total = parseFloat($('f-total').value) || 0;
       const p = S.usdtFree > 0 ? (total / S.usdtFree) * 100 : 0;
@@ -1074,7 +1088,8 @@ function computeOpenLIFO(rawData){
       const p = parseFloat(t.price) || 0;
       const sym = String(t.symbol || '').toUpperCase();
       const asset = String(t.commissionAsset || '').toUpperCase();
-      const base = sym.endsWith('USDT') ? sym.slice(0, -4) : '';
+      let base = '';
+      for (const q of QUOTES) { if (sym.endsWith(q) && sym.length > q.length) { base = sym.slice(0, -q.length); break; } }
       if (asset === 'USDT')                        g.fees += c;
       else if (asset === base && p > 0)            g.fees += c * p;
       else if (asset === 'BNB' && (window.__bnbUsdtPrice || 0) > 0) {
@@ -1245,15 +1260,16 @@ setInterval(() => fetchPosition(S.symbol), 20_000);
 function applySymbol(raw){
   let s = normalizeSym(raw);
   if (!s) return;
-  if (!s.endsWith('USDT') && !s.endsWith('USDC') && !s.endsWith('BTC') && !s.endsWith('ETH') && !s.endsWith('BNB')) {
+  // iter155 — recognise every supported quote (FDUSD/USDC/USDT/…); only
+  // default-append USDT when the operator typed a bare base symbol.
+  if (!QUOTES.some(q => s.endsWith(q) && s.length > q.length)) {
     s = s + 'USDT';
   }
   S.symbol = s;
   $('sym-input').value = s;
+  const _q = quoteAsset();
   $('bn-link').href = 'https://www.binance.com/en/trade/'
-    + (s.endsWith('USDT') ? s.slice(0,-4) + '_USDT'
-     : s.endsWith('USDC') ? s.slice(0,-4) + '_USDC'
-     : s) + '?type=spot';
+    + s.slice(0, -_q.length) + '_' + _q + '?type=spot';
   // Update URL bar so this is shareable.
   const u = new URL(window.location.href);
   u.searchParams.set('sym', s);
