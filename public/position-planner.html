@@ -981,8 +981,11 @@
     setInterval(syncHoldings, 120000);   // re-sync every 2 min (qty/avg refresh from account)
     loadRepricer();          // Buy Re-pricer watchlist + live chase-down trace
     setInterval(loadRepricer, 4000);     // poll dry-run trace every 4s
-    loadTopSignals();        // top-5 combined signal coins (all sources) → limit-buy check cards
-    setInterval(loadTopSignals, 60000);  // refresh signal candidates every 60s
+    // NOTE: auto top-5 signal coins display removed by request — this page now
+    // shows ONLY coins the user actually holds (bought). SIG stays empty so the
+    // 🔥 signal section never renders. Manual "Limit buy check" tab still works.
+    SIG = [];
+    renderSignals();         // hides the (now empty) signal section
   })();
   </script>
   <script src="/alert-kit.js"></script>
