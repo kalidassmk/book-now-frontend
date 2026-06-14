@@ -1607,6 +1607,87 @@ app.get('/api/v1/config', async (req, res) => {
     }
 });
 
+// iter167 (2026-06-14): Smart Buy Re-pricer (chase-down) — DRY-RUN.
+// Watchlist management + dry-run signal/state read. The backend
+// buy_repricer.py subprocess owns the algorithm; these endpoints only
+// read/write Redis keys it shares. No real orders are placed here.
+const REPRICER_WATCH_KEY = 'BUY_REPRICER:WATCH';
+const REPRICER_STATE_KEY = 'BUY_REPRICER:STATE';
+const REPRICER_STATUS_KEY = 'BUY_REPRICER:STATUS';
+
+// List subscribed coins.
+app.get('/api/repricer/watch', async (req, res) => {
+    try {
+        const raw = await redis.hgetall(REPRICER_WATCH_KEY) || {};
+        const out = {};
+        for (const [sym, val] of Object.entries(raw)) {
+            try { out[sym] = JSON.parse(val); } catch { /* skip */ }
+        }
+        res.json(out);
+    } catch (err) {
+        res.status(500).json({ error: 'watch read failed: ' + err.message });
+    }
+});
+
+// Subscribe a coin (with the user's resting-buy reference price).
+app.post('/api/repricer/watch', async (req, res) => {
+    try {
+        const symbol = String((req.body && req.body.symbol) || '').toUpperCase().trim();
+        const refPrice = Number((req.body && req.body.ref_price) || 0);
+        if (!/^[A-Z0-9]{4,20}$/.test(symbol)) return res.status(400).json({ error: 'invalid symbol' });
+        if (!(refPrice > 0)) return res.status(400).json({ error: 'ref_price must be > 0' });
+        const entry = { ref_price: refPrice, added_ts: Date.now() };
+        await redis.hset(REPRICER_WATCH_KEY, symbol, JSON.stringify(entry));
+        res.json({ ok: true, symbol, ...entry });
+    } catch (err) {
+        res.status(500).json({ error: 'watch add failed: ' + err.message });
+    }
+});
+
+// Unsubscribe a coin.
+app.delete('/api/repricer/watch/:symbol', async (req, res) => {
+    try {
+        const symbol = String(req.params.symbol || '').toUpperCase().trim();
+        await redis.hdel(REPRICER_WATCH_KEY, symbol);
+        await redis.hdel(REPRICER_STATE_KEY, symbol);
+        res.json({ ok: true, symbol });
+    } catch (err) {
+        res.status(500).json({ error: 'watch remove failed: ' + err.message });
+    }
+});
+
+// Per-coin live state (effective price, floor, last action, flow).
+app.get('/api/repricer/state', async (req, res) => {
+    try {
+        const raw = await redis.hgetall(REPRICER_STATE_KEY) || {};
+        const out = {};
+        for (const [sym, val] of Object.entries(raw)) {
+            try { out[sym] = JSON.parse(val); } catch { /* skip */ }
+        }
+        const status = await redis.hgetall(REPRICER_STATUS_KEY) || {};
+        res.json({ state: out, status });
+    } catch (err) {
+        res.status(500).json({ error: 'state read failed: ' + err.message });
+    }
+});
+
+// Dry-run reprice signal history for a date (default today UTC).
+app.get('/api/repricer/signals', async (req, res) => {
+    try {
+        const limit = Math.min(parseInt(req.query.limit, 10) || 500, 5000);
+        let date = String(req.query.date || '').trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+            date = new Date().toISOString().slice(0, 10);
+        }
+        const raw = await redis.lrange(`BUY_REPRICER:SIGNALS:${date}`, 0, limit - 1);
+        const rows = [];
+        for (const r of raw) { try { rows.push(JSON.parse(r)); } catch { /* skip */ } }
+        res.json({ date, count: rows.length, signals: rows });
+    } catch (err) {
+        res.status(500).json({ error: 'signals read failed: ' + err.message });
+    }
+});
+
 // iter 44 (2026-05-15): Backtest report endpoint.
 // Returns the latest backtest comparison (actual vs iter43+iter38+iter44+iter39
 // simulated) for the dashboard /backtest.html page.

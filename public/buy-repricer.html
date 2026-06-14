@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Buy Re-pricer (Dry-Run) · BookNow</title>
+<style>
+  :root {
+    --bg:#0b0e14; --panel:#141925; --panel2:#1b2130; --border:#232b3d;
+    --text:#e6e9f0; --muted:#8a93a6; --green:#16c784; --red:#ea3943;
+    --amber:#f0b90b; --blue:#4b9fff; --accent:#f0b90b;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 24px; border-bottom:1px solid var(--border); background:var(--panel); position:sticky; top:0; z-index:10; }
+  header .left { display:flex; align-items:center; gap:16px; }
+  header h1 { font-size:17px; margin:0; font-weight:600; }
+  header h1 span { color:var(--accent); }
+  a.back { color:var(--muted); text-decoration:none; font-size:13px; padding:6px 12px; border:1px solid var(--border); border-radius:8px; }
+  a.back:hover { color:var(--text); background:var(--panel2); }
+  main { padding:24px; max-width:1500px; margin:0 auto; }
+  .note { font-size:12px; color:var(--muted); line-height:1.6; margin:0 0 16px; padding:12px 16px; background:var(--panel); border:1px solid var(--border); border-radius:10px; }
+  .banner { font-size:13px; font-weight:600; margin:0 0 16px; padding:10px 16px; border-radius:10px; background:rgba(240,185,11,.12); border:1px solid var(--amber); color:var(--amber); }
+  .banner.live { background:rgba(234,57,67,.12); border-color:var(--red); color:#ff8a92; }
+  .row { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; margin-bottom:16px; padding:14px 16px; background:var(--panel); border:1px solid var(--border); border-radius:10px; }
+  .field { display:flex; flex-direction:column; gap:4px; }
+  .field label { font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
+  .field input { background:var(--panel2); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:8px 10px; font-size:13px; font-family:inherit; }
+  .field input:focus { outline:none; border-color:var(--accent); }
+  button.go { background:var(--accent); color:#1a1400; border:none; border-radius:8px; padding:9px 18px; font-weight:700; font-size:13px; cursor:pointer; }
+  button.go:hover { filter:brightness(1.08); }
+  button.ghost { background:var(--panel2); color:var(--text); border:1px solid var(--border); }
+  button.danger { background:rgba(234,57,67,.14); color:#ff8a92; border:1px solid var(--red); border-radius:7px; padding:5px 10px; font-size:12px; cursor:pointer; }
+  h2 { font-size:14px; margin:22px 0 10px; color:var(--text); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  thead th { background:var(--panel2); color:var(--muted); text-align:right; padding:9px 12px; font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.5px; border-bottom:1px solid var(--border); white-space:nowrap; }
+  thead th:first-child, tbody td:first-child { text-align:left; }
+  tbody td { text-align:right; padding:8px 12px; border-bottom:1px solid var(--border); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  tbody tr:hover { background:var(--panel); }
+  .pos { color:var(--green); } .neg { color:var(--red); }
+  .sym { font-weight:700; color:var(--blue); }
+  .pill { font-size:11px; padding:2px 8px; border-radius:6px; border:1px solid var(--border); }
+  .pill.REPRICE_DOWN { background:rgba(234,57,67,.14); color:#ff8a92; border-color:var(--red); }
+  .pill.FLOOR_REACHED { background:rgba(240,185,11,.14); color:var(--amber); border-color:var(--amber); }
+  .pill.HOLD { background:rgba(22,199,132,.12); color:var(--green); border-color:var(--green); }
+  .pill.WATCH, .pill.EVAL, .pill.SELL_DOMINANT_COOLDOWN { background:var(--panel2); color:var(--muted); }
+  .empty { text-align:center; color:var(--muted); padding:30px; }
+  .err { color:#ffb3b8; font-size:12px; }
+  .stat { font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <div class="left">
+    <h1>Buy <span>Re-pricer</span> · Dry-Run</h1>
+    <span id="status" class="stat"></span>
+  </div>
+  <div style="display:flex; gap:10px;">
+    <a class="back" href="/">← Dashboard</a>
+  </div>
+</header>
+<main>
+  <p class="banner" id="banner">🧪 DRY-RUN — இது நிஜ order-ஐ place/cancel செய்யாது. என்ன reprice பண்ணும்னு மட்டும் கணக்கிட்டு கீழே காட்டும்.</p>
+  <p class="note">
+    📉 <b>Smart Buy Re-pricer (chase-down)</b> — subscribe செஞ்ச coin-களுக்கு taker <b>buy</b> vs <b>sell</b> volume-ஐ கண்காணிக்கும்.
+    sell volume buy-ஐ விட dominate பண்ணும்போது (விலை கீழே போகுது), உங்க resting limit-buy-ஐ <b>எவ்வளவு குறைச்சு</b> மறு-வைக்கணும்னு கணக்கிடும்.
+    Subscribe பண்ணும்போது உங்க order இருக்கிற <b>reference விலையை</b> குடுங்க. Floor = original-ல இருந்து <b>max chase %</b> கீழே மட்டுமே (அதுக்கு மேல துரத்தாது).
+    Threshold-கள் (sell/buy ratio, discount, max chase, cooldown) <b>TRADING_CONFIG</b>-ல `buyRepricer*` keys வழியா மாத்தலாம்.
+  </p>
+
+  <div class="row">
+    <div class="field"><label>Symbol</label><input id="sym" placeholder="e.g. HMSTRUSDT" style="text-transform:uppercase; width:160px;" /></div>
+    <div class="field"><label>Your buy price (ref)</label><input id="ref" type="number" step="any" placeholder="e.g. 0.000174" style="width:160px;" /></div>
+    <button class="go" id="add">Subscribe coin</button>
+    <span id="addErr" class="err"></span>
+  </div>
+
+  <h2>Subscribed coins — live state</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Symbol</th><th>Ref Price</th><th>Effective (now)</th><th>Floor</th>
+        <th>Chase %</th><th>Sell/Buy</th><th>Buy Vol</th><th>Sell Vol</th>
+        <th>Last Action</th><th>Reprices</th><th></th>
+      </tr>
+    </thead>
+    <tbody id="stateRows"><tr><td class="empty" colspan="11">இன்னும் coin subscribe பண்ணலை. மேல symbol + buy price குடுத்து “Subscribe coin” அழுத்துங்க.</td></tr></tbody>
+  </table>
+
+  <h2>Dry-run reprice signals (today)</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th><th>Symbol</th><th>Action</th><th>From → To</th>
+        <th>Chase %</th><th>Sell/Buy</th><th>Buy Vol</th><th>Sell Vol</th><th>Last Price</th>
+      </tr>
+    </thead>
+    <tbody id="sigRows"><tr><td class="empty" colspan="9">இன்னும் signal இல்லை.</td></tr></tbody>
+  </table>
+</main>
+
+<script>
+  const $ = id => document.getElementById(id);
+
+  function fmtPrice(p) {
+    if (p == null || p === '') return '—';
+    const n = Number(p);
+    if (!isFinite(n)) return '—';
+    if (n === 0) return '0';
+    if (n >= 1) return n.toFixed(4);
+    // small prices: show enough significant digits
+    return n.toPrecision(6).replace(/0+$/, '').replace(/\.$/, '');
+  }
+  function fmtVol(v) {
+    const n = Number(v) || 0;
+    if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return n.toFixed(0);
+  }
+  function fmtTime(ts) {
+    const d = new Date(Number(ts));
+    return d.toLocaleString('en-GB', { hour12: false });
+  }
+  function pill(action) {
+    return `<span class="pill ${action}">${action}</span>`;
+  }
+
+  async function addCoin() {
+    $('addErr').textContent = '';
+    const symbol = $('sym').value.toUpperCase().trim();
+    const ref_price = Number($('ref').value);
+    if (!symbol) { $('addErr').textContent = 'symbol தேவை'; return; }
+    if (!(ref_price > 0)) { $('addErr').textContent = 'buy price > 0 தேவை'; return; }
+    try {
+      const r = await fetch('/api/repricer/watch', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol, ref_price }),
+      });
+      const j = await r.json();
+      if (!r.ok) { $('addErr').textContent = j.error || 'failed'; return; }
+      $('sym').value = ''; $('ref').value = '';
+      refreshState();
+    } catch (e) { $('addErr').textContent = String(e); }
+  }
+
+  async function removeCoin(symbol) {
+    try {
+      await fetch('/api/repricer/watch/' + encodeURIComponent(symbol), { method: 'DELETE' });
+      refreshState();
+    } catch (e) { /* ignore */ }
+  }
+
+  async function refreshState() {
+    try {
+      const [stateRes, watchRes] = await Promise.all([
+        fetch('/api/repricer/state').then(r => r.json()),
+        fetch('/api/repricer/watch').then(r => r.json()),
+      ]);
+      const state = stateRes.state || {};
+      const status = stateRes.status || {};
+      const watch = watchRes || {};
+
+      // status line
+      const en = String(status.enabled) === '1';
+      const live = String(status.live_enabled) === '1';
+      const ws = String(status.ws_connected) === '1';
+      $('status').textContent = `${en ? '● dry-run active' : '○ disabled'} · ${ws ? 'WS live' : 'WS down'} · watching ${status.watched || 0}`;
+      $('status').style.color = en ? 'var(--green)' : 'var(--muted)';
+      $('banner').className = live ? 'banner live' : 'banner';
+      if (live) $('banner').textContent = '⚠️ LIVE flag ON — ஆனா Phase-2 execution இன்னும் wire ஆகலை; இப்போதைக்கும் dry-run மட்டும்தான்.';
+
+      // merge watch (subscribed) with state (live data)
+      const syms = Array.from(new Set([...Object.keys(watch), ...Object.keys(state)])).sort();
+      if (!syms.length) {
+        $('stateRows').innerHTML = '<tr><td class="empty" colspan="11">இன்னும் coin subscribe பண்ணலை.</td></tr>';
+        return;
+      }
+      $('stateRows').innerHTML = syms.map(sym => {
+        const st = state[sym] || {};
+        const w = watch[sym] || {};
+        const ref = st.ref_price != null ? st.ref_price : w.ref_price;
+        const eff = st.effective_price != null ? st.effective_price : ref;
+        const chase = (ref && eff) ? ((1 - eff / ref) * 100) : 0;
+        const ratio = st.ratio != null ? st.ratio : '—';
+        const ratioCls = (Number(st.ratio) >= 1.5) ? 'neg' : '';
+        const action = st.last_action || 'WATCH';
+        return `<tr>
+          <td class="sym">${sym}</td>
+          <td>${fmtPrice(ref)}</td>
+          <td>${fmtPrice(eff)}</td>
+          <td>${fmtPrice(st.floor_price)}</td>
+          <td class="${chase > 0 ? 'neg' : ''}">${chase ? '-' + chase.toFixed(2) + '%' : '0%'}</td>
+          <td class="${ratioCls}">${ratio === '—' ? '—' : (ratio >= 999 ? '∞' : ratio + '×')}</td>
+          <td class="pos">${st.buy_vol != null ? fmtVol(st.buy_vol) : '—'}</td>
+          <td class="neg">${st.sell_vol != null ? fmtVol(st.sell_vol) : '—'}</td>
+          <td>${pill(action)}</td>
+          <td>${st.reprice_count || 0}</td>
+          <td><button class="danger" onclick="removeCoin('${sym}')">remove</button></td>
+        </tr>`;
+      }).join('');
+    } catch (e) {
+      $('status').textContent = 'state load error';
+    }
+  }
+
+  async function refreshSignals() {
+    try {
+      const j = await fetch('/api/repricer/signals?limit=300').then(r => r.json());
+      const rows = j.signals || [];
+      if (!rows.length) {
+        $('sigRows').innerHTML = '<tr><td class="empty" colspan="9">இன்னும் signal இல்லை.</td></tr>';
+        return;
+      }
+      $('sigRows').innerHTML = rows.map(s => `<tr>
+        <td>${fmtTime(s.ts)}</td>
+        <td class="sym">${s.symbol}</td>
+        <td>${pill(s.action)}</td>
+        <td>${fmtPrice(s.from_price)} → ${fmtPrice(s.to_price)}</td>
+        <td class="${s.chase_total_pct > 0 ? 'neg' : ''}">${s.chase_total_pct ? '-' + Number(s.chase_total_pct).toFixed(2) + '%' : '0%'}</td>
+        <td class="${Number(s.ratio) >= 1.5 ? 'neg' : ''}">${s.ratio >= 999 ? '∞' : s.ratio + '×'}</td>
+        <td class="pos">${fmtVol(s.buy_vol)}</td>
+        <td class="neg">${fmtVol(s.sell_vol)}</td>
+        <td>${fmtPrice(s.last_price)}</td>
+      </tr>`).join('');
+    } catch (e) { /* ignore */ }
+  }
+
+  $('add').addEventListener('click', addCoin);
+  $('ref').addEventListener('keydown', e => { if (e.key === 'Enter') addCoin(); });
+  refreshState(); refreshSignals();
+  setInterval(refreshState, 3000);
+  setInterval(refreshSignals, 5000);
+</script>
+</body>
+</html>
