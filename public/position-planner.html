@@ -334,6 +334,7 @@
         ATR(1d) $${fmtPrice(S.atr)} · SMA20 $${fmtPrice(S.sma20)} · SMA50 $${fmtPrice(S.sma50)} · 30d $${fmtPrice(S.lo30)}–$${fmtPrice(S.hi30)}
         <span class="block mt-1 text-gray-600">⭐ = top pick. எந்த level உங்க risk-க்கு ஏத்தது-ன்னு நீங்க decide பண்ணுங்க — இது objective data மட்டுமே.</span>
       </div>
+      ${repricerPanelHtml(p.sym, repricerRefFor(p))}
     </div>`;
   }
 
@@ -391,6 +392,7 @@
         <span class="text-[11px] text-gray-500">ATR(1d) $${fmtPrice(S.atr)} · SMA20 $${fmtPrice(S.sma20)} · SMA50 $${fmtPrice(S.sma50)} · 30d $${fmtPrice(S.lo30)}–$${fmtPrice(S.hi30)}</span>
         <button onclick="markBought('${p.id}')" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-success/15 text-success hover:bg-success/25 transition">✓ வாங்கிட்டேன் (Held-ஆ மாத்து)</button>
       </div>
+      ${repricerPanelHtml(p.sym, repricerRefFor(p))}
     </div>`;
   }
 
@@ -614,6 +616,116 @@
   window.markBought = markBought;
   window.removePos = removePos;
 
+  /* ── Buy Re-pricer (chase-down) integration ─────────────────────────────── */
+  // The deployed backend subprocess buy_repricer.py watches taker BUY-vs-SELL
+  // VOLUME (aggTrade) on subscribed coins. When sell-flow dominates it computes
+  // a lower limit-buy price (chase-down) and publishes a DRY-RUN signal — it
+  // places/cancels NO real order. Here we let the user subscribe a limit-buy
+  // coin (with its limit/suggested price as ref) and show the live trace.
+  const REPRICER = { watch:{}, state:{}, status:{} };
+  function repricerRefFor(p){
+    if(!p || p.type!=='LIMIT') return 0;
+    return p.suggest ? (+p._track || 0) : (+p.entry || 0);   // suggest → top-pick price; explicit → user's limit
+  }
+  function repricerActionLabel(a){
+    switch(a){
+      case 'REPRICE_DOWN':           return { t:'📉 கீழ இறக்கியது', c:'text-brand' };
+      case 'FLOOR_REACHED':          return { t:'⛔ Floor எட்டியது', c:'text-danger' };
+      case 'SELL_DOMINANT_COOLDOWN': return { t:'⏳ Sell அதிகம் (cooldown)', c:'text-danger' };
+      case 'HOLD':                   return { t:'✋ நிறுத்தி வச்சிருக்கு', c:'text-gray-300' };
+      case 'EVAL':                   return { t:'🔍 பரிசீலனை', c:'text-brand' };
+      default:                       return { t:'👀 கண்காணிக்குது', c:'text-gray-400' };
+    }
+  }
+  function repricerPanelHtml(sym, refPrice){
+    const sub = REPRICER.watch[sym];
+    if(!sub){
+      const ok = refPrice>0;
+      return `<div class="px-5 py-3 border-t border-white/5" data-repricer="${sym}">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <div class="text-[11px] text-gray-400 max-w-md">
+            📉 <b class="text-gray-200">Buy Re-pricer (chase-down)</b> — sell flow அதிகமானா உங்க limit buy-ஐ எங்க கீழ நகர்த்தணும்னு trace பண்ணும். <span class="text-gray-600">(DRY-RUN — order போடாது, signal மட்டும்.)</span>
+          </div>
+          <button onclick="repricerSubscribe('${sym}', ${refPrice||0})" ${ok?'':'disabled'} class="px-3 py-1.5 rounded-lg text-xs font-bold ${ok?'bg-brand/15 text-brand hover:bg-brand/25':'bg-white/5 text-gray-600 cursor-not-allowed'} transition whitespace-nowrap">📉 Re-pricer-ல subscribe${ok?` ($${fmtPrice(refPrice)})`:''}</button>
+        </div>
+      </div>`;
+    }
+    const st = REPRICER.state[sym];
+    const ref   = +sub.ref_price;
+    const eff   = st ? +st.effective_price : ref;
+    const floor = st ? +st.floor_price : ref;
+    const chase = ref>0 ? (1 - eff/ref)*100 : 0;
+    const act   = repricerActionLabel(st ? st.last_action : 'WATCH');
+    const ratio = (st && st.ratio!=null) ? +st.ratio : null;
+    const buyV  = st ? +st.buy_vol : 0, sellV = st ? +st.sell_vol : 0;
+    const totV  = buyV + sellV;
+    const buyPct = totV>0 ? buyV/totV*100 : 50;
+    const rc    = st ? (st.reprice_count||0) : 0;
+    return `<div class="px-5 py-3 border-t border-brand/20 bg-brand/5" data-repricer="${sym}">
+      <div class="flex items-center justify-between flex-wrap gap-2 mb-2">
+        <span class="text-[11px] font-bold text-brand">📉 Buy Re-pricer trace <span class="px-1.5 py-0.5 rounded bg-white/10 text-gray-400 text-[9px] align-middle">DRY-RUN</span></span>
+        <span class="text-[11px] ${act.c} font-semibold">${act.t}</span>
+        <button onclick="repricerUnsubscribe('${sym}')" class="px-2 py-1 rounded-lg text-[10px] font-semibold bg-danger/15 text-danger hover:bg-danger/25 transition">✕ Unsubscribe</button>
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+        <div><p class="text-[9px] text-gray-500 uppercase">Ref buy</p><p class="text-sm font-bold mono">$${fmtPrice(ref)}</p></div>
+        <div><p class="text-[9px] text-gray-500 uppercase">New suggest @</p><p class="text-sm font-bold mono text-brand">$${fmtPrice(eff)}</p></div>
+        <div><p class="text-[9px] text-gray-500 uppercase">Chase ↓</p><p class="text-sm font-bold mono ${chase>0.001?'text-danger':'text-gray-300'}">${chase>0.001?'-':''}${Math.abs(chase).toFixed(2)}%</p></div>
+        <div><p class="text-[9px] text-gray-500 uppercase">Floor</p><p class="text-sm font-bold mono text-gray-400">$${fmtPrice(floor)}</p></div>
+      </div>
+      ${st?`<div class="mt-2">
+        <div class="flex items-center justify-between text-[10px] mb-1">
+          <span class="text-success">🟢 Taker buy $${fmtUsd(buyV)}</span>
+          <span class="text-gray-500">${ratio!=null?`sell/buy ${ratio>=999?'∞':ratio.toFixed(2)}×`:'—'} · reprices ${rc}</span>
+          <span class="text-danger">Taker sell $${fmtUsd(sellV)} 🔴</span>
+        </div>
+        <div class="h-1.5 rounded-full overflow-hidden bg-danger/40 flex"><div class="bg-success" style="width:${buyPct.toFixed(1)}%"></div></div>
+      </div>`:`<p class="mt-2 text-[10px] text-gray-500">Trace ஏற்றுகிறது… (subprocess data வரும்வரை சில நொடி ஆகும்)</p>`}
+    </div>`;
+  }
+  function patchRepricer(){
+    document.querySelectorAll('[data-repricer]').forEach(el=>{
+      const sym = el.getAttribute('data-repricer');
+      const p = POS.find(x=>x.sym===sym && x.type==='LIMIT');
+      el.outerHTML = repricerPanelHtml(sym, repricerRefFor(p));
+    });
+  }
+  async function loadRepricer(){
+    try {
+      const [watch, st] = await Promise.all([
+        getJSON('/api/repricer/watch').catch(()=>({})),
+        getJSON('/api/repricer/state').catch(()=>({ state:{}, status:{} })),
+      ]);
+      REPRICER.watch  = watch || {};
+      REPRICER.state  = (st && st.state)  || {};
+      REPRICER.status = (st && st.status) || {};
+    } catch { /* keep last known */ }
+    patchRepricer();
+  }
+  async function repricerSubscribe(sym, refPrice){
+    refPrice = +refPrice;
+    if(!(refPrice>0)){ alert('Ref buy price கிடைக்கல — dip suggest வரும்வரை காத்திருங்க.'); return; }
+    try {
+      const r = await fetch('/api/repricer/watch', {
+        method:'POST', headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ symbol: sym, ref_price: refPrice }),
+      });
+      if(!r.ok){ const e=await r.json().catch(()=>({})); throw new Error(e.error || ('HTTP '+r.status)); }
+      REPRICER.watch[sym] = { ref_price: refPrice, added_ts: Date.now() };
+      patchRepricer();
+      loadRepricer();
+    } catch(e){ alert('Re-pricer subscribe fail: '+(e.message||e)); }
+  }
+  async function repricerUnsubscribe(sym){
+    try {
+      await fetch('/api/repricer/watch/'+encodeURIComponent(sym), { method:'DELETE' });
+      delete REPRICER.watch[sym]; delete REPRICER.state[sym];
+      patchRepricer();
+    } catch(e){ alert('Re-pricer unsubscribe fail: '+(e.message||e)); }
+  }
+  window.repricerSubscribe = repricerSubscribe;
+  window.repricerUnsubscribe = repricerUnsubscribe;
+
   /* ── auto-pull holdings from the user's Binance account (via backend) ────── */
   // Backend (booknow) already authenticates to Binance for trading. We reuse its
   // read endpoints so the user never types anything:
@@ -698,6 +810,8 @@
     connect();
     syncHoldings();          // auto-pull the user's real Binance holdings on load
     setInterval(syncHoldings, 120000);   // re-sync every 2 min (qty/avg refresh from account)
+    loadRepricer();          // Buy Re-pricer watchlist + live chase-down trace
+    setInterval(loadRepricer, 4000);     // poll dry-run trace every 4s
   })();
   </script>
   <script src="/alert-kit.js"></script>
