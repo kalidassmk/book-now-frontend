@@ -92,6 +92,13 @@
       <p id="form-err" class="text-xs text-danger mt-2 hidden"></p>
     </div>
 
+    <!-- Top signal coins (auto, all sources) -->
+    <div id="signals-head" class="hidden flex flex-wrap items-center justify-between gap-2 mb-3 mt-2">
+      <h2 class="text-sm font-bold text-brand flex items-center gap-2">🔥 Top signal coins — auto (limit-buy check)</h2>
+      <span class="text-[11px] text-gray-500">எல்லா source-லயும் (pump/orderflow radar + VSP/LMC/CCP + buy-signals) இப்ப fire ஆன top 5 buy candidates · auto-refresh</span>
+    </div>
+    <div id="signals" class="grid gap-6 mb-8"></div>
+
     <!-- Positions -->
     <div id="positions" class="grid gap-6"></div>
     <div id="empty" class="glass rounded-2xl p-10 text-center text-gray-500 text-sm">
@@ -308,8 +315,9 @@
       </div>` : '';
     return `<div class="glass rounded-2xl overflow-hidden" data-card="${p.id}">
       <div class="p-5 flex flex-wrap items-center gap-x-6 gap-y-3 justify-between border-b border-white/5">
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3 flex-wrap">
           <span class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-brand/15 text-brand">⏳ LIMIT BUY · auto-suggest</span>
+          ${p.signal?`<span class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-success/15 text-success" title="Signal sources">🔥 ${(p.sigSources||[]).join('+')}</span>`:''}
           <div class="font-bold text-xl whitespace-nowrap">${base}<span class="text-gray-600 text-sm">/USDT</span></div>
           <span class="inline-flex gap-1">${icons}</span>
         </div>
@@ -322,6 +330,7 @@
         <span class="font-bold ${best.a.verdict.c}">${best.a.verdict.t}</span>
         <span class="text-xs text-gray-400">${best.label} @ $${fmtPrice(best.price)} (${best.dist.toFixed(2)}%) · R:R <b class="${best.rr>=2?'text-success':best.rr>=1?'text-brand':'text-danger'}">${best.rr==null?'—':best.rr.toFixed(2)}</b>${best.a.res?` · reward → $${fmtPrice(best.a.res.price)}`:''}${best.a.sup?` · risk → $${fmtPrice(best.a.sup.price)}`:''}</span>
         ${reached?'<span class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-success/20 text-success">✅ Best limit reach ஆச்சு</span>':''}
+        <button onclick="buyAtLimit('${p.sym}', ${best.price})" class="ml-auto px-3 py-1.5 rounded-lg text-xs font-bold bg-success/20 text-success hover:bg-success/30 transition whitespace-nowrap">🟢 Buy @ best limit ($${fmtPrice(best.price)})</button>
       </div>`:''}
       ${flowBar}
       <div>
@@ -390,7 +399,10 @@
       <div class="grid md:grid-cols-2 gap-px bg-white/5">${upTbl}${dnTbl}</div>
       <div class="px-5 py-3 flex items-center justify-between flex-wrap gap-2">
         <span class="text-[11px] text-gray-500">ATR(1d) $${fmtPrice(S.atr)} · SMA20 $${fmtPrice(S.sma20)} · SMA50 $${fmtPrice(S.sma50)} · 30d $${fmtPrice(S.lo30)}–$${fmtPrice(S.hi30)}</span>
-        <button onclick="markBought('${p.id}')" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-success/15 text-success hover:bg-success/25 transition">✓ வாங்கிட்டேன் (Held-ஆ மாத்து)</button>
+        <div class="flex gap-2">
+          <button onclick="buyAtLimit('${p.sym}', ${L})" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-success/20 text-success hover:bg-success/30 transition">🟢 Buy @ limit ($${fmtPrice(L)})</button>
+          <button onclick="markBought('${p.id}')" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-white/10 text-gray-300 hover:bg-white/20 transition">✓ வாங்கிட்டேன்</button>
+        </div>
       </div>
       ${repricerPanelHtml(p.sym, repricerRefFor(p))}
     </div>`;
@@ -497,7 +509,7 @@
   function patchLive(sym){
     const px = LIVE[sym];
     document.querySelectorAll(`[data-live="${sym}"]`).forEach(el=>el.textContent = '$'+fmtPrice(px));
-    POS.filter(p=>p.sym===sym).forEach(p=>{
+    allPos().filter(p=>p.sym===sym).forEach(p=>{
       if (p.type === 'LIMIT'){
         const L = p.suggest ? p._track : p.entry;   // suggest mode tracks the top-pick price
         if (L!=null){
@@ -536,7 +548,7 @@
 
   /* ── websocket: live last price for every position symbol ───────────────── */
   let ws=null;
-  function wsParams(){ return [...new Set(POS.map(p=>p.sym.toLowerCase()))].map(s=>`${s}@ticker`); }
+  function wsParams(){ return [...new Set(allPos().map(p=>p.sym.toLowerCase()))].map(s=>`${s}@ticker`); }
   function connect(){
     const params = wsParams();
     if (!params.length){ setWs('No positions','bg-gray-600'); return; }
@@ -605,8 +617,10 @@
     resubscribe();
   }
   function removePos(id){
-    POS = POS.filter(p=>p.id!==id); savePos(POS); delete ALERTED[id];
-    render(); resubscribe();
+    POS = POS.filter(p=>p.id!==id);
+    SIG = SIG.filter(p=>p.id!==id);   // signal cards can also be dismissed (re-appear on next refresh)
+    savePos(POS); delete ALERTED[id];
+    render(); renderSignals(); resubscribe();
   }
   function markBought(id){
     const p = POS.find(x=>x.id===id); if(!p) return;
@@ -686,7 +700,7 @@
   function patchRepricer(){
     document.querySelectorAll('[data-repricer]').forEach(el=>{
       const sym = el.getAttribute('data-repricer');
-      const p = POS.find(x=>x.sym===sym && x.type==='LIMIT');
+      const p = allPos().find(x=>x.sym===sym && x.type==='LIMIT');
       el.outerHTML = repricerPanelHtml(sym, repricerRefFor(p));
     });
   }
@@ -725,6 +739,156 @@
   }
   window.repricerSubscribe = repricerSubscribe;
   window.repricerUnsubscribe = repricerUnsubscribe;
+
+  /* ── Top-5 combined signal coins (ALL sources) ──────────────────────────── */
+  // Pulls every live signal feed (pump + orderflow radar, VSP, LMC, CCP, and
+  // strong buy-signals), keeps USDT pairs that lean bullish/neutral, then ranks
+  // by multi-source consensus → recency → score. Top 5 unique coins render as
+  // limit-buy-check cards (same auto-suggest card as a manual limit). These are
+  // NOT persisted — they refresh from the feeds.
+  let SIG = [];                                   // signal pseudo-positions (runtime only)
+  function allPos(){ return POS.concat(SIG); }
+  function normSignal(source, e){
+    const sym = String(e.symbol || e.sym || '').toUpperCase();
+    if(!sym.endsWith('USDT')) return null;        // limit-buy needs a USDT pair
+    const ts = +e.ts || 0;
+    let price=null, score=0, dir='neutral';
+    if(source==='pump'){ price=+e.price; const bp=e.buy_pct; score=55+Math.min(25,(+e.chg_pct||0))+(bp!=null?(bp-50)*0.3:0); dir=(bp!=null&&bp>=55)?'bull':'neutral'; }
+    else if(source==='orderflow'){ price=+e.price; const bp=e.buy_pct; score=55+Math.min(20,(+e.vol_surge||0)*3)+(bp!=null?(bp-50)*0.3:0); dir=(bp!=null&&bp>=55)?'bull':'neutral'; }
+    else if(source==='buysignals'){ price=+e.price; const bp=e.buy_pct; score=50+(e.chg_pct?Math.min(20,+e.chg_pct):0)+(bp!=null?(bp-50)*0.3:0); dir='bull'; }
+    else if(source==='vsp'){ price=+e.trigger_close; score=+e.confidence||(+e.direction_score||0); const l=String(e.label||''); dir=l.includes('PUMP')?'bull':l.includes('DUMP')?'bear':'neutral'; }
+    else if(source==='lmc'){ price=+e.trigger_price; score=+e.score||0; dir=(e.direction==='PUMP')?'bull':(e.direction==='DUMP')?'bear':'neutral'; }
+    else if(source==='ccp'){ price=+e.trigger_price; score=+e.score||0; const d=String(e.direction||'')+String(e.label||''); dir=(d.includes('REVERSAL')||d.includes('UP'))?'bull':d.includes('BREAKDOWN')?'bear':'neutral'; }
+    if(!(price>0)) price=null;
+    return { sym, ts, price, score:Math.max(0,Math.min(100,score)), dir, source };
+  }
+  async function loadTopSignals(){
+    const pull = (u, src) => getJSON(u).then(j=>(j.events||j.signals||[]).map(e=>normSignal(src,e))).catch(()=>[]);
+    let lists;
+    try {
+      lists = await Promise.all([
+        pull('/api/history/signals?source=pump&limit=200','pump'),
+        pull('/api/history/signals?source=orderflow&limit=200','orderflow'),
+        pull('/api/history/signals?source=buysignals&limit=200','buysignals'),
+        pull('/api/vsp/feed?limit=200','vsp'),
+        pull('/api/lmc/feed?limit=200','lmc'),
+        pull('/api/ccp/feed?limit=200','ccp'),
+      ]);
+    } catch { return; }
+    const flat = lists.flat().filter(Boolean).filter(x=>x.dir!=='bear');
+    const agg = {};
+    for(const x of flat){
+      const a = agg[x.sym] || (agg[x.sym] = { sym:x.sym, sources:new Set(), lastTs:0, bestScore:0 });
+      a.sources.add(x.source);
+      if(x.ts>a.lastTs) a.lastTs=x.ts;
+      if(x.score>a.bestScore) a.bestScore=x.score;
+    }
+    const cutoff = Date.now() - 6*3600*1000;       // only signals from the last 6h = "currently checking"
+    const ranked = Object.values(agg)
+      .filter(a=>a.lastTs>=cutoff)
+      .sort((p,q)=> q.sources.size-p.sources.size || q.lastTs-p.lastTs || q.bestScore-p.bestScore)
+      .slice(0,5);
+    SIG = ranked.map(a=>({ id:'sig-'+a.sym, sym:a.sym, type:'LIMIT', suggest:true, signal:true,
+                           sigSources:[...a.sources], sigScore:Math.round(a.bestScore), sigTs:a.lastTs }));
+    await Promise.all(SIG.map(p=>refreshStat(p.sym)));
+    renderSignals();
+    resubscribe();
+  }
+  function renderSignals(){
+    const host = $('signals'); if(!host) return;
+    const head = $('signals-head');
+    if(!SIG.length){ host.innerHTML=''; if(head) head.classList.add('hidden'); return; }
+    if(head) head.classList.remove('hidden');
+    host.innerHTML = SIG.map(p=>{
+      const S=STAT[p.sym], px=LIVE[p.sym];
+      const base=p.sym.replace('USDT','').replace('FDUSD','').replace('USDC','');
+      const icons = window.bnBinanceLinkHtml ? window.bnBinanceLinkHtml(p.sym,{compact:true}) : '';
+      if(!S||!S.ready) return `<div class="glass rounded-2xl p-5" data-card="${p.id}"><div class="font-bold text-lg">${base}<span class="text-gray-600 text-sm">/USDT</span></div><p class="text-gray-500 text-sm mt-2">Signal data ஏற்றுகிறது…</p></div>`;
+      return limitSuggestCardHtml(p, S, px, base, icons);
+    }).join('');
+  }
+
+  /* ── Real LIMIT BUY (manual click → USDT modal → confirm) ────────────────── */
+  // Places a REAL limit buy via the engine's existing quick-limit-buy endpoint.
+  // Two-step: amount input → explicit Confirm. Capped at free USDT.
+  async function buyAtLimit(sym, price){
+    price = +price;
+    if(!(price>0)){ alert('Best limit price இன்னும் தயார் இல்ல — dip suggest வரும்வரை காத்திருங்க.'); return; }
+    const live = LIVE[sym] || price;
+    let freeUsdt=null;
+    try { const w=await getJSON('/api/wallet/balances'); const b=(w.balances||[]).find(x=>String(x.asset||'').toUpperCase()==='USDT'); if(b) freeUsdt=+b.free; } catch {}
+    window.__buyCtx = { sym, price, live, freeUsdt };
+    openBuyModal(sym, price, live, freeUsdt);
+  }
+  function openBuyModal(sym, price, live, freeUsdt){
+    closeBuyModal();
+    const base=sym.replace('USDT','').replace('FDUSD','').replace('USDC','');
+    const offset=(price/live-1)*100;
+    const quick=[10,25,50,100];
+    const ov=document.createElement('div');
+    ov.id='buy-modal';
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+    ov.addEventListener('click', e=>{ if(e.target===ov) closeBuyModal(); });
+    ov.innerHTML=`<div class="glass rounded-2xl p-5 w-full max-w-md" style="background:#1e2329">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-bold text-lg">🟢 Limit Buy — <span class="text-brand">${base}/USDT</span></h3>
+        <button onclick="closeBuyModal()" class="text-gray-400 hover:text-danger text-sm">✕</button>
+      </div>
+      <div class="text-[11px] text-danger mb-3 bg-danger/10 rounded-lg px-3 py-2">⚠️ இது <b>உண்மையான order</b> — உங்க Binance USDT செலவாகும். Confirm பண்ணும்முன் விலை/qty சரிபாருங்க.</div>
+      <div class="grid grid-cols-2 gap-2 text-center mb-3">
+        <div class="bg-white/5 rounded-lg p-2"><p class="text-[10px] text-gray-500 uppercase">Live</p><p class="mono font-bold">$${fmtPrice(live)}</p></div>
+        <div class="bg-brand/10 rounded-lg p-2"><p class="text-[10px] text-gray-500 uppercase">Limit @</p><p class="mono font-bold text-brand">$${fmtPrice(price)} <span class="text-[10px] ${offset<0?'text-success':'text-danger'}">(${offset>=0?'+':''}${offset.toFixed(2)}%)</span></p></div>
+      </div>
+      <label class="block text-[11px] text-gray-400 mb-1">எவ்வளவு USDT வாங்கணும்?${freeUsdt!=null?` <span class="text-gray-500">(free $${fmtUsd(freeUsdt)})</span>`:''}</label>
+      <input id="buy-usdt" type="number" step="any" placeholder="USDT amount" class="w-full mono mb-2">
+      <div class="flex gap-1 mb-2">
+        ${quick.map(v=>`<button onclick="document.getElementById('buy-usdt').value=${v};buyModalCalc()" class="flex-1 text-[11px] py-1 rounded bg-white/5 hover:bg-white/10">$${v}</button>`).join('')}
+        ${freeUsdt!=null?`<button onclick="document.getElementById('buy-usdt').value=${Math.floor(freeUsdt*100)/100};buyModalCalc()" class="flex-1 text-[11px] py-1 rounded bg-white/5 hover:bg-white/10">Max</button>`:''}
+      </div>
+      <div id="buy-calc" class="text-xs text-gray-400 mb-2 min-h-[1.5em]"></div>
+      <div id="buy-err" class="text-xs text-danger mb-2 hidden"></div>
+      <div class="flex gap-2">
+        <button onclick="closeBuyModal()" class="flex-1 py-2 rounded-xl bg-white/5 text-gray-300 text-sm font-semibold hover:bg-white/10">Cancel</button>
+        <button id="buy-confirm" onclick="confirmBuy()" class="flex-1 py-2 rounded-xl bg-success/20 text-success text-sm font-bold hover:bg-success/30 disabled:opacity-40 disabled:cursor-not-allowed" disabled>✅ Confirm BUY</button>
+      </div>
+      <p class="text-[10px] text-gray-600 mt-2">Order போட்டப்பறம் Binance open-orders-ல வரும். Sell-flow அதிகமானா re-pricer-ல subscribe பண்ணி கீழ நகர்த்தலாம்.</p>
+    </div>`;
+    document.body.appendChild(ov);
+    const inp=$('buy-usdt'); inp.addEventListener('input', buyModalCalc);
+    inp.addEventListener('keydown', e=>{ if(e.key==='Enter'){ const b=$('buy-confirm'); if(!b.disabled) confirmBuy(); } });
+    setTimeout(()=>inp.focus(), 30);
+  }
+  function buyModalCalc(){
+    const ctx=window.__buyCtx||{}; const v=parseFloat(($('buy-usdt')||{}).value);
+    const out=$('buy-calc'), btn=$('buy-confirm'), err=$('buy-err');
+    if(!out||!btn) return; err.classList.add('hidden');
+    if(!(v>0)){ out.textContent=''; btn.disabled=true; return; }
+    const qty=v/ctx.price;
+    out.innerHTML=`≈ <b class="text-gray-200 mono">${qty.toPrecision(6)}</b> ${ctx.sym.replace('USDT','')} &nbsp;·&nbsp; total ≈ <b class="text-gray-200 mono">$${v.toFixed(2)}</b> @ $${fmtPrice(ctx.price)}`;
+    if(ctx.freeUsdt!=null && v>ctx.freeUsdt+1e-9){ err.textContent=`free USDT ($${fmtUsd(ctx.freeUsdt)})-ஐ விட அதிகம் — குறையுங்க.`; err.classList.remove('hidden'); btn.disabled=true; return; }
+    btn.disabled=false;
+  }
+  async function confirmBuy(){
+    const ctx=window.__buyCtx||{}; const v=parseFloat(($('buy-usdt')||{}).value);
+    if(!(v>0)||!(ctx.price>0)) return;
+    if(ctx.freeUsdt!=null && v>ctx.freeUsdt+1e-9) return;
+    const qty=v/ctx.price;
+    const offsetPct=(ctx.price/ctx.live-1)*100;
+    const btn=$('buy-confirm'), err=$('buy-err');
+    btn.disabled=true; btn.textContent='Placing…'; err.classList.add('hidden');
+    try {
+      const r=await fetch(`/api/trade/quick-limit-buy/${encodeURIComponent(ctx.sym)}?qty=${qty}&offsetPct=${offsetPct}&profitPct=0`);
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok || j.ok===false) throw new Error(j.error || ('HTTP '+r.status));
+      closeBuyModal();
+      alert(`✅ Limit BUY போடப்பட்டது\n${ctx.sym.replace('USDT','')} · qty ≈ ${qty.toPrecision(6)} · ~$${fmtPrice(ctx.price)} · total ≈ $${v.toFixed(2)}\nBinance open-orders-ல பாருங்க.`);
+    } catch(e){
+      err.textContent='Order fail: '+(e.message||e); err.classList.remove('hidden');
+      btn.disabled=false; btn.textContent='✅ Confirm BUY';
+    }
+  }
+  function closeBuyModal(){ const m=$('buy-modal'); if(m) m.remove(); }
+  window.buyAtLimit=buyAtLimit; window.buyModalCalc=buyModalCalc; window.confirmBuy=confirmBuy; window.closeBuyModal=closeBuyModal;
 
   /* ── auto-pull holdings from the user's Binance account (via backend) ────── */
   // Backend (booknow) already authenticates to Binance for trading. We reuse its
@@ -791,9 +955,9 @@
 
   /* ── periodic refresh of static analysis (walls move) ──────────────────── */
   setInterval(async () => {
-    const syms = [...new Set(POS.map(p=>p.sym))];
+    const syms = [...new Set(allPos().map(p=>p.sym))];
     for (const s of syms) await refreshStat(s);
-    if (syms.length) render();
+    if (syms.length){ render(); renderSignals(); }
   }, 20000);
 
   /* ── boot ──────────────────────────────────────────────────────────────── */
@@ -812,6 +976,8 @@
     setInterval(syncHoldings, 120000);   // re-sync every 2 min (qty/avg refresh from account)
     loadRepricer();          // Buy Re-pricer watchlist + live chase-down trace
     setInterval(loadRepricer, 4000);     // poll dry-run trace every 4s
+    loadTopSignals();        // top-5 combined signal coins (all sources) → limit-buy check cards
+    setInterval(loadTopSignals, 60000);  // refresh signal candidates every 60s
   })();
   </script>
   <script src="/alert-kit.js"></script>
