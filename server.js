@@ -1690,7 +1690,7 @@ app.get('/api/repricer/signals', async (req, res) => {
 
 // iter168 — Auto Exit Bracket ("away-mode protector") read-only views.
 // The auto_exit_bracket.py subprocess owns the algorithm; these endpoints
-// only surface the intended +2% TP / -2% SL brackets it publishes so the
+// only surface the intended +30% TP / -4% SL brackets it publishes so the
 // operator can verify the numbers before live OCO selling is enabled.
 const AUTO_EXIT_STATE_KEY = 'AUTO_EXIT:STATE';
 const AUTO_EXIT_STATUS_KEY = 'AUTO_EXIT:STATUS';
