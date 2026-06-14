@@ -35,6 +35,7 @@
   button.go:hover { filter:brightness(1.08); }
   button.go:disabled { opacity:.5; cursor:not-allowed; }
   button.ghost { background:var(--panel2); color:var(--text); border:1px solid var(--border); }
+  button.ghost.on { background:var(--green); color:#04130c; border-color:var(--green); font-weight:700; }
   .summary { display:flex; flex-wrap:wrap; gap:18px; margin-bottom:14px; font-size:13px; }
   .summary .chip { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:8px 14px; }
   .summary .chip b { color:var(--text); font-variant-numeric:tabular-nums; }
@@ -79,6 +80,7 @@
     <div class="field"><label>To</label><input id="to" type="date" /></div>
     <div class="field"><label>Symbol (optional)</label><input id="sym" placeholder="e.g. PEPEUSDT" style="width:150px; text-transform:uppercase;" /></div>
     <button class="go" id="load">Load history</button>
+    <button class="go ghost" id="analyze" title="Each coin once (first trigger) + pump/dump % sum. Respects the Source filter below.">🔬 Analyze</button>
     <button class="go ghost" id="refreshPrice" title="Re-fetch current Binance price + recompute vs-signal difference">↻ Live price</button>
     <button class="go ghost" id="enrich" title="Fill buy/sell volume from Binance klines (browser)">Enrich buy/sell vol</button>
   </div>
@@ -94,21 +96,7 @@
 
   <div class="summary" id="summary"></div>
   <table>
-    <thead>
-      <tr>
-        <th data-k="ts">Date / Time</th>
-        <th data-k="symbol">Symbol</th>
-        <th data-k="source">Source</th>
-        <th data-k="price">Signal Price</th>
-        <th data-k="now_price">Now Price</th>
-        <th data-k="diff_pct">vs Signal</th>
-        <th data-k="chg_pct">% Change</th>
-        <th data-k="vol_surge">Vol Surge</th>
-        <th data-k="buy_vol">Buy Vol (USDT)</th>
-        <th data-k="sell_vol">Sell Vol (USDT)</th>
-        <th data-k="score">Score</th>
-      </tr>
-    </thead>
+    <thead id="thead"></thead>
     <tbody id="rows"><tr><td class="empty" colspan="11">Date range குடுத்து “Load history” அழுத்துங்க.</td></tr></tbody>
   </table>
 </main>
@@ -207,6 +195,34 @@
 
   let ALL = [];
   let sortKey = 'ts', sortAsc = false;
+  let analyzeMode = false;
+
+  // ── table columns differ between normal history and Analyze view ────────
+  const NORMAL_COLS = [
+    { k:'ts', label:'Date / Time' }, { k:'symbol', label:'Symbol' }, { k:'source', label:'Source' },
+    { k:'price', label:'Signal Price' }, { k:'now_price', label:'Now Price' }, { k:'diff_pct', label:'vs Signal' },
+    { k:'chg_pct', label:'% Change' }, { k:'vol_surge', label:'Vol Surge' },
+    { k:'buy_vol', label:'Buy Vol (USDT)' }, { k:'sell_vol', label:'Sell Vol (USDT)' }, { k:'score', label:'Score' },
+  ];
+  const ANALYZE_COLS = [
+    { k:'ts', label:'First Triggered' }, { k:'symbol', label:'Symbol' }, { k:'source', label:'First Source' },
+    { k:'price', label:'First Signal Price' }, { k:'now_price', label:'Now Price' }, { k:'diff_pct', label:'vs Signal' },
+    { k:'count', label:'# Signals' }, { k:'pumpSum', label:'Pump Σ %' }, { k:'dumpSum', label:'Dump Σ %' }, { k:'net', label:'Net %' },
+  ];
+  const cols = () => analyzeMode ? ANALYZE_COLS : NORMAL_COLS;
+  function renderHead() {
+    $('thead').innerHTML = '<tr>' + cols().map(c =>
+      `<th data-k="${c.k}"${c.k === sortKey ? ` class="sorted${sortAsc ? ' asc' : ''}"` : ''}>${c.label}</th>`
+    ).join('') + '</tr>';
+  }
+  // shared sort comparator (works on raw rows and on aggregated groups)
+  function cmpBy(a, b) {
+    const av = a[sortKey], bv = b[sortKey];
+    if (typeof av === 'string' || typeof bv === 'string')
+      return sortAsc ? String(av||'').localeCompare(String(bv||'')) : String(bv||'').localeCompare(String(av||''));
+    const d = (av ?? -Infinity) - (bv ?? -Infinity);
+    return sortAsc ? d : -d;
+  }
 
   async function load() {
     const params = new URLSearchParams({ source: SOURCE, from: $('from').value, to: $('to').value, limit: '3000' });
@@ -248,16 +264,16 @@
   }
 
   function render() {
+    renderHead();
+    if (analyzeMode) return renderAnalyze();
+    return renderNormal();
+  }
+
+  function renderNormal() {
     let rows = filtered();
-    rows.sort((a, b) => {
-      const av = a[sortKey], bv = b[sortKey];
-      if (typeof av === 'string' || typeof bv === 'string')
-        return sortAsc ? String(av||'').localeCompare(String(bv||'')) : String(bv||'').localeCompare(String(av||''));
-      const d = (av ?? -Infinity) - (bv ?? -Infinity);
-      return sortAsc ? d : -d;
-    });
+    rows.sort(cmpBy);
     const tb = $('rows');
-    if (!rows.length) { tb.innerHTML = '<tr><td class="empty" colspan="11">இந்த filter-க்கு signal இல்ல.</td></tr>'; renderSummary(rows); return; }
+    if (!rows.length) { tb.innerHTML = `<tr><td class="empty" colspan="${cols().length}">இந்த filter-க்கு signal இல்ல.</td></tr>`; renderSummary(rows); return; }
     tb.innerHTML = rows.slice(0, 2000).map(r => `
       <tr>
         <td>${fmtTime(r.ts)}</td>
@@ -292,6 +308,60 @@
       <div class="chip"><span class="k">Prediction worked</span><b class="${winRate>=50?'pos':'neg'}">${withNow.length?`${won}/${withNow.length} (${winRate.toFixed(0)}%)`:'–'}</b></div>
       <div class="chip"><span class="k">Avg since-signal</span><b class="${avgDiff>=0?'pos':'neg'}">${withNow.length?`${avgDiff>=0?'+':''}${avgDiff.toFixed(2)}%`:'–'}</b></div>
       <div class="chip"><span class="k">Buy/sell vol filled</span><b>${enriched}/${rows.length}</b></div>`;
+  }
+
+  // ── Analyze view: collapse to one row per coin (first trigger) ──────────
+  // Keeps the EARLIEST signal per coin and sums each coin's signal-time
+  // % change into pump (≥0) and dump (<0) buckets.
+  function aggregateByCoin(rows) {
+    const map = new Map();
+    for (const r of rows) {
+      let g = map.get(r.symbol);
+      if (!g) { g = { _first: r, count: 0, pumpSum: 0, dumpSum: 0 }; map.set(r.symbol, g); }
+      if (r.ts < g._first.ts) g._first = r;          // keep the initial trigger
+      g.count++;
+      const c = r.chg_pct;
+      if (c != null) { if (c >= 0) g.pumpSum += c; else g.dumpSum += c; }
+    }
+    return [...map.values()].map(g => ({
+      ts: g._first.ts, symbol: g._first.symbol, source: srcCell(g._first),
+      price: g._first.price, now_price: g._first.now_price, diff_pct: g._first.diff_pct,
+      count: g.count, pumpSum: g.pumpSum, dumpSum: g.dumpSum, net: g.pumpSum + g.dumpSum,
+    }));
+  }
+
+  function renderAnalyze() {
+    const base = filtered();
+    const groups = aggregateByCoin(base);
+    groups.sort(cmpBy);
+    const tb = $('rows');
+    if (!groups.length) { tb.innerHTML = `<tr><td class="empty" colspan="${cols().length}">இந்த filter-க்கு signal இல்ல.</td></tr>`; renderAnalyzeSummary(groups, base); return; }
+    tb.innerHTML = groups.slice(0, 2000).map(g => `
+      <tr>
+        <td>${fmtTime(g.ts)}</td>
+        <td class="sym"><a href="/coin-history.html?sym=${g.symbol}" title="Coin history">${g.symbol||'–'}</a></td>
+        <td><span class="src">${g.source}</span></td>
+        <td>${fmtPrice(g.price)}</td>
+        <td>${g.now_price==null?'<span style="color:var(--muted)">—</span>':fmtPrice(g.now_price)}</td>
+        <td class="${g.diff_pct==null?'':(g.diff_pct>=0?'pos':'neg')}">${g.diff_pct==null?'<span style="color:var(--muted)">—</span>':(g.diff_pct>=0?'✅ +':'❌ ')+g.diff_pct.toFixed(2)+'%'}</td>
+        <td>${g.count}</td>
+        <td class="pos">${g.pumpSum>0?'+'+g.pumpSum.toFixed(2)+'%':'<span style="color:var(--muted)">–</span>'}</td>
+        <td class="neg">${g.dumpSum<0?g.dumpSum.toFixed(2)+'%':'<span style="color:var(--muted)">–</span>'}</td>
+        <td class="${g.net>=0?'pos':'neg'}">${g.net>=0?'+':''}${g.net.toFixed(2)}%</td>
+      </tr>`).join('');
+    renderAnalyzeSummary(groups, base);
+  }
+
+  function renderAnalyzeSummary(groups, base) {
+    const pump = base.reduce((s, r) => s + (r.chg_pct != null && r.chg_pct >= 0 ? r.chg_pct : 0), 0);
+    const dump = base.reduce((s, r) => s + (r.chg_pct != null && r.chg_pct <  0 ? r.chg_pct : 0), 0);
+    const net = pump + dump;
+    $('summary').innerHTML = `
+      <div class="chip"><span class="k">Coins</span><b>${groups.length}</b></div>
+      <div class="chip"><span class="k">Total signals</span><b>${base.length}</b></div>
+      <div class="chip"><span class="k">Pump Σ %</span><b class="pos">+${pump.toFixed(2)}%</b></div>
+      <div class="chip"><span class="k">Dump Σ %</span><b class="neg">${dump.toFixed(2)}%</b></div>
+      <div class="chip"><span class="k">Net Σ %</span><b class="${net>=0?'pos':'neg'}">${net>=0?'+':''}${net.toFixed(2)}%</b></div>`;
   }
 
   // ── enrichment: fetch the 1m Binance candle covering each signal ts ─────
@@ -335,13 +405,22 @@
     render();
   }
 
-  document.querySelectorAll('thead th').forEach(th => th.addEventListener('click', () => {
+  // header is rebuilt on every render, so use event delegation for sorting
+  $('thead').addEventListener('click', e => {
+    const th = e.target.closest('th'); if (!th) return;
     const k = th.dataset.k;
     if (sortKey === k) sortAsc = !sortAsc; else { sortKey = k; sortAsc = false; }
-    document.querySelectorAll('thead th').forEach(x => x.classList.remove('sorted', 'asc'));
-    th.classList.add('sorted'); if (sortAsc) th.classList.add('asc');
     render();
-  }));
+  });
+
+  $('analyze').addEventListener('click', () => {
+    analyzeMode = !analyzeMode;
+    $('analyze').textContent = analyzeMode ? '← Full history' : '🔬 Analyze';
+    $('analyze').classList.toggle('on', analyzeMode);
+    // a sort column from the other view may not exist here → fall back to time
+    if (!cols().some(c => c.k === sortKey)) { sortKey = 'ts'; sortAsc = false; }
+    render();
+  });
 
   $('load').addEventListener('click', load);
   $('apply').addEventListener('click', render);
@@ -360,6 +439,7 @@
     const s = new URLSearchParams(location.search).get('sym');
     if (s) $('sym').value = s.trim().toUpperCase();
   })();
+  renderHead();
   load();
 </script>
 </body>
