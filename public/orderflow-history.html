@@ -110,11 +110,11 @@
   const PAGE = {
     buysignals: {
       title: 'Buy Signals <span>History</span>', radar: '/coin.html', radarLabel: 'Coin',
-      note: '📜 <b>Top Buy Signals history</b> — coin.html-ல காட்டப்படும் “🎯 Top 5 Latest Buy Signals” strong-bucket signals மட்டும் (Instant-Pump, PumpRider STRONG/NORMAL, Early-Pump ≥80, VSP BIG_PUMP, LMC EXPLOSIVE_PUMP, CCP CALM_REVERSAL_UP). கடந்த 90 நாட்கள். ஒவ்வொரு signal-க்கும் <b>signal price</b>, <b>price % increase</b>, <b>volume surge</b> காட்டும். <b>Buy/Sell volume</b> அந்த நிமிட Binance candle-ல இருந்து “Enrich” button அழுத்தினா browser-ல load ஆகும். Date / price / %-increase / buy / sell volume வைச்சு filter பண்ணலாம்.',
+      note: '📜 <b>Top Buy Signals history</b> — coin.html-ல காட்டப்படும் “🎯 Top 5 Latest Buy Signals” strong-bucket signals மட்டும் (Instant-Pump, PumpRider STRONG/NORMAL, Early-Pump ≥80, VSP BIG_PUMP, LMC EXPLOSIVE_PUMP, CCP CALM_REVERSAL_UP). கடந்த 90 நாட்கள். ஒவ்வொரு signal-க்கும் <b>signal price</b>, <b>price % increase</b>, <b>volume surge</b> காட்டும். <b>Buy/Sell volume</b> அந்த நிமிட Binance candle-ல இருந்து browser-ல <b>தானாகவே</b> load ஆகும் (“Enrich buy/sell vol” button-ல மறுபடி fill பண்ணலாம்). Date / price / %-increase / buy / sell volume வைச்சு filter பண்ணலாம்.',
     },
     pump: {
       title: 'Pump <span>History</span>', radar: '/pump-radar.html', radarLabel: 'Pump Radar',
-      note: '📜 <b>Pump Radar history</b> — pump-radar.html page-ல <b>ARMED + SIGNAL</b> நிலைக்கு வந்த coins மட்டும் store ஆகும். கடந்த 90 நாட்கள். ஒவ்வொரு signal-க்கும் <b>signal price</b>, <b>price % increase</b>, <b>volume surge</b> காட்டும். <b>Buy/Sell volume</b> அந்த நிமிட Binance candle-ல இருந்து “Enrich” button அழுத்தினா browser-ல load ஆகும். Date / price / %-increase / buy / sell volume வைச்சு filter பண்ணலாம்.',
+      note: '📜 <b>Pump Radar history</b> — pump-radar.html page-ல <b>ARMED + SIGNAL</b> நிலைக்கு வந்த coins மட்டும் store ஆகும். கடந்த 90 நாட்கள். ஒவ்வொரு signal-க்கும் <b>signal price</b>, <b>price % increase</b>, <b>volume surge</b> காட்டும். <b>Buy/Sell volume</b> அந்த நிமிட Binance candle-ல இருந்து browser-ல <b>தானாகவே</b> load ஆகும் (“Enrich buy/sell vol” button-ல மறுபடி fill பண்ணலாம்). Date / price / %-increase / buy / sell volume வைச்சு filter பண்ணலாம்.',
     },
     orderflow: {
       title: 'Order Flow <span>History</span>', radar: '/orderflow-radar.html', radarLabel: 'Order Flow Radar',
@@ -213,6 +213,10 @@
       populateSourceFilter();
       $('loading').textContent = ALL.length + ' signals';
       render();
+      // Auto-fill buy/sell vol from Binance (browser IP) so the columns
+      // display without a manual "Enrich" click. Non-blocking; rows that
+      // already carry buy_vol (e.g. backend-stored) are skipped.
+      enrichAll();
     } catch (e) {
       $('rows').innerHTML = `<tr><td class="empty err" colspan="11">${e.message}</td></tr>`;
       $('loading').textContent = ''; $('summary').innerHTML = '';
