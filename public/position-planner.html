@@ -57,14 +57,19 @@
 
     <!-- Add-position form -->
     <div class="glass rounded-2xl p-5 mb-6">
-      <h2 class="text-sm font-bold text-brand mb-3 flex items-center gap-2">➕ Position சேர்</h2>
+      <h2 class="text-sm font-bold text-brand mb-3 flex items-center gap-2">➕ Position / Limit order சேர்</h2>
+      <!-- type toggle -->
+      <div class="flex gap-2 mb-3">
+        <button id="tab-held"  class="ptab px-3 py-1.5 rounded-lg text-xs font-semibold bg-brand/15 text-brand">✅ வாங்கிட்டேன் (Held)</button>
+        <button id="tab-limit" class="ptab px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/5 text-gray-400">⏳ Limit buy போடப்போறேன் (check)</button>
+      </div>
       <div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
         <div>
           <label class="block text-[11px] text-gray-400 mb-1">Coin (e.g. LTCUSDT)</label>
           <input id="in-sym" type="text" placeholder="LTCUSDT" class="w-full mono uppercase" autocomplete="off">
         </div>
         <div>
-          <label class="block text-[11px] text-gray-400 mb-1">Avg buy price ($)</label>
+          <label id="lbl-entry" class="block text-[11px] text-gray-400 mb-1">Avg buy price ($)</label>
           <input id="in-entry" type="number" step="any" placeholder="44.5256" class="w-full mono">
         </div>
         <div>
@@ -74,8 +79,8 @@
         <div class="flex gap-2">
           <button id="btn-add" class="flex-1 gradient-brand text-bg font-bold rounded-xl px-4 py-2 text-sm hover:brightness-110 transition">சேர்</button>
         </div>
-        <div class="text-[11px] text-gray-500 lg:text-right">
-          Positions browser-ல (localStorage) சேமிக்கப்படும். தானா live update ஆகும்.
+        <div id="form-hint" class="text-[11px] text-gray-500 lg:text-right">
+          வாங்கின position-ஐ track பண்ணு — live P/L + sell targets.
         </div>
       </div>
       <p id="form-err" class="text-xs text-danger mt-2 hidden"></p>
@@ -90,6 +95,10 @@
     <!-- Methodology (Tamil) -->
     <div class="glass rounded-2xl p-5 mt-8 text-xs text-gray-400 leading-relaxed">
       <h3 class="text-sm font-bold text-brand mb-2">📐 எப்படி கணக்கிடுது</h3>
+      <div class="bg-white/5 rounded-xl p-3 mb-4">
+        <p class="text-white font-semibold mb-1">⏳ Limit buy check — நான் சரியான விலையில வாங்குறேனா?</p>
+        ஒரு limit buy price போட்டா, அது <b>support-ல உட்கார்ந்திருக்கா</b> (நல்ல entry) இல்ல <b>resistance-ஐ துரத்துதா</b> (மோசம்) என்பதை order-book + structure வைச்சு மதிப்பிடும். <b>Risk : Reward</b> = (entry→முதல் resistance) ÷ (entry→கீழ முதல் support). R:R ≥ 2 ஆனா நல்லது. ஒரு <b>0–100 buy score</b> + Tamil verdict தரும்.
+      </div>
       <div class="grid md:grid-cols-2 gap-4">
         <div>
           <p class="text-white font-semibold mb-1">Sell targets (மேல எங்க விக்கலாம்)</p>
@@ -188,6 +197,100 @@
     return { up, dn };
   }
 
+  /* ── limit-buy quality assessment ──────────────────────────────────────── */
+  // "Is the price I'm about to place a limit buy at actually a good entry?"
+  function buyAssessment(sym, limit, px){
+    const S = STAT[sym]; if(!S||!S.ready) return null;
+    const lv = buildLevels(sym, limit);                  // up=resistance above limit, dn=support below
+    const res = lv.up[0] || null;                        // nearest resistance above = reward target
+    const sup = lv.dn[0] || null;                        // nearest support below = risk floor
+    const reward = res ? res.price - limit : null;
+    const risk   = sup ? limit - sup.price : null;
+    const rr = (reward!=null && risk!=null && risk>0) ? reward/risk : null;
+    const distLive = px!=null ? (limit/px-1)*100 : null; // <0 => below live (patient dip buy)
+    // is the limit sitting just above strong support? (good — you buy into a floor)
+    const nearWall   = walls(S.bids).some(w=> w.p<=limit && (limit/w.p-1)<=0.015 );
+    const nearStruct = [S.lo7,S.lo30,S.sma20,S.sma50].some(v=> v>0 && v<=limit && (limit/v-1)<=0.015 );
+    // score
+    let score = 50;
+    if (distLive!=null){ if (distLive < -0.2) score+=10; else if (distLive > 1) score-=15; }
+    if (nearWall)   score += 22;
+    if (nearStruct) score += 10;
+    if (rr!=null){ if(rr>=2) score+=20; else if(rr>=1) score+=8; else if(rr<0.8) score-=15; }
+    if (px!=null && limit>S.sma20 && S.sma20<px) score -= 8;   // chasing under heavy MA in a downtrend
+    score = Math.max(0, Math.min(100, Math.round(score)));
+    const verdict = score>=70 ? {t:'நல்ல limit buy ✅', c:'text-success', bg:'bg-success/15'}
+                  : score>=50 ? {t:'சுமார் / OK ⚠️',   c:'text-brand',   bg:'bg-brand/15'}
+                  :             {t:'கவனம் — ரிஸ்க் அதிகம் ❌', c:'text-danger', bg:'bg-danger/15'};
+    // reasons (Tamil)
+    const reasons = [];
+    if (distLive!=null && distLive < -0.2) reasons.push(`Live ($${fmtPrice(px)})-க்கு கீழ — பொறுமையான dip buy`);
+    else if (distLive!=null && distLive > 1) reasons.push(`Live-க்கு ${distLive.toFixed(1)}% மேல — விலையை துரத்துற மாதிரி`);
+    else reasons.push(`Live விலைக்கு கிட்ட`);
+    if (nearWall) reasons.push('கீழ பெரிய bid wall — support-ல உட்காருது 👍');
+    if (nearStruct && !nearWall) reasons.push('Structural support (low/MA) கிட்ட');
+    if (!nearWall && !nearStruct) reasons.push('கிட்ட strong support இல்ல — mid-range entry');
+    if (rr!=null) reasons.push(`R:R ${rr.toFixed(2)} ${rr>=2?'(நல்லது)':rr>=1?'(சுமார்)':'(மோசம்)'}`);
+    return { lv, res, sup, reward, risk, rr, distLive, score, verdict, reasons };
+  }
+
+  function levelTable(rows, E, qty, title, titleCol, nextPx){
+    const body = rows.map(t=>{
+      const dpl = (t.price/E-1)*100, usd = qty ? (t.price-E)*qty : null;
+      const hot = nextPx!=null && t.price>nextPx;
+      return `<tr class="border-b border-white/5">
+        <td class="px-3 py-2 text-gray-300">${t.label}<div class="text-[10px] text-gray-600">${t.note||''}</div></td>
+        <td class="px-3 py-2 text-right mono">$${fmtPrice(t.price)}</td>
+        <td class="px-3 py-2 text-right mono ${pctCol(dpl)}">${dpl>=0?'+':''}${dpl.toFixed(2)}%</td>
+        <td class="px-3 py-2 text-right mono ${pctCol(usd)}">${usd==null?'—':(usd>=0?'+$':'-$')+fmtUsd(Math.abs(usd))}</td>
+      </tr>`;
+    }).join('') || `<tr><td colspan="4" class="px-3 py-3 text-gray-600 text-center">—</td></tr>`;
+    return `<div class="bg-card/60">
+      <p class="px-4 py-2 text-xs font-bold ${titleCol}">${title}</p>
+      <table class="w-full text-xs"><thead class="text-[10px] text-gray-500 uppercase">
+        <tr><th class="px-3 py-1.5 text-left">Level</th><th class="px-3 py-1.5 text-right">விலை</th><th class="px-3 py-1.5 text-right">entry-ல் இருந்து</th><th class="px-3 py-1.5 text-right">P/L$</th></tr>
+      </thead><tbody>${body}</tbody></table></div>`;
+  }
+
+  /* ── limit-buy card ────────────────────────────────────────────────────── */
+  function limitCardHtml(p, S, px, base, icons){
+    const L = p.entry, qty = p.qty;
+    const a = buyAssessment(p.sym, L, px);
+    if (!a) return '';
+    const reached = px!=null && px<=L;
+    const dist = px!=null ? (L/px-1)*100 : null;
+    const upTbl = levelTable(a.lv.up, L, qty, '🎯 Sell targets (வாங்கின பின் மேல)', 'text-success', null);
+    const dnTbl = levelTable(a.lv.dn, L, qty, '🛡️ Risk / stop (கீழ)', 'text-danger', null);
+    return `<div class="glass rounded-2xl overflow-hidden" data-card="${p.id}">
+      <div class="p-5 flex flex-wrap items-center gap-x-6 gap-y-3 justify-between border-b border-white/5">
+        <div class="flex items-center gap-3">
+          <span class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-white/10 text-gray-300">⏳ LIMIT BUY</span>
+          <div class="font-bold text-xl whitespace-nowrap">${base}<span class="text-gray-600 text-sm">/USDT</span></div>
+          <span class="inline-flex gap-1">${icons}</span>
+        </div>
+        <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">Live</p><p class="text-lg font-bold mono" data-live="${p.sym}">$${fmtPrice(px)}</p></div>
+        <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">Limit buy @</p><p class="text-lg font-bold mono text-brand">$${fmtPrice(L)}</p></div>
+        <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">Live-ல் இருந்து</p><p class="text-lg font-bold mono ${dist==null?'':dist<0?'text-success':'text-danger'}" data-dist="${p.sym}">${dist==null?'—':(dist>=0?'+':'')+dist.toFixed(2)+'%'}</p></div>
+        <div class="text-center"><p class="text-[10px] text-gray-500 uppercase">Buy score</p><p class="text-2xl font-black mono ${a.verdict.c}">${a.score}</p></div>
+        <button onclick="removePos('${p.id}')" class="text-gray-500 hover:text-danger text-sm self-start">✕</button>
+      </div>
+      <!-- verdict -->
+      <div class="px-5 py-3 ${a.verdict.bg} border-b border-white/5 flex flex-wrap items-center gap-x-4 gap-y-1">
+        <span class="font-bold ${a.verdict.c}">${a.verdict.t}</span>
+        <span class="text-xs text-gray-400">R:R <b class="${a.rr>=2?'text-success':a.rr>=1?'text-brand':'text-danger'}">${a.rr==null?'—':a.rr.toFixed(2)}</b>
+          ${a.res?`· reward → $${fmtPrice(a.res.price)} (+${((a.res.price/L-1)*100).toFixed(1)}%)`:''}
+          ${a.sup?`· risk → $${fmtPrice(a.sup.price)} (${((a.sup.price/L-1)*100).toFixed(1)}%)`:''}</span>
+        ${reached?'<span class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-success/20 text-success">✅ Limit price reach ஆச்சு</span>':''}
+      </div>
+      <div class="px-5 py-2 text-[11px] text-gray-400">${a.reasons.map(r=>'• '+r).join('&nbsp;&nbsp; ')}</div>
+      <div class="grid md:grid-cols-2 gap-px bg-white/5">${upTbl}${dnTbl}</div>
+      <div class="px-5 py-3 flex items-center justify-between flex-wrap gap-2">
+        <span class="text-[11px] text-gray-500">ATR(1d) $${fmtPrice(S.atr)} · SMA20 $${fmtPrice(S.sma20)} · SMA50 $${fmtPrice(S.sma50)} · 30d $${fmtPrice(S.lo30)}–$${fmtPrice(S.hi30)}</span>
+        <button onclick="markBought('${p.id}')" class="px-3 py-1.5 rounded-lg text-xs font-bold bg-success/15 text-success hover:bg-success/25 transition">✓ வாங்கிட்டேன் (Held-ஆ மாத்து)</button>
+      </div>
+    </div>`;
+  }
+
   /* ── render ────────────────────────────────────────────────────────────── */
   function render(){
     $('empty').classList.toggle('hidden', POS.length>0);
@@ -210,6 +313,7 @@
         <p class="text-gray-500 text-sm mt-3">${S&&S.err?('Data load ஆகல: '+S.err):'Data ஏற்றுகிறது…'}</p>
       </div>`;
     }
+    if (p.type === 'LIMIT') return limitCardHtml(p, S, px, base, icons);
     const pl = px!=null ? (px/E-1)*100 : null;
     const plUsd = (px!=null && qty) ? (px-E)*qty : null;
     const be = E*1.001;
@@ -286,6 +390,11 @@
     const px = LIVE[sym];
     document.querySelectorAll(`[data-live="${sym}"]`).forEach(el=>el.textContent = '$'+fmtPrice(px));
     POS.filter(p=>p.sym===sym).forEach(p=>{
+      if (p.type === 'LIMIT'){
+        const d = (p.entry/px-1)*100;       // limit vs live
+        document.querySelectorAll(`[data-dist="${sym}"]`).forEach(el=>{ el.textContent=(d>=0?'+':'')+d.toFixed(2)+'%'; el.className='text-lg font-bold mono '+(d<0?'text-success':'text-danger'); });
+        checkAlert(p, px); return;
+      }
       const pl = (px/p.entry-1)*100;
       const plUsd = p.qty ? (px-p.entry)*p.qty : null;
       document.querySelectorAll(`[data-pl="${sym}"]`).forEach(el=>{ el.textContent=(pl>=0?'+':'')+pl.toFixed(2)+'%'; el.className='text-lg font-bold mono '+pctCol(pl); });
@@ -297,6 +406,10 @@
   function checkAlert(p, px){
     const S = STAT[p.sym]; if(!S||!S.ready) return;
     const a = ALERTED[p.id] = ALERTED[p.id] || {};
+    if (p.type === 'LIMIT'){
+      if (!a.fill && px<=p.entry){ a.fill=true; fireAlert(p, px, 'LIMIT FILL', `${p.sym.replace('USDT','')} limit $${fmtPrice(p.entry)} reach ஆச்சு — order fill ஆகலாம். வாங்கினா "Held"-ஆ மாத்துங்க.`); }
+      return;
+    }
     const be = p.entry*1.001;
     if (!a.be && px>=be){ a.be=true; fireAlert(p, px, 'BREAKEVEN', `${p.sym.replace('USDT','')} breakeven $${fmtPrice(be)} reach ஆச்சு (+${((px/p.entry-1)*100).toFixed(1)}%)`); }
     // first ask wall above entry = TP1
@@ -334,7 +447,17 @@
   }
   function setWs(t,c){ $('ws-status').textContent=t; $('ws-dot').className='w-2.5 h-2.5 rounded-full '+c; }
 
-  /* ── add / remove ──────────────────────────────────────────────────────── */
+  /* ── add / remove / mark ───────────────────────────────────────────────── */
+  let formMode = 'HELD';                              // 'HELD' | 'LIMIT'
+  function setMode(m){
+    formMode = m;
+    const held = m==='HELD';
+    $('tab-held').className  = 'ptab px-3 py-1.5 rounded-lg text-xs font-semibold '+(held?'bg-brand/15 text-brand':'bg-white/5 text-gray-400');
+    $('tab-limit').className = 'ptab px-3 py-1.5 rounded-lg text-xs font-semibold '+(held?'bg-white/5 text-gray-400':'bg-brand/15 text-brand');
+    $('lbl-entry').textContent = held ? 'Avg buy price ($)' : 'Limit buy price ($)';
+    $('form-hint').textContent = held ? 'வாங்கின position-ஐ track பண்ணு — live P/L + sell targets.'
+                                      : 'போடப்போற limit buy சரியான விலையா-னு check பண்ணு — support/R:R + buy score.';
+  }
   async function addPos(){
     const sym = $('in-sym').value.trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
     const entry = parseFloat($('in-entry').value);
@@ -342,12 +465,12 @@
     const err = (m)=>{ const e=$('form-err'); e.textContent=m; e.classList.remove('hidden'); };
     $('form-err').classList.add('hidden');
     if (!sym) return err('Coin symbol போடுங்க (e.g. LTCUSDT).');
-    if (!(entry>0)) return err('சரியான avg buy price போடுங்க.');
+    if (!(entry>0)) return err(formMode==='LIMIT' ? 'சரியான limit buy price போடுங்க.' : 'சரியான avg buy price போடுங்க.');
     // validate symbol exists by probing the ticker
     try { const t = await getJSON(`https://api.binance.com/api/v3/ticker/price?symbol=${sym}`); LIVE[sym]=+t.price; }
     catch { return err(`${sym} Binance-ல கிடைக்கல. Symbol சரிபாருங்க (USDT pair).`); }
     const id = sym+'-'+Date.now();
-    POS.push({ id, sym, entry, qty: qty>0?qty:null });
+    POS.push({ id, sym, entry, qty: qty>0?qty:null, type: formMode });
     savePos(POS);
     $('in-sym').value=''; $('in-entry').value=''; $('in-qty').value='';
     await refreshStat(sym);
@@ -358,6 +481,12 @@
     POS = POS.filter(p=>p.id!==id); savePos(POS); delete ALERTED[id];
     render(); resubscribe();
   }
+  function markBought(id){
+    const p = POS.find(x=>x.id===id); if(!p) return;
+    p.type = 'HELD'; delete ALERTED[id];          // reset alert flags for the held lifecycle
+    savePos(POS); render();
+  }
+  window.markBought = markBought;
   window.removePos = removePos;
 
   /* ── periodic refresh of static analysis (walls move) ──────────────────── */
@@ -369,6 +498,8 @@
 
   /* ── boot ──────────────────────────────────────────────────────────────── */
   $('btn-add').addEventListener('click', addPos);
+  $('tab-held').addEventListener('click', ()=>setMode('HELD'));
+  $('tab-limit').addEventListener('click', ()=>setMode('LIMIT'));
   ['in-sym','in-entry','in-qty'].forEach(id => $(id).addEventListener('keydown', e=>{ if(e.key==='Enter') addPos(); }));
   (async () => {
     render();
