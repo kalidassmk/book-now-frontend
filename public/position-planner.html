@@ -66,15 +66,15 @@
       <div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
         <div>
           <label class="block text-[11px] text-gray-400 mb-1">Coin (e.g. LTCUSDT)</label>
-          <input id="in-sym" type="text" placeholder="LTCUSDT" class="w-full mono uppercase" autocomplete="off">
+          <input id="in-sym" type="text" placeholder="e.g. LTC" class="w-full mono uppercase" autocomplete="off">
         </div>
         <div>
           <label id="lbl-entry" class="block text-[11px] text-gray-400 mb-1">Avg buy price ($)</label>
-          <input id="in-entry" type="number" step="any" placeholder="44.5256" class="w-full mono">
+          <input id="in-entry" type="number" step="any" placeholder="price போடுங்க" class="w-full mono">
         </div>
         <div>
           <label class="block text-[11px] text-gray-400 mb-1">Quantity (optional)</label>
-          <input id="in-qty" type="number" step="any" placeholder="10" class="w-full mono">
+          <input id="in-qty" type="number" step="any" placeholder="qty (optional)" class="w-full mono">
         </div>
         <div class="flex gap-2">
           <button id="btn-add" class="flex-1 gradient-brand text-bg font-bold rounded-xl px-4 py-2 text-sm hover:brightness-110 transition">சேர்</button>
@@ -462,11 +462,11 @@
     const raw = $('in-sym').value;
     const entry = parseFloat($('in-entry').value);
     const qty = parseFloat($('in-qty').value);
-    const err = (m)=>{ const e=$('form-err'); e.textContent=m; e.classList.remove('hidden'); };
+    const err = (m, focusId)=>{ const e=$('form-err'); e.textContent=m; e.classList.remove('hidden'); if(focusId){ const f=$(focusId); if(f){ f.focus(); f.classList.add('ring-2','ring-danger'); setTimeout(()=>f.classList.remove('ring-2','ring-danger'),2500); } } };
     $('form-err').classList.add('hidden');
     const stripped = String(raw||'').toUpperCase().replace(/[^A-Z0-9]/g,'');   // LTC/USDT, LTC_USDT, LTC USDT → LTCUSDT ; LTC → LTC
-    if (!stripped) return err('Coin symbol போடுங்க (e.g. LTC, LTCUSDT, LTC/USDT).');
-    if (!(entry>0)) return err(formMode==='LIMIT' ? 'சரியான limit buy price போடுங்க.' : 'சரியான avg buy price போடுங்க.');
+    if (!stripped) return err('Coin symbol போடுங்க (e.g. LTC, LTCUSDT, LTC/USDT).', 'in-sym');
+    if (!(entry>0)) return err(formMode==='LIMIT' ? 'Limit buy price field காலியா இருக்கு — price போடுங்க.' : 'Avg buy price field காலியா இருக்கு — price போடுங்க.', 'in-entry');
     // build candidate symbols (flexible input) and probe Binance until one resolves
     const QUOTES = ['USDT','FDUSD','USDC','BUSD','TUSD','BTC','ETH','BNB'];
     const hasQuote = QUOTES.some(q => stripped.endsWith(q) && stripped.length > q.length);
