@@ -459,16 +459,25 @@
                                       : 'போடப்போற limit buy சரியான விலையா-னு check பண்ணு — support/R:R + buy score.';
   }
   async function addPos(){
-    const sym = $('in-sym').value.trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
+    const raw = $('in-sym').value;
     const entry = parseFloat($('in-entry').value);
     const qty = parseFloat($('in-qty').value);
     const err = (m)=>{ const e=$('form-err'); e.textContent=m; e.classList.remove('hidden'); };
     $('form-err').classList.add('hidden');
-    if (!sym) return err('Coin symbol போடுங்க (e.g. LTCUSDT).');
+    const stripped = String(raw||'').toUpperCase().replace(/[^A-Z0-9]/g,'');   // LTC/USDT, LTC_USDT, LTC USDT → LTCUSDT ; LTC → LTC
+    if (!stripped) return err('Coin symbol போடுங்க (e.g. LTC, LTCUSDT, LTC/USDT).');
     if (!(entry>0)) return err(formMode==='LIMIT' ? 'சரியான limit buy price போடுங்க.' : 'சரியான avg buy price போடுங்க.');
-    // validate symbol exists by probing the ticker
-    try { const t = await getJSON(`https://api.binance.com/api/v3/ticker/price?symbol=${sym}`); LIVE[sym]=+t.price; }
-    catch { return err(`${sym} Binance-ல கிடைக்கல. Symbol சரிபாருங்க (USDT pair).`); }
+    // build candidate symbols (flexible input) and probe Binance until one resolves
+    const QUOTES = ['USDT','FDUSD','USDC','BUSD','TUSD','BTC','ETH','BNB'];
+    const hasQuote = QUOTES.some(q => stripped.endsWith(q) && stripped.length > q.length);
+    const cands = [...new Set([ ...(hasQuote?[stripped]:[]), stripped+'USDT', stripped ])];
+    let sym = null;
+    for (const c of cands){
+      try { const t = await getJSON(`https://api.binance.com/api/v3/ticker/price?symbol=${c}`); LIVE[c]=+t.price; sym=c; break; }
+      catch { /* try next candidate */ }
+    }
+    if (!sym) return err(`"${raw.trim()}" Binance-ல கிடைக்கல. Coin சரிபாருங்க (USDT pair வேணும், e.g. LTC).`);
+    if (POS.some(p=>p.sym===sym && p.type===formMode)) { /* allow duplicates; user may track multiple buys */ }
     const id = sym+'-'+Date.now();
     POS.push({ id, sym, entry, qty: qty>0?qty:null, type: formMode });
     savePos(POS);
