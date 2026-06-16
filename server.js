@@ -3820,6 +3820,31 @@ app.get('/api/history/signals', async (req, res) => {
     }
 });
 
+// iter174 (2026-06-16): Signal auto-buy state — the backend SignalAutoBuyManager
+// keeps a NO-RE-BUY ledger (SIGNAL:AUTOBUY:BOUGHT) and the live position cap
+// (SIGNAL:AUTOBUY:POS) in the MAIN redis. position-planner.html reads this so it
+// never re-suggests a coin that's already been auto-bought (same no-re-buy rule).
+app.get('/api/autobuy/state', async (req, res) => {
+    try {
+        const [boughtRaw, openSyms] = await Promise.all([
+            redis.hgetall('SIGNAL:AUTOBUY:BOUGHT').catch(() => ({})),
+            redis.hkeys('SIGNAL:AUTOBUY:POS').catch(() => []),
+        ]);
+        const bought = {};
+        for (const [sym, val] of Object.entries(boughtRaw || {})) {
+            try { bought[sym.toUpperCase()] = JSON.parse(val); }
+            catch { bought[sym.toUpperCase()] = { ts: null }; }
+        }
+        res.json({
+            generated_at: Date.now(),
+            bought,
+            open: (openSyms || []).map(s => String(s).toUpperCase()),
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // iter 16 fe (2026-05-15): Pattern Backtest
 // Replays every detection from BOUNCE:DETECTIONS and EARLY_PUMP:DETECTIONS
 // against actual 1m klines. Simulates the bot's iter43 strategy:
