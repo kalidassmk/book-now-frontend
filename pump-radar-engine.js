@@ -115,7 +115,20 @@ async function seedAll() {
   }
   await Promise.all(Array.from({ length: SEED_CONC }, worker));
   seeded = true;
-  console.log(`[pump-radar-engine] seeded ${done}/${SYMBOLS.length} symbols`);
+  // Initial snapshot — capture every coin already ARMED/SIGNAL at startup, just
+  // like opening the browser radar does. Without this, coins armed *before* the
+  // engine booted stay silent until their next fresh transition (ARMED only
+  // changes at 1h bar closes), so a freshly-booted engine looks "empty" for up
+  // to an hour. persistRadarCapture's 45s de-dupe keeps a quick restart clean.
+  let snap = 0;
+  for (const sym of SYMBOLS) {
+    const st = S[sym];
+    if (st.status === 'SIGNAL' || st.status === 'ARMED') {
+      emit(sym, st.status, Date.now(), st.price);
+      snap++;
+    }
+  }
+  console.log(`[pump-radar-engine] seeded ${done}/${SYMBOLS.length} symbols — initial snapshot: ${snap} ARMED/SIGNAL`);
 }
 
 // ── Rule evaluation (identical to recompute() in the browser) ────────────
