@@ -3564,6 +3564,42 @@ app.get('/api/alerts/feed', async (req, res) => {
 const HISTORY_RETENTION_SEC = 90 * 24 * 60 * 60;   // operator chose 90 days
 const HISTORY_DAY_CAP = 2000;                      // ltrim cap per day key
 
+// iter173 fe — DURABLE radar history.
+//   The hot `redis` (128 MB, allkeys-lru, no persistence) was evicting the
+//   PUMP_RADAR:SIGNALS / ORDERFLOW_RADAR:SIGNALS keys under memory pressure,
+//   so multi-day history the operator had seen vanished. We now:
+//     1) write captures to an append-only JSONL file on a host-mounted volume
+//        (HISTORY_DIR) — the durable source of truth, immune to redis evict;
+//     2) keep writing to `redisAnalyse` (256 MB, RDB+AOF) as a fast cache;
+//     3) read = file ∪ redisAnalyse, de-duped — so the page survives a redis
+//        eviction *and* a container redeploy.
+const fsp = require('fs').promises;
+const HISTORY_DIR = process.env.HISTORY_DIR || path.join(__dirname, 'data', 'radar-history');
+
+function radarFilePath(source, date) {
+    // source is already normalised to 'pump' | 'orderflow'
+    return path.join(HISTORY_DIR, source, `${date}.jsonl`);
+}
+
+async function appendRadarFile(source, date, ev) {
+    const fp = radarFilePath(source, date);
+    await fsp.mkdir(path.dirname(fp), { recursive: true });
+    await fsp.appendFile(fp, JSON.stringify(ev) + '\n', 'utf8');
+}
+
+async function readRadarFile(source, date) {
+    const fp = radarFilePath(source, date);
+    let txt;
+    try { txt = await fsp.readFile(fp, 'utf8'); }
+    catch (_) { return []; }            // missing file = no captures that day
+    const out = [];
+    for (const line of txt.split('\n')) {
+        if (!line.trim()) continue;
+        try { out.push(JSON.parse(line)); } catch (_) {}
+    }
+    return out;
+}
+
 function historyDateList(from, to) {
     // inclusive UTC date list (YYYY-MM-DD), newest→oldest, capped at 92 days
     const out = [];
@@ -3615,7 +3651,7 @@ function normHistEvent(kind, ev) {
 function historyKeySpec(source) {
     if (source === 'orderflow') {
         return [
-            ['redis', 'ORDERFLOW_RADAR:SIGNALS', 'orderflow_radar'],
+            ['redisAnalyse', 'ORDERFLOW_RADAR:SIGNALS', 'orderflow_radar'],
         ];
     }
     if (source === 'buysignals') {
@@ -3630,7 +3666,7 @@ function historyKeySpec(source) {
     }
     // default: pump
     return [
-        ['redis', 'PUMP_RADAR:SIGNALS', 'pump_radar'],
+        ['redisAnalyse', 'PUMP_RADAR:SIGNALS', 'pump_radar'],
     ];
 }
 
@@ -3670,9 +3706,9 @@ app.post('/api/history/capture', async (req, res) => {
         };
         const date = new Date(ts).toISOString().slice(0, 10);
         const key = (source === 'orderflow' ? 'ORDERFLOW_RADAR:SIGNALS:' : 'PUMP_RADAR:SIGNALS:') + date;
-        // de-dupe: skip if same symbol+label captured in the last 45s
+        // de-dupe: skip if same symbol+label captured in the last 45s (cache check)
         try {
-            const tail = await redis.lrange(key, -8, -1);
+            const tail = await redisAnalyse.lrange(key, -8, -1);
             for (const r of tail) {
                 const p = JSON.parse(r);
                 if (p.symbol === symbol && (p.label || '') === (ev.label || '') &&
@@ -3681,9 +3717,13 @@ app.post('/api/history/capture', async (req, res) => {
                 }
             }
         } catch (_) {}
-        await redis.rpush(key, JSON.stringify(ev));
-        await redis.ltrim(key, -HISTORY_DAY_CAP, -1);
-        await redis.expire(key, HISTORY_RETENTION_SEC);
+        // 1) durable source of truth — append-only JSONL on the host volume.
+        try { await appendRadarFile(source, date, ev); }
+        catch (e) { console.error('[history] file append failed:', e.message); }
+        // 2) fast cache — persistent analyse DB (RDB+AOF, 256 MB headroom).
+        await redisAnalyse.rpush(key, JSON.stringify(ev));
+        await redisAnalyse.ltrim(key, -HISTORY_DAY_CAP, -1);
+        await redisAnalyse.expire(key, HISTORY_RETENTION_SEC);
         res.json({ ok: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -3702,7 +3742,32 @@ app.get('/api/history/signals', async (req, res) => {
         const spec = historyKeySpec(source);
         const events = [];
 
+        const pushNorm = (kind, ev, seen) => {
+            if (!ev || !ev.ts) return;
+            if (source === 'buysignals' && !isStrongBuy(kind, ev)) return;
+            const n = normHistEvent(kind, ev);
+            if (!n.symbol) return;
+            // de-dupe file ∪ redis (same capture written to both stores)
+            if (seen) {
+                const sig = `${ev.ts}|${n.symbol}|${ev.label || ev.signal || ''}`;
+                if (seen.has(sig)) return;
+                seen.add(sig);
+            }
+            if (symbol && n.symbol !== symbol) return;
+            if (minPrice  != null && !(n.price  != null && n.price  >= minPrice))  return;
+            if (minChgPct != null && !(n.chg_pct != null && n.chg_pct >= minChgPct)) return;
+            events.push(n);
+        };
+
         for (const date of dates) {
+            const seen = new Set();
+            // 1) durable file first (pump / orderflow only) — survives evict + redeploy.
+            if (source === 'pump' || source === 'orderflow') {
+                const kind = source === 'orderflow' ? 'orderflow_radar' : 'pump_radar';
+                const fileEvents = await readRadarFile(source, date);
+                for (const ev of fileEvents) pushNorm(kind, ev, seen);
+            }
+            // 2) redis cache (and buysignals detector lists).
             for (const [clientName, keyBase, kind] of spec) {
                 const client = clientName === 'redisAnalyse' ? redisAnalyse : redis;
                 let raw;
@@ -3710,14 +3775,7 @@ app.get('/api/history/signals', async (req, res) => {
                 catch (_) { continue; }
                 for (const r of raw) {
                     let ev; try { ev = JSON.parse(r); } catch (_) { continue; }
-                    if (!ev || !ev.ts) continue;
-                    if (source === 'buysignals' && !isStrongBuy(kind, ev)) continue;
-                    const n = normHistEvent(kind, ev);
-                    if (!n.symbol) continue;
-                    if (symbol && n.symbol !== symbol) continue;
-                    if (minPrice  != null && !(n.price  != null && n.price  >= minPrice))  continue;
-                    if (minChgPct != null && !(n.chg_pct != null && n.chg_pct >= minChgPct)) continue;
-                    events.push(n);
+                    pushNorm(kind, ev, seen);
                 }
             }
         }
