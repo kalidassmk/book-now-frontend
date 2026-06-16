@@ -291,6 +291,18 @@ for (const [route, enginePath] of Object.entries(SCALPER_ENDPOINTS)) {
 const binanceWorker = require('./binance-worker');
 binanceWorker.start(io, handleExecution);
 
+// ── Pump Radar Engine (server-side, 24×7) ─────────────────────────────────────
+// iter174 — runs pump-radar.html's validated ARMED/SIGNAL rule on the server via
+// Binance public WebSocket klines, so pump-history accrues WITHOUT anyone keeping
+// the radar tab open. WS carries no REST weight (one-time light REST seed only),
+// so the trading IP's 6000/min budget is untouched. Captures flow through the
+// SAME durable writer as the browser (persistRadarCapture → file + redis-analyse).
+const pumpEngine = require('./pump-radar-engine');
+pumpEngine.start({
+    binanceFetch: binanceWorker.binanceFetch,
+    capture: (source, ev) => persistRadarCapture(source, ev),
+});
+
 // If the worker is in the same process, it calls handleExecution directly.
 function handleExecution(event) {
     const { symbol, orderId, status, executedQty, price } = event;
@@ -3687,44 +3699,59 @@ function isStrongBuy(kind, ev) {
     }
 }
 
+// Shared durable writer — used by BOTH the POST /api/history/capture endpoint
+// (browser-captured radar transitions) AND the server-side pump-radar-engine
+// (24×7 WS engine, iter174). Keeps the file + redis-analyse write IDENTICAL so
+// the history is the same shape no matter who produced it.
+//   ev MUST already be normalised: { ts, symbol, label, price, chg_pct,
+//   vol_surge, buy_pct, [buy_vol], [sell_vol] }.
+//   Returns { ok, deduped } — never throws (file failure is logged, not fatal).
+async function persistRadarCapture(source, ev) {
+    const src = (source === 'orderflow') ? 'orderflow' : 'pump';
+    const symbol = String(ev.symbol || '').toUpperCase();
+    if (!symbol) return { ok: false, error: 'symbol required' };
+    const ts = Number.isFinite(+ev.ts) ? +ev.ts : Date.now();
+    const rec = {
+        ts, symbol,
+        label: ev.label || ev.signal || 'SIGNAL',
+        price: ev.price != null ? +ev.price : null,
+        chg_pct: ev.chg_pct != null ? +ev.chg_pct : null,
+        vol_surge: ev.vol_surge != null ? +ev.vol_surge : null,
+        buy_pct: ev.buy_pct != null ? +ev.buy_pct : null,
+        buy_vol: ev.buy_vol != null ? +ev.buy_vol : null,
+        sell_vol: ev.sell_vol != null ? +ev.sell_vol : null,
+    };
+    const date = new Date(ts).toISOString().slice(0, 10);
+    const key = (src === 'orderflow' ? 'ORDERFLOW_RADAR:SIGNALS:' : 'PUMP_RADAR:SIGNALS:') + date;
+    // de-dupe: skip if same symbol+label captured in the last 45s (cache check)
+    try {
+        const tail = await redisAnalyse.lrange(key, -8, -1);
+        for (const r of tail) {
+            const p = JSON.parse(r);
+            if (p.symbol === symbol && (p.label || '') === (rec.label || '') &&
+                Math.abs((p.ts || 0) - ts) < 45000) {
+                return { ok: true, deduped: true };
+            }
+        }
+    } catch (_) {}
+    // 1) durable source of truth — append-only JSONL on the host volume.
+    try { await appendRadarFile(src, date, rec); }
+    catch (e) { console.error('[history] file append failed:', e.message); }
+    // 2) fast cache — persistent analyse DB (RDB+AOF, 256 MB headroom).
+    await redisAnalyse.rpush(key, JSON.stringify(rec));
+    await redisAnalyse.ltrim(key, -HISTORY_DAY_CAP, -1);
+    await redisAnalyse.expire(key, HISTORY_RETENTION_SEC);
+    return { ok: true };
+}
+
 app.post('/api/history/capture', async (req, res) => {
     try {
         const b = req.body || {};
         const source = (b.source === 'orderflow') ? 'orderflow' : 'pump';
-        const symbol = String(b.symbol || '').toUpperCase();
-        if (!symbol) return res.status(400).json({ error: 'symbol required' });
-        const ts = Number.isFinite(+b.ts) ? +b.ts : Date.now();
-        const ev = {
-            ts, symbol,
-            label: b.label || b.signal || 'SIGNAL',
-            price: b.price != null ? +b.price : null,
-            chg_pct: b.chg_pct != null ? +b.chg_pct : null,
-            vol_surge: b.vol_surge != null ? +b.vol_surge : null,
-            buy_pct: b.buy_pct != null ? +b.buy_pct : null,
-            buy_vol: b.buy_vol != null ? +b.buy_vol : null,
-            sell_vol: b.sell_vol != null ? +b.sell_vol : null,
-        };
-        const date = new Date(ts).toISOString().slice(0, 10);
-        const key = (source === 'orderflow' ? 'ORDERFLOW_RADAR:SIGNALS:' : 'PUMP_RADAR:SIGNALS:') + date;
-        // de-dupe: skip if same symbol+label captured in the last 45s (cache check)
-        try {
-            const tail = await redisAnalyse.lrange(key, -8, -1);
-            for (const r of tail) {
-                const p = JSON.parse(r);
-                if (p.symbol === symbol && (p.label || '') === (ev.label || '') &&
-                    Math.abs((p.ts || 0) - ts) < 45000) {
-                    return res.json({ ok: true, deduped: true });
-                }
-            }
-        } catch (_) {}
-        // 1) durable source of truth — append-only JSONL on the host volume.
-        try { await appendRadarFile(source, date, ev); }
-        catch (e) { console.error('[history] file append failed:', e.message); }
-        // 2) fast cache — persistent analyse DB (RDB+AOF, 256 MB headroom).
-        await redisAnalyse.rpush(key, JSON.stringify(ev));
-        await redisAnalyse.ltrim(key, -HISTORY_DAY_CAP, -1);
-        await redisAnalyse.expire(key, HISTORY_RETENTION_SEC);
-        res.json({ ok: true });
+        if (!String(b.symbol || '').trim()) return res.status(400).json({ error: 'symbol required' });
+        const out = await persistRadarCapture(source, b);
+        if (!out.ok) return res.status(400).json(out);
+        res.json(out);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
