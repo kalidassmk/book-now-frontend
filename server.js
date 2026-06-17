@@ -303,6 +303,18 @@ pumpEngine.start({
     capture: (source, ev) => persistRadarCapture(source, ev),
 });
 
+// ── Order Flow Radar Engine (server-side, 24×7) ───────────────────────────────
+// iter178 — mirrors the pump engine for the orderflow BURST→T+1 CONFIRM rule so
+// orderflow-history.html accrues data WITHOUT anyone keeping orderflow-radar.html
+// open. Previously orderflow history was browser-capture-only, so it stalled the
+// moment nobody kept the tab open (last data 2026-06-14). Same WS-only feed (no
+// REST weight on the trading IP) and the SAME durable writer as the browser.
+const orderflowEngine = require('./orderflow-radar-engine');
+orderflowEngine.start({
+    binanceFetch: binanceWorker.binanceFetch,
+    capture: (source, ev) => persistRadarCapture(source, ev),
+});
+
 // If the worker is in the same process, it calls handleExecution directly.
 function handleExecution(event) {
     const { symbol, orderId, status, executedQty, price } = event;
