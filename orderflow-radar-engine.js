@@ -222,10 +222,15 @@ function onConfirm(sym) {
   const px = st.entry || c.c;
   const buyUsdt  = (c.tb != null && px) ? c.tb * px : null;
   const sellUsdt = (c.v != null && c.tb != null && px) ? (c.v - c.tb) * px : null;
+  // v2: ALWAYS record this detection as CONFIRM for history — NEVER 'BUY'.
+  // The old engine wrote label=='BUY' whenever the 1h context was ARMED, which
+  // made the backend auto-buy the climax confirm candle (the exact -12.96%
+  // NOTUSDT failure mode). In v2 a real auto-buyable BUY is emitted ONLY by
+  // emitBuy() after a gated pullback fill. CONFIRM stays study-only.
   const ev = {
     source: 'orderflow',
     symbol: sym,
-    label: st.status,                  // 'BUY' | 'CONFIRM'
+    label: 'CONFIRM',
     ts: Date.now(),
     price: px,
     chg_pct: st.ret2,
@@ -238,7 +243,7 @@ function onConfirm(sym) {
     console.error('[orderflow-radar-engine] capture failed:', e.message));
   const now = Date.now();
   if (now - lastLog > 30000) {
-    console.log(`[orderflow-radar-engine] ${st.status} ${sym} @ ${px} (vs1m=${st.vs1m?.toFixed?.(1)}× buy=${st.buy1m?.toFixed?.(0)}% breadth=${st.breadth?.toFixed?.(1)}× armed=${st.armed})`);
+    console.log(`[orderflow-radar-engine] CONFIRM ${sym} @ ${px} (vs1m=${st.vs1m?.toFixed?.(1)}× buy=${st.buy1m?.toFixed?.(0)}% breadth=${st.breadth?.toFixed?.(1)}× armed=${st.armed})`);
     lastLog = now;
   }
 
