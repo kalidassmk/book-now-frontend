@@ -225,10 +225,38 @@ async function refreshTradeHistorySnapshot() {
         // Skip dust (USDT-value < $1) to avoid burning weight on
         // micro-leftovers from old trades. The dashboard never shows
         // sub-$1 history rows anyway.
+        //
+        // NOTE: BINANCE:BALANCES:ALL is stored as {asset, free, locked}
+        // only — `valueUsdt` is computed at read-time inside server.js and
+        // is NOT persisted. Relying on b.valueUsdt here made the filter
+        // always evaluate 0 >= 1 (false), so symbolsToFetch came back empty
+        // and BINANCE:TRADE_HISTORY:ALL was never seeded → the Trade
+        // History page showed no data. Compute the value from the live
+        // CURRENT_PRICE hash instead.
         const balRaw = await redis.get('BINANCE:BALANCES:ALL');
         const balances = balRaw ? JSON.parse(balRaw) : [];
+        let priceHash = {};
+        try {
+            priceHash = (await redis.hgetall('CURRENT_PRICE')) || {};
+        } catch (_) { priceHash = {}; }
+        const priceOf = (sym) => {
+            const raw = priceHash[sym];
+            if (!raw) return 0;
+            try {
+                const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                return parseFloat(obj.price ?? obj) || 0;
+            } catch (_) {
+                return parseFloat(raw) || 0;
+            }
+        };
         const symbolsToFetch = balances
-            .filter(b => b.asset && b.asset !== 'USDT' && parseFloat(b.valueUsdt || 0) >= 1)
+            .filter(b => {
+                if (!b.asset || b.asset === 'USDT') return false;
+                const sym = `${b.asset}USDT`;
+                const qty = parseFloat(b.free || 0) + parseFloat(b.locked || 0);
+                const valueUsdt = qty * priceOf(sym);
+                return valueUsdt >= 1;
+            })
             .map(b => `${b.asset}USDT`);
 
         if (!symbolsToFetch.length) return;
