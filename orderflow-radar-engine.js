@@ -47,6 +47,25 @@ const BASE_N     = 20;     // 1m baseline window
 const BURST_COOLDOWN_MS = 8 * 60000;   // min gap between fresh bursts per coin
 const STALE_MS   = 12 * 60000;         // clear status after 12m of no burst
 
+// ── v2 quality gates + pullback entry (iter179) ───────────────────────────
+// Backtest of the first 44 live CONFIRM signals (median MFE +0.56% vs median
+// MAE −2.03%, 20% win) showed the raw confirm-candle entry is "buy the climax".
+// The taker-buy% curve was the tell: buy%<60 won 67% (+4.5%), buy% 70-80 won
+// 0% — high taker-buy is EXHAUSTION, not strength. So a CONFIRM is still
+// recorded for history/learning, but a real (auto-buyable) BUY is only emitted
+// when the burst passes quality gates AND price pulls back to a limit (no
+// chasing). This took total backtest P&L from −42.9% → break-even/positive on
+// the few setups that actually qualified.
+const BUY_EXH      = 78;     // reject confirm taker-buy% ≥ this (exhaustion)
+const BLOWOFF_VS   = 12;     // blow-off reject fires only when vol_surge ≥ this …
+const BLOWOFF_BUY  = 75;     // … AND taker-buy% ≥ this (pure exhaustion spike;
+                             //     high-vol + low-buy = real breakout, kept)
+const WAVE_WINDOW_MS = 5 * 60000;  // correlated-wave lookback
+const WAVE_MAX     = 4;      // ≥ this many bursts across the universe in the
+                             //     window ⇒ market-wide blow-off → suppress BUY
+const PULL_PCT     = 0.8;    // limit-entry pullback below the confirm close
+const FILL_WIN_MS  = 12 * 60000;   // how long the pullback limit stays live
+
 const STREAM_BATCH = 200;
 const SEED_CONC = 4;
 const WS_URL = 'wss://stream.binance.com:9443/stream';
@@ -66,7 +85,22 @@ for (const sym of SYMBOLS) {
     status: 'QUIET',             // QUIET | BURST | CONFIRM | BUY | FADE
     entry: null,
     lastBurstSeen: 0,
+    pending: null,               // v2: { target, refPrice, expiresAt } pullback-limit
   };
+}
+
+// Global rolling record of fresh-burst timestamps across the whole universe —
+// powers the correlated-wave guard (suppress BUYs when everything bursts at once).
+let _burstTimes = [];
+function registerBurst() {
+  const now = Date.now();
+  _burstTimes.push(now);
+  const cut = now - WAVE_WINDOW_MS;
+  _burstTimes = _burstTimes.filter(t => t >= cut);
+}
+function waveCount() {
+  const cut = Date.now() - WAVE_WINDOW_MS;
+  return _burstTimes.filter(t => t >= cut).length;
 }
 
 let _capture = null;       // injected durable writer: (source, ev) => Promise
@@ -140,7 +174,7 @@ function handleKline(d) {
   }
 
   // 1m  (V = taker buy base)
-  const cur = { t: k.t, o: +k.o, c: +k.c, v: +k.v, n: +k.n, tb: +k.V };
+  const cur = { t: k.t, o: +k.o, c: +k.c, v: +k.v, n: +k.n, tb: +k.V, l: +k.l };
   st.cur1m = cur; st.price = cur.c;
   const baseV = mean(st.vols1m.slice(-BASE_N)) || 1;
   const baseN = mean(st.trd1m.slice(-BASE_N)) || 1;
@@ -148,6 +182,9 @@ function handleKline(d) {
   st.breadth = cur.n / baseN;
   st.buy1m = cur.v > 0 ? cur.tb / cur.v * 100 : 0;
   st.green = cur.c > cur.o;
+
+  // v2: pullback-limit fill check on EVERY tick (intrabar low counts).
+  checkPullback(sym, cur.l);
 
   if (k.x) {   // minute closed
     // 1) evaluate T+1 confirmation of a prior burst
@@ -163,6 +200,7 @@ function handleKline(d) {
     if (isBurst && st.burst?.t !== cur.t && cur.t - (st.burst?.t || 0) > BURST_COOLDOWN_MS) {
       st.burst = { t: cur.t, vs: st.vs1m, breadth: st.breadth, buy: st.buy1m, price: cur.c };
       st.t1 = null; st.status = 'BURST'; st.lastBurstSeen = Date.now();
+      registerBurst();   // v2: feed the correlated-wave guard
     }
     // 3) push closed candle to baselines
     st.vols1m.push(cur.v); st.trd1m.push(cur.n);
@@ -203,6 +241,70 @@ function onConfirm(sym) {
     console.log(`[orderflow-radar-engine] ${st.status} ${sym} @ ${px} (vs1m=${st.vs1m?.toFixed?.(1)}× buy=${st.buy1m?.toFixed?.(0)}% breadth=${st.breadth?.toFixed?.(1)}× armed=${st.armed})`);
     lastLog = now;
   }
+
+  // v2: after recording the CONFIRM detection, decide whether this setup
+  // qualifies for a real (auto-buyable) BUY. We do NOT chase the confirm
+  // candle — instead arm a pullback limit and only emit BUY if price comes
+  // back to it within the fill window.
+  maybeArmPullback(sym);
+}
+
+// ── v2 quality gates → arm a pullback-limit entry ────────────────────────
+function maybeArmPullback(sym) {
+  const st = S[sym];
+  const buy = st.buy1m, vs = st.vs1m;
+  // Gate 1 — exhaustion: extreme taker-buy% means buyers are spent → skip.
+  if (buy == null || buy >= BUY_EXH) return;
+  // Gate 2 — blow-off: only reject when BOTH volume AND taker-buy are extreme
+  // (high-vol + moderate-buy = genuine breakout, kept; e.g. ZKC +50%).
+  if (vs != null && vs >= BLOWOFF_VS && buy >= BLOWOFF_BUY) return;
+  // Gate 3 — correlated wave: whole market bursting at once = blow-off → skip.
+  if (waveCount() >= WAVE_MAX) {
+    console.log(`[orderflow-radar-engine] BUY suppressed (wave=${waveCount()}) ${sym}`);
+    return;
+  }
+  const ref = st.entry || (st.cur1m && st.cur1m.c);
+  if (!ref) return;
+  st.pending = { refPrice: ref, target: ref * (1 - PULL_PCT / 100), expiresAt: Date.now() + FILL_WIN_MS };
+  console.log(`[orderflow-radar-engine] BUY armed ${sym} ref=${ref} target=${st.pending.target.toFixed(8)} (buy=${buy.toFixed(0)}% vs=${vs?.toFixed?.(1)}× wave=${waveCount()})`);
+}
+
+// Fill the armed pullback limit when price dips to target within the window.
+function checkPullback(sym, low) {
+  const st = S[sym];
+  const p = st.pending;
+  if (!p || low == null) return;
+  if (Date.now() > p.expiresAt) { st.pending = null; return; }   // window closed → no trade
+  if (low <= p.target) {
+    st.pending = null;
+    emitBuy(sym, p.target);
+  }
+}
+
+// Emit the real, auto-buyable BUY at the pulled-back entry price. The backend
+// SignalAutoBuyManager acts ONLY on label "BUY" — CONFIRM stays study-only.
+function emitBuy(sym, price) {
+  const st = S[sym];
+  if (!seeded) return;
+  const c = st.cur1m || {};
+  const buyUsdt  = (c.tb != null && price) ? c.tb * price : null;
+  const sellUsdt = (c.v != null && c.tb != null && price) ? (c.v - c.tb) * price : null;
+  st.status = 'BUY'; st.entry = price;
+  const ev = {
+    source: 'orderflow',
+    symbol: sym,
+    label: 'BUY',
+    ts: Date.now(),
+    price,
+    chg_pct: st.ret2,
+    vol_surge: st.vs1m,
+    buy_pct: st.buy1m,
+    buy_vol: buyUsdt,
+    sell_vol: sellUsdt,
+  };
+  Promise.resolve(_capture('orderflow', ev)).catch(e =>
+    console.error('[orderflow-radar-engine] BUY capture failed:', e.message));
+  console.log(`[orderflow-radar-engine] ★ BUY ${sym} @ ${price} (pullback filled, buy=${st.buy1m?.toFixed?.(0)}% vs=${st.vs1m?.toFixed?.(1)}×)`);
 }
 
 // ── WebSocket live feed ──────────────────────────────────────────────────
