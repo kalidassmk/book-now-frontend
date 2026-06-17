@@ -2658,6 +2658,29 @@ app.get('/api/vsp/feed', async (req, res) => {
     }
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// iter177 fe (2026-06-18) — Deep-Dip Reversal feed.
+// Backend subprocess `dip_hunter.py` publishes (MAIN redis):
+//   DIP_RADAR:SIGNALS:<date>  — every confirmed deep-dip turn-up SIGNAL
+//   DIP_RADAR:LATEST          — symbol → latest event
+//   DIP_RADAR:STATUS          — detector heartbeat (scanned/fired/enabled)
+// SignalAutoBuyManager consumes the SIGNALS as the live "dip" source.  This
+// feed lets position-planner.html show the deep-dip buy candidates.
+// ─────────────────────────────────────────────────────────────────────────
+app.get('/api/dip/feed', async (req, res) => {
+    try {
+        const date  = _resolveDate(req.query.date);
+        const limit = Math.max(1, Math.min(1000, parseInt(req.query.limit || '300', 10)));
+        const raw = await redis.lrange(`DIP_RADAR:SIGNALS:${date}`, -limit, -1);
+        const events = raw.map(r => { try { return JSON.parse(r); } catch (_) { return null; } }).filter(Boolean);
+        let status = {};
+        try { status = await redis.hgetall('DIP_RADAR:STATUS') || {}; } catch (_) {}
+        res.json({ date, total: events.length, events, status });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get('/api/vsp/paper-trades', async (req, res) => {
     try {
         const date = _resolveDate(req.query.date);

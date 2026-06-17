@@ -99,6 +99,13 @@
     </div>
     <div id="signals" class="grid gap-6 mb-8"></div>
 
+    <!-- Deep-dip buy candidates (iter177 — DIP_RADAR, the LIVE auto-buy source) -->
+    <div id="dip-head" class="hidden flex flex-wrap items-center justify-between gap-2 mb-3 mt-2">
+      <h2 class="text-sm font-bold flex items-center gap-2" style="color:#3ba7ff">🔵 Deep-dip buy candidates — auto (LIVE)</h2>
+      <span class="text-[11px] text-gray-500">≥8% கீழ இறங்கி, அடி தொட்டு மேல திரும்பும் coins (RSI turn + higher-low + green candle). இதுதான் இப்ப <b>live auto-buy</b> ஆகுது (5.05 USDT/coin) · auto-refresh</span>
+    </div>
+    <div id="dip-signals" class="grid gap-6 mb-8"></div>
+
     <!-- Auto Exit Bracket (away-mode protector) — DRY-RUN preview -->
     <div id="autoexit" class="hidden mb-6"></div>
 
@@ -767,7 +774,7 @@
   let SIG = [];                                   // signal pseudo-positions (runtime only)
   let viewMode = 'HELD';                          // which tab's content is visible: 'HELD' | 'LIMIT'
   let OPEN_ORDERS = {};                           // sym → [open Binance orders] (for sell-order status)
-  function allPos(){ return POS.concat(SIG); }
+  function allPos(){ return POS.concat(SIG).concat(DIPSIG); }
   function heldPositions(){ return POS.filter(p=>p.type==='HELD'); }
   function checkPositions(){ return POS.filter(p=>p.type==='LIMIT'); }
   // Toggle which section is visible based on the active tab.
@@ -778,6 +785,9 @@
     const emp=$('empty'); if(emp) emp.classList.toggle('hidden', !held || hp.length>0);
     const sig=$('signals'); if(sig) sig.classList.toggle('hidden', held);
     const sh=$('signals-head'); if(sh) sh.classList.toggle('hidden', held || (SIG.length+checkPositions().length)===0);
+    // iter177 — deep-dip candidates also belong to the buy-side (LIMIT) view.
+    const dsig=$('dip-signals'); if(dsig) dsig.classList.toggle('hidden', held);
+    const dh=$('dip-head'); if(dh) dh.classList.toggle('hidden', held || DIPSIG.length===0);
     // Auto Exit Bracket preview only makes sense on the Held tab.
     const ax=$('autoexit'); if(ax) ax.classList.toggle('hidden', !held);
   }
@@ -871,6 +881,7 @@
     else if(source==='vsp'){ price=+e.trigger_close; score=+e.confidence||(+e.direction_score||0); const l=String(e.label||''); dir=l.includes('PUMP')?'bull':l.includes('DUMP')?'bear':'neutral'; }
     else if(source==='lmc'){ price=+e.trigger_price; score=+e.score||0; dir=(e.direction==='PUMP')?'bull':(e.direction==='DUMP')?'bear':'neutral'; }
     else if(source==='ccp'){ price=+e.trigger_price; score=+e.score||0; const d=String(e.direction||'')+String(e.label||''); dir=(d.includes('REVERSAL')||d.includes('UP'))?'bull':d.includes('BREAKDOWN')?'bear':'neutral'; }
+    else if(source==='dip'){ price=+e.price; const drop=Math.abs(+e.drop_from_high||0); score=50+Math.min(35,drop*2)+Math.max(0,(+e.rsi_now||0)-(+e.rsi_min||0)); dir='bull'; }
     if(!(price>0)) price=null;
     return { sym, ts, price, score:Math.max(0,Math.min(100,score)), dir, source };
   }
@@ -928,6 +939,44 @@
     const host = $('signals'); if(!host) return;
     const items = checkPositions().concat(SIG);   // manual checks first, then auto top-5
     host.innerHTML = items.map(p=>limitCard(p)).join('');
+    applyView();
+  }
+
+  // iter177 — Deep-dip buy candidates (DIP_RADAR feed = the LIVE auto-buy
+  // source).  Separate from the generic top-signals so the operator can clearly
+  // see what the live dip auto-buyer is acting on.  NO RE-BUY rule applies.
+  let DIPSIG = [];
+  async function loadDipCandidates(){
+    let evs = [];
+    try {
+      const j = await getJSON('/api/dip/feed?limit=200');
+      evs = (j && j.events) || [];
+    } catch { return; }
+    await loadAutoBuyState();
+    const cutoff = Date.now() - 6*3600*1000;       // last 6h = "currently actionable"
+    const agg = {};
+    for(const e of evs){
+      const n = normSignal('dip', e); if(!n) continue;
+      if(n.ts < cutoff) continue;
+      if(alreadyBought(n.sym)) continue;            // no re-buy (mirrors backend)
+      const a = agg[n.sym] || (agg[n.sym] = { sym:n.sym, lastTs:0, bestScore:0, drop:0, rsi:0 });
+      if(n.ts>a.lastTs){ a.lastTs=n.ts; a.drop=Math.abs(+e.drop_from_high||0); a.rsi=+e.rsi_now||0; }
+      if(n.score>a.bestScore) a.bestScore=n.score;
+    }
+    const ranked = Object.values(agg)
+      .sort((p,q)=> q.lastTs-p.lastTs || q.bestScore-p.bestScore)
+      .slice(0,8);
+    DIPSIG = ranked.map(a=>({ id:'dip-'+a.sym, sym:a.sym, type:'LIMIT', suggest:true, signal:true,
+                              dip:true, dipDrop:a.drop, dipRsi:a.rsi,
+                              sigSources:['dip'], sigScore:Math.round(a.bestScore), sigTs:a.lastTs }));
+    await Promise.all(DIPSIG.map(p=>refreshStat(p.sym)));
+    renderDipSignals();
+    resubscribe();
+  }
+  function renderDipSignals(){
+    const host = $('dip-signals'); const head = $('dip-head'); if(!host) return;
+    if(head) head.classList.toggle('hidden', DIPSIG.length===0);
+    host.innerHTML = DIPSIG.map(p=>limitCard(p)).join('');
     applyView();
   }
 
@@ -1119,6 +1168,8 @@
     setInterval(loadAutoExit, 15000);    // refresh intended brackets every 15s
     loadTopSignals();                    // top-5 combined signal coins (shown under the ⏳ check tab)
     setInterval(loadTopSignals, 60000);  // refresh signal candidates every 60s
+    loadDipCandidates();                 // iter177 — deep-dip buy candidates (LIVE auto-buy source)
+    setInterval(loadDipCandidates, 60000);
     setMode('HELD');                     // start on the Held tab (only owned coins visible)
   })();
   </script>
