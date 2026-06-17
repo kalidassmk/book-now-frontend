@@ -2538,6 +2538,8 @@ app.get('/api/early-pump-watch', async (req, res) => {
                 last_price: parseFloat(t.lastPrice),
                 change_24h_pct: parseFloat(t.priceChangePercent),
                 quote_volume_24h_usd: parseFloat(t.quoteVolume),
+                high_24h: parseFloat(t.highPrice),
+                low_24h: parseFloat(t.lowPrice),
             }))
             .filter(t => t.change_24h_pct >= minChg
                        && t.change_24h_pct <= maxChg
@@ -2557,12 +2559,21 @@ app.get('/api/early-pump-watch', async (req, res) => {
         // Log to analyse Redis — pattern DB
         const date = new Date().toISOString().slice(0, 10);
         for (const c of hot) {
+            // iter177 — distance below the 24h high.  The autobuy's EARLY_PUMP v2
+            // breakout gate buys only when this is small (price breaking its 24h
+            // ceiling); backtest showed near-high entries are the profitable ones.
+            const distHigh = (c.high_24h > 0 && c.last_price > 0)
+                ? (c.high_24h - c.last_price) / c.last_price * 100
+                : null;
             const event = {
                 ts: Date.now(),
                 symbol: c.symbol,
                 score: c.early_pump.score,
                 change_24h_pct: c.change_24h_pct,
                 last_price: c.last_price,
+                high_24h: c.high_24h,
+                low_24h: c.low_24h,
+                dist_to_24h_high_pct: distHigh,
                 factors: c.early_pump.factors,
                 target_tp_usdt: 0.15,  // matches bot's iter42 target
             };
